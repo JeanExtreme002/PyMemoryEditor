@@ -22,10 +22,17 @@ class OpenProcess(object):
         self.__process = Process()
 
         # Set the attributes to the process.
-        if pid: self.__process.pid = pid
-        elif window_title: self.__process.window_title = window_title
-        elif process_name: self.__process.process_name = process_name
-        else: raise TypeError("You must pass at least one argument value to the constructor.")
+        if pid:
+            self.__process.pid = pid
+
+        elif window_title:
+            self.__process.window_title = window_title
+
+        elif process_name:
+            self.__process.process_name = process_name
+
+        else:
+            raise TypeError("You must pass an argument to one of these parameters (window_title, process_name, pid).")
 
         # Get the process handle.
         self.__process_handle = GetProcessHandle(permission, False, self.__process.pid)
