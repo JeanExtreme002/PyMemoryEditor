@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .util import get_c_type_of
-from ctypes import byref, windll
+from ctypes import byref, windll, c_void_p
 
 kernel32 = windll.LoadLibrary("kernel32.dll")
 
@@ -30,7 +30,7 @@ def ReadProcessMemory(process_handle, address, pytype, bufflength):
     if not pytype in [str, int, float]: raise ValueError("The type must be string, int or float.")
 
     data = get_c_type_of(pytype, int(bufflength))
-    kernel32.ReadProcessMemory(process_handle, address, byref(data), bufflength, None)
+    kernel32.ReadProcessMemory(process_handle, c_void_p(address), byref(data), bufflength, None)
 
     return data.value
 
@@ -45,6 +45,6 @@ def WriteProcessMemory(process_handle, address, pytype, bufflength, value):
     data = get_c_type_of(pytype, int(bufflength))
     data.value = value.encode() if isinstance(value, str) else value
 
-    kernel32.WriteProcessMemory(process_handle, address, byref(data), bufflength, None)
+    kernel32.WriteProcessMemory(process_handle, c_void_p(address), byref(data), bufflength, None)
 
     return value
