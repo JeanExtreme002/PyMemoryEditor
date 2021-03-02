@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 
+"""
+A Python library developed with ctypes to manipulate Windows processes (32 bits and 64 bits),
+reading and writing values in the process memory.
+"""
+
+__author__ = "Jean Loui Bernard Silva de Jesus"
+__version__ = "1.0.0"
+
 from .process import Process
 from .win32.constants import PROCESS_ALL_ACCESS, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE
 from .win32.functions import CloseHandle, GetProcessHandle, ReadProcessMemory, WriteProcessMemory
 
-__author__ = "Jean Loui Bernard Silva de Jesus"
 __all__ = ("OpenProcess", "PROCESS_ALL_ACCESS", "PROCESS_VM_OPERATION", "PROCESS_VM_READ", "PROCESS_VM_WRITE")
 
 class OpenProcess(object):
