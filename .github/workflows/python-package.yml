@@ -30,3 +30,6 @@ jobs:
     - name: Test with pytest
       run: |
         pytest tests -v -s
+    - name: Install package
+      run: |
+        pip install PyMemoryEditor

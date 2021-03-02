@@ -19,13 +19,11 @@ setup(
     packages = ["PyMemoryEditor", "PyMemoryEditor.process", "PyMemoryEditor.win32"],
     install_requires = ["pywin32", "psutil"],
     classifiers = [
+        "License :: OSI Approved :: MIT License",
+        "Intended Audience :: Developers",
+        "Environment :: Win32 (MS Windows)",
         "Operating System :: Microsoft :: Windows",
-        "Operating System :: Microsoft :: Windows :: Windows 7",
-        "Operating System :: Microsoft :: Windows :: Windows 8",
-        "Operating System :: Microsoft :: Windows :: Windows 8.1",
-        "Operating System :: Microsoft :: Windows :: Windows 10",
-        "Programming Language :: Python",
-        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3 :: Only",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8"
