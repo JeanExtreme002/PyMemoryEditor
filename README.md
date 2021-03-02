@@ -25,7 +25,7 @@ with OpenProcess(process_name = "example.exe") as process:
     # Do something...
 ```
 
-After that, use the functions `read_process_memory` and `write_process_memory` to manipulate the process <br>
+After that, use the methods `read_process_memory` and `write_process_memory` to manipulate the process <br>
 memory, passing in the function call the memory address, data type and its size. See the example below:
 
 ```
