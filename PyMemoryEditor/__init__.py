@@ -6,7 +6,7 @@ reading and writing values in the process memory.
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 from .process import Process
 from .win32.enum import ProcessOperations
@@ -63,7 +63,7 @@ class OpenProcess(object):
             raise TypeError("You must pass an argument to one of these parameters (window_title, process_name, pid).")
 
         # Get the process handle.
-        self.__process_handle = GetProcessHandle(permission, False, self.__process.pid)
+        self.__process_handle = GetProcessHandle(self.__permission.value, False, self.__process.pid)
 
     def close(self):
         """
@@ -84,7 +84,11 @@ class OpenProcess(object):
         :param pytype: type of the value to be received (str, int or float).
         :param bufflength: value size in bytes (1, 2, 4, 8).
         """
-        if self.__permission not in [PROCESS_ALL_ACCESS, PROCESS_VM_READ]:
+        valid_permissions = [
+            ProcessOperations.PROCESS_ALL_ACCESS.value,
+            ProcessOperations.PROCESS_VM_READ.value
+        ]
+        if self.__permission.value not in valid_permissions:
             raise PermissionError("The handle does not have permission to read the process memory.")
 
         return win32.functions.ReadProcessMemory(self.__process_handle, address, pytype, bufflength)
@@ -104,7 +108,11 @@ class OpenProcess(object):
         :param bufflength: value size in bytes (1, 2, 4, 8).
         :param value: value to be written (str, int or float).
         """
-        if self.__permission not in [PROCESS_ALL_ACCESS, PROCESS_VM_OPERATION | PROCESS_VM_WRITE]:
+        valid_permissions = [
+            ProcessOperations.PROCESS_ALL_ACCESS.value,
+            ProcessOperations.PROCESS_VM_OPERATION.value | ProcessOperations.PROCESS_VM_WRITE.value
+        ]
+        if self.__permission.value not in valid_permissions:
             raise PermissionError("The handle does not have permission to write to the process memory.")
 
         return WriteProcessMemory(self.__process_handle, address, pytype, bufflength, value)
