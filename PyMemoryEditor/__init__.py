@@ -6,7 +6,7 @@ reading and writing values in the process memory.
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 from .process import Process
 from .win32.enum import ProcessOperations
