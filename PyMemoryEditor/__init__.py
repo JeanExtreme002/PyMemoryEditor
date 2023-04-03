@@ -6,20 +6,17 @@ reading and writing values in the process memory.
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.0.3"
+__version__ = "1.1.0"
 
 from .process import Process
-from .win32.constants import PROCESS_ALL_ACCESS, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE
+from .win32.enum import ProcessOperations
 from .win32.functions import CloseHandle, GetProcessHandle, ReadProcessMemory, WriteProcessMemory
 
 from typing import Optional, Type, Union
 
 __all__ = (
     "OpenProcess",
-    "PROCESS_ALL_ACCESS",
-    "PROCESS_VM_OPERATION",
-    "PROCESS_VM_READ",
-    "PROCESS_VM_WRITE"
+    "ProcessOperations"
 )
 
 
@@ -38,7 +35,7 @@ class OpenProcess(object):
         window_title: Optional[str] = None,
         process_name: Optional[str] = None,
         pid: Optional[int] = None,
-        permission: int = PROCESS_ALL_ACCESS
+        permission: ProcessOperations = ProcessOperations.PROCESS_ALL_ACCESS
     ):
         """
         :param window_title: window title of the target program.
