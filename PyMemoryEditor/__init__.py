@@ -6,11 +6,11 @@ reading and writing values in the process memory.
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 from .process import Process
 from .win32.enum import ProcessOperations
-from .win32.functions import CloseHandle, GetProcessHandle, ReadProcessMemory, WriteProcessMemory
+from .win32.functions import CloseProcessHandle, GetProcessHandle, ReadProcessMemory, WriteProcessMemory
 
 from typing import Optional, Type, Union
 
@@ -32,6 +32,7 @@ class OpenProcess(object):
 
     def __init__(
         self,
+        *,
         window_title: Optional[str] = None,
         process_name: Optional[str] = None,
         pid: Optional[int] = None,
@@ -69,7 +70,7 @@ class OpenProcess(object):
         """
         Close the process handle.
         """
-        return CloseHandle(self.__process_handle)
+        return CloseProcessHandle(self.__process_handle)
 
     def read_process_memory(
         self,
