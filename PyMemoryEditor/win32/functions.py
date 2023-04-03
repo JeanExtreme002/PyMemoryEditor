@@ -8,6 +8,9 @@ kernel32 = windll.LoadLibrary("kernel32.dll")
 
 T = TypeVar("T")
 
+# Read more about process operation by win32api here:
+# https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/
+
 
 def CloseProcessHandle(process_handle: int) -> int:
     """
