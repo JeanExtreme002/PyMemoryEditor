@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 
+# Read more about process operations by win32api here:
+# https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/
+
 from .util import get_c_type_of
 from ctypes import byref, windll, c_void_p
 from typing import Type, TypeVar, Union
@@ -7,10 +10,6 @@ from typing import Type, TypeVar, Union
 kernel32 = windll.LoadLibrary("kernel32.dll")
 
 T = TypeVar("T")
-
-# Read more about process operation by win32api here:
-# https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/
-
 
 def CloseProcessHandle(process_handle: int) -> int:
     """

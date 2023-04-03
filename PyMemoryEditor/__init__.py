@@ -12,12 +12,14 @@ from .process import Process
 from .win32.enum import ProcessOperations
 from .win32.functions import CloseProcessHandle, GetProcessHandle, ReadProcessMemory, WriteProcessMemory
 
-from typing import Optional, Type, Union
+from typing import Optional, Type, TypeVar, Union
 
 __all__ = (
     "OpenProcess",
     "ProcessOperations"
 )
+
+T = TypeVar("T")
 
 
 class OpenProcess(object):
@@ -75,9 +77,9 @@ class OpenProcess(object):
     def read_process_memory(
         self,
         address: int,
-        pytype: Type,
+        pytype: Type[T],
         bufflength: int
-    ) -> Union[str, int, float]:
+    ) -> T:
         """
         Return a value from a memory address.
 
@@ -97,10 +99,10 @@ class OpenProcess(object):
     def write_process_memory(
         self,
         address: int,
-        pytype: Type,
+        pytype: Type[T],
         bufflength: int,
         value: Union[str, int, float]
-    ) -> Union[str, int, float]:
+    ) -> T:
         """
         Write a value to a memory address.
 
