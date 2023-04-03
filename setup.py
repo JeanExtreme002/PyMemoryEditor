@@ -15,7 +15,7 @@ setup(
     author = "Jean Loui Bernard Silva de Jesus",
     url = "https://github.com/JeanExtreme002/PyMemoryEditor",
     license = "MIT",
-    keywords = "memory writer reader",
+    keywords = "memory writer write reader read override address pointer peditor process win32 api cheat",
     packages = ["PyMemoryEditor", "PyMemoryEditor.process", "PyMemoryEditor.win32"],
     install_requires = ["pywin32", "psutil"],
     classifiers = [
