@@ -3,18 +3,22 @@
 from .errors import ProcessIDNotExistsError, ProcessNotFoundError, WindowNotFoundError
 from .util import get_process_id_by_process_name, get_process_id_by_window_title, pid_exists
 
+
 class Process(object):
+    """
+    Class representing a process.
+    """
 
     __pid = 0
     __process_name = ""
     __window_title = ""
 
     @property
-    def pid(self):
+    def pid(self) -> int:
         return self.__pid
 
     @pid.setter
-    def pid(self, pid):
+    def pid(self, pid: int) -> None:
 
         # Check if the value is an integer.
         if not isinstance(pid, int):
@@ -25,11 +29,11 @@ class Process(object):
         else: raise ProcessIDNotExistsError(pid)
 
     @property
-    def process_name(self):
+    def process_name(self) -> str:
         return self.__process_name
 
     @process_name.setter
-    def process_name(self, process_name):
+    def process_name(self, process_name: str) -> None:
 
         # Get the process ID.
         pid = get_process_id_by_process_name(process_name)
@@ -40,11 +44,11 @@ class Process(object):
         self.__process_name = process_name
 
     @property
-    def window_title(self):
+    def window_title(self) -> str:
         return self.__window_title
 
     @window_title.setter
-    def window_title(self, window_title):
+    def window_title(self, window_title: str) -> None:
 
         # Get the process ID.
         pid = get_process_id_by_window_title(window_title)
