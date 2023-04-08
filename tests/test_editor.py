@@ -1,7 +1,9 @@
-from package import OpenProcess
+from package import OpenProcess, version
 from os import getpid
 import ctypes
 import random
+
+print("Testing PyMemoryEditor version %s." % version)
 
 process_id = getpid()
 process = None
