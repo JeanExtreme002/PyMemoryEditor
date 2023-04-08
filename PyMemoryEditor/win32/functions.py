@@ -28,7 +28,7 @@ def CloseProcessHandle(process_handle: int) -> int:
     return kernel32.CloseHandle(process_handle)
 
 
-def GetMemoryRegions(process_handle: int) -> Generator[dict]:
+def GetMemoryRegions(process_handle: int) -> Generator[dict, None, None]:
     """
     Generates dictionaries with the address and size of a region used by the process.
     """
