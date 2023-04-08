@@ -1,21 +1,48 @@
 # -*- coding: utf-8 -*-
 
-# Read more about process operations by win32api here:
+# Read more about operations with processes by win32 api here:
+# https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/
 # https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/
+# https://learn.microsoft.com/en-us/windows/win32/api/psapi/
+# ...
 
+from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO
 from .util import get_c_type_of
-from ctypes import byref, windll, c_void_p
-from typing import Type, TypeVar, Union
+from ctypes import byref, c_void_p, sizeof, windll
+from typing import Generator, Type, TypeVar, Union
 
 kernel32 = windll.LoadLibrary("kernel32.dll")
 
+# Get the user's system information.
+system_information = SYSTEM_INFO()
+kernel32.GetSystemInfo(byref(system_information))
+
+
 T = TypeVar("T")
+
 
 def CloseProcessHandle(process_handle: int) -> int:
     """
     Close the process handle.
     """
     return kernel32.CloseHandle(process_handle)
+
+
+def GetMemoryRegions(process_handle: int) -> Generator[dict]:
+    """
+    Generates dictionaries with the address and size of a region used by the process.
+    """
+    mem_region_begin = system_information.lpMinimumApplicationAddress
+    mem_region_end = system_information.lpMaximumApplicationAddress
+
+    current_address = mem_region_begin
+
+    while current_address < mem_region_end:
+        region = MEMORY_BASIC_INFORMATION()
+        kernel32.VirtualQueryEx(process_handle, current_address, byref(region), sizeof(region))
+
+        current_address += region.RegionSize
+        yield {"address": current_address, "size": region.RegionSize, "info_struct": region}
 
 
 def GetProcessHandle(access_right: int, inherit: bool, pid: int) -> int:
