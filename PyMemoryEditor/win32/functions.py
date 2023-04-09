@@ -9,7 +9,7 @@
 from .constants import MEM_COMMIT, MEM_PRIVATE, PAGE_READABLE
 from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
 from .util import get_c_type_of
-from typing import Generator, Type, TypeVar, Union
+from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
 import ctypes
 import ctypes.wintypes
@@ -131,8 +131,9 @@ def SearchAllMemory(
     process_handle: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes]
-) -> Generator[int, None, None]:
+    value: Union[bool, int, float, str, bytes],
+    progress_information: Optional[bool] = False,
+) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
     for the provided value, returning the found addresses.
@@ -140,10 +141,16 @@ def SearchAllMemory(
     if pytype not in [bool, int, float, str, bytes]:
         raise ValueError("The type must be bool, int, float, str or bytes.")
 
+    # Get the target value as bytes.
     target_value = get_c_type_of(pytype, bufflength)
     target_value.value = value
 
-    # Check each memory region used by the process.
+    target_value = bytes(target_value)
+
+    regions = list()
+    memory_total = 0
+
+    # Get the memory regions, computing the space size.
     for region in GetMemoryRegions(process_handle):
 
         # Only committed, non-shared and readable memory pages.
@@ -151,23 +158,41 @@ def SearchAllMemory(
         if region["struct"].Type != MEM_PRIVATE: continue
         if region["struct"].Protect & PAGE_READABLE == 0: continue
 
+        memory_total += region["size"]
+        regions.append(region)
+
+    checked_memory_size = 0
+
+    # Check each memory region used by the process.
+    for region in regions:
         address, size = region["address"], region["size"]
         region_data = (ctypes.c_byte * size)()
 
         # Get data from the region.
         kernel32.ReadProcessMemory(process_handle, ctypes.c_void_p(address), ctypes.byref(region_data), size, None)
+        region_data = bytes(region_data)
 
         # Walk by the returned bytes, searching for the target value.
-        haystack = bytes(region_data)
-        needle = bytes(target_value)
+        current_index = 0
+        result_index = 0
 
-        start = 0
-        index = haystack.find(needle, start)
+        while current_index < size and result_index != -1:
+            result_index = region_data.find(target_value, current_index)
 
-        while start < len(haystack) and index != -1:
-            yield address + index
-            start = index + 1
-            index = haystack.find(needle, start)
+            # Result equals (-1) means that there is no more match in the region data.
+            if result_index == -1: break
+            current_index = result_index + 1
+
+            found_address = address + result_index
+
+            extra_information = {
+                "memory_total": memory_total,
+                "progress": (checked_memory_size + current_index) / memory_total
+            }
+            yield (found_address, extra_information) if progress_information else found_address
+
+        # Compute the region size to the checked memory size.
+        checked_memory_size += size
 
 
 def WriteProcessMemory(

@@ -11,7 +11,7 @@ from .win32.functions import (
     WriteProcessMemory
 )
 
-from typing import List, Optional, Type, TypeVar, Union
+from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
 
 T = TypeVar("T")
@@ -73,8 +73,10 @@ class OpenProcess(object):
         self,
         pytype: Type[T],
         bufflength: int,
-        value: Union[bool, int, float, str, bytes]
-    ) -> List[int]:
+        value: Union[bool, int, float, str, bytes],
+        *,
+        progress_information: Optional[bool] = False,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
         for the provided value, returning the found addresses.
@@ -82,6 +84,7 @@ class OpenProcess(object):
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
         :param bufflength: value size in bytes (1, 2, 4, 8).
         :param value: value to be queried (bool, int, float, str or bytes).
+        :param progress_information: if True, a dictionary with the progress information will be return.
         """
         valid_permissions = [
             ProcessOperations.PROCESS_ALL_ACCESS.value,
@@ -90,7 +93,7 @@ class OpenProcess(object):
         if self.__permission.value not in valid_permissions:
             raise PermissionError("The handle does not have permission to read the process memory.")
 
-        return list(SearchAllMemory(self.__process_handle, pytype, bufflength, value))
+        return SearchAllMemory(self.__process_handle, pytype, bufflength, value, progress_information)
 
     def read_process_memory(
         self,
