@@ -6,7 +6,7 @@ reading and writing values in the process memory.
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.3.2"
+__version__ = "1.4.0"
 
 import sys
 

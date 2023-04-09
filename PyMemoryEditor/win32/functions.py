@@ -107,12 +107,13 @@ def ReadProcessMemory(
     """
     Return a value from a memory address.
     """
-    if pytype not in [str, int, float]: raise ValueError("The type must be string, int or float.")
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
 
     data = get_c_type_of(pytype, int(bufflength))
     kernel32.ReadProcessMemory(process_handle, c_void_p(address), byref(data), bufflength, None)
 
-    return data.value
+    return str(data.value) if pytype is str else data.value
 
 
 def WriteProcessMemory(
@@ -120,12 +121,13 @@ def WriteProcessMemory(
     address: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[int, float, str]
+    value: Union[bool, int, float, str, bytes]
 ) -> T:
     """
     Write a value to a memory address.
     """
-    if pytype not in [str, int, float]: raise ValueError("The type must be string, int or float.")
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
 
     data = get_c_type_of(pytype, int(bufflength))
     data.value = value.encode() if isinstance(value, str) else value

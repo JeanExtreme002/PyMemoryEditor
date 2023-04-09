@@ -72,7 +72,7 @@ class OpenProcess(object):
         Return a value from a memory address.
 
         :param address: target memory address (ex: 0x006A9EC0).
-        :param pytype: type of the value to be received (str, int or float).
+        :param pytype: type of the value to be received (bool, int, float, str or bytes).
         :param bufflength: value size in bytes (1, 2, 4, 8).
         """
         valid_permissions = [
@@ -89,15 +89,15 @@ class OpenProcess(object):
         address: int,
         pytype: Type[T],
         bufflength: int,
-        value: Union[str, int, float]
+        value: Union[bool, int, float, str, bytes]
     ) -> T:
         """
         Write a value to a memory address.
 
         :param address: target memory address (ex: 0x006A9EC0).
-        :param pytype: type of value to be written into memory (str, int or float).
+        :param pytype: type of value to be written into memory (bool, int, float, str or bytes).
         :param bufflength: value size in bytes (1, 2, 4, 8).
-        :param value: value to be written (str, int or float).
+        :param value: value to be written (bool, int, float, str or bytes).
         """
         valid_permissions = [
             ProcessOperations.PROCESS_ALL_ACCESS.value,

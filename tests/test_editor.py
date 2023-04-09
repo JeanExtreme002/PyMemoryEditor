@@ -1,12 +1,13 @@
 from package import OpenProcess, version
 from os import getpid
+from typing import Optional
 import ctypes
 import random
 
 print("Testing PyMemoryEditor version %s." % version)
 
 process_id = getpid()
-process = None
+process: Optional[OpenProcess] = None
 
 
 def generate_text(size):
@@ -21,6 +22,24 @@ def test_open_process():
     process = OpenProcess(pid = process_id)
 
 
+def test_read_bool():
+    # Compare with True and False values.
+    target_value_1 = ctypes.c_bool(True)
+    target_value_2 = ctypes.c_bool(False)
+
+    address_1 = ctypes.addressof(target_value_1)
+    address_2 = ctypes.addressof(target_value_2)
+
+    data_length = ctypes.sizeof(target_value_1)
+
+    # Read the process memory and compare the results.
+    result_1 = process.read_process_memory(address_1, bool, data_length)
+    result_2 = process.read_process_memory(address_2, bool, data_length)
+
+    assert type(result_1) is bool and result_1 == target_value_1.value
+    assert type(result_2) is bool and result_2 == target_value_2.value
+
+
 def test_read_float():
     # Get a random value to compare the result.
     target_value = ctypes.c_double(random.random())
@@ -29,7 +48,7 @@ def test_read_float():
 
     # Read the process memory and compare the result.
     result = process.read_process_memory(address, float, data_length)
-    assert result == target_value.value
+    assert type(result) is float and result == target_value.value
 
 
 def test_read_int():
@@ -40,7 +59,7 @@ def test_read_int():
 
     # Read the process memory and compare the result.
     result = process.read_process_memory(address, int, data_length)
-    assert result == target_value.value
+    assert type(result) is int and result == target_value.value
 
 
 def test_read_string():
@@ -51,7 +70,31 @@ def test_read_string():
 
     # Read the process memory and compare the result.
     result = process.read_process_memory(address, str, data_length)
-    assert result == target_value.value
+    assert type(result) is str and result == str(target_value.value)
+
+
+def test_write_bool():
+    # Compare with True and False values.
+    original_value_1 = True
+    original_value_2 = False
+
+    new_value_1 = not original_value_1
+    new_value_2 = not original_value_2
+
+    target_value_1 = ctypes.c_bool(original_value_1)
+    target_value_2 = ctypes.c_bool(original_value_2)
+
+    address_1 = ctypes.addressof(target_value_1)
+    address_2 = ctypes.addressof(target_value_2)
+
+    data_length = ctypes.sizeof(target_value_1)
+
+    # Write to the process memory and compare the results.
+    process.write_process_memory(address_1, bool, data_length, new_value_1)
+    process.write_process_memory(address_2, bool, data_length, new_value_2)
+
+    assert target_value_1.value != original_value_1 and target_value_1.value == new_value_1
+    assert target_value_2.value != original_value_2 and target_value_2.value == new_value_2
 
 
 def test_write_float():
@@ -85,7 +128,7 @@ def test_write_int():
 def test_write_string():
     # Get a random text to compare the result.
     original_value = generate_text(20).encode()
-    new_value = original_value[::-1]
+    new_value = generate_text(20).encode()
 
     target_value = ctypes.create_string_buffer(original_value)
     address = ctypes.addressof(target_value)

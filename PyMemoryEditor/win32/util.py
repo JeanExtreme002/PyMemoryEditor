@@ -8,7 +8,7 @@ def get_c_type_of(pytype: Type, length: int = 1) -> ctypes._SimpleCData:
     """
     Return a C type of a primitive type of the Python language.
     """
-    if pytype is str: return ctypes.create_string_buffer(length)
+    if pytype is str or pytype is bytes: return ctypes.create_string_buffer(length)
 
     elif pytype is int:
 
@@ -23,4 +23,4 @@ def get_c_type_of(pytype: Type, length: int = 1) -> ctypes._SimpleCData:
 
     elif pytype is bool: return ctypes.c_bool()
 
-    else: raise ValueError("The type must be string, int, float or bool.")
+    else: raise ValueError("The type must be bool, int, float, str or bytes.")
