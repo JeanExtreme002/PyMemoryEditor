@@ -43,7 +43,7 @@ class SYSTEM_INFO(Structure):
     ]
 
 
-# The structure changes according to the the Python version (64 or 32 bits).
+# The structure changes according to the Python version (64 or 32 bits).
 MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION_64 if sizeof(c_void_p) == 8 else MEMORY_BASIC_INFORMATION_32
 
 # For EnumWindows and EnumDesktopWindows functions.

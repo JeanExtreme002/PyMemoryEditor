@@ -8,11 +8,18 @@
 
 from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
 from .util import get_c_type_of
-from ctypes import byref, c_uint32, c_void_p, create_unicode_buffer, sizeof, windll
+from ctypes import POINTER, byref, c_uint32, c_void_p, create_unicode_buffer, sizeof, windll, wintypes
 from typing import Generator, Type, TypeVar, Union
 
+# Load the libraries.
 kernel32 = windll.LoadLibrary("kernel32.dll")
 user32 = windll.LoadLibrary("user32.dll")
+
+# Set the argtypes to prevent ArgumentError.
+kernel32.VirtualQueryEx.argtypes = (
+    wintypes.HANDLE, wintypes.LPCVOID, POINTER(MEMORY_BASIC_INFORMATION), c_uint32
+)
+
 
 # Get the user's system information.
 system_information = SYSTEM_INFO()
