@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 
-# Allocates memory charges (from the overall size of memory and the paging files on disk) for the specified reserved
-# memory pages. The function also guarantees that when the caller later initially accesses the memory, the contents will
-# be zero. Actual physical pages are not allocated unless/until the virtual addresses are actually accessed. To reserve
-# and commit pages in one step, call VirtualAllocEx with MEM_COMMIT | MEM_RESERVE. Attempting to commit a specific
-# address range by specifying MEM_COMMIT without MEM_RESERVE and a non-NULL lpAddress fails unless the entire range has
-# already been reserved. The resulting error code is ERROR_INVALID_ADDRESS. An attempt to commit a page that is already
-# committed does not cause the function to fail. This means that you can commit pages without first determining the
-# current commitment state of each page.
-# If lpAddress specifies an address within an enclave, flAllocationType must be MEM_COMMIT.
+# Indicates committed pages for which physical storage has been allocated, either in memory or in the paging file on disk.
 MEM_COMMIT = 0x00001000
 
-# Reserves a range of the process's virtual address space without allocating any actual physical storage in memory or in
-# the paging file on disk. You commit reserved pages by calling VirtualAllocEx again with MEM_COMMIT. To reserve and
-# commit pages in one step, call VirtualAllocEx with MEM_COMMIT | MEM_RESERVE. Other memory allocation functions, such
-# as malloc and LocalAlloc, cannot use reserved memory until it has been released.
+# Indicates free pages not accessible to the calling process and available to be allocated. For free pages, the
+# information in the AllocationBase, AllocationProtect, Protect, and Type members is undefined.
+MEM_FREE = 0x00010000
+
+# Indicates that the memory pages within the region are mapped into the view of an image section.
+MEM_IMAGE = 0x01000000
+
+# Indicates that the memory pages within the region are mapped into the view of a section.
+MEM_MAPPED = 0x00040000
+
+# Indicates reserved pages where a range of the process's virtual address space is reserved without any physical storage
+# being allocated. For reserved pages, the information in the Protect member is undefined.
 MEM_RESERVE = 0x00002000
 
 # Indicates that data in the memory range specified by lpAddress and dwSize is no longer of interest. The pages should
@@ -45,6 +45,9 @@ MEM_LARGE_PAGES = 0x20000000
 # Reserves an address range that can be used to map Address Windowing Extensions (AWE) pages. This value must be used
 # with MEM_RESERVE and no other values.
 MEM_PHYSICAL = 0x00400000
+
+# Indicates that the memory pages within the region are private (that is, not shared by other processes).
+MEM_PRIVATE = 0x00020000
 
 # Allocates memory at the highest possible address. This can be slower than regular allocations, especially when there
 # are many allocations.
@@ -90,6 +93,9 @@ PAGE_READWRITE = 0x04
 # attempting to execute code in the committed region results in an access violation. This flag is not supported by
 # the VirtualAlloc or VirtualAllocEx functions.
 PAGE_WRITECOPY = 0x08
+
+# Indicates memory page is readble. (Custom constant)
+PAGE_READABLE = PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_READWRITE
 
 # Sets all locations in the pages as invalid targets for CFG. Used along with any execute page protection like
 # PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE and PAGE_EXECUTE_WRITECOPY. Any indirect call to locations

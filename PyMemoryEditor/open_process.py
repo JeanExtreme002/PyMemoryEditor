@@ -2,9 +2,16 @@
 
 from .process import Process
 from .win32.enum import ProcessOperations
-from .win32.functions import CloseProcessHandle, GetProcessHandle, ReadProcessMemory, WriteProcessMemory
 
-from typing import Optional, Type, TypeVar, Union
+from .win32.functions import (
+    CloseProcessHandle,
+    GetProcessHandle,
+    ReadProcessMemory,
+    SearchAllMemory,
+    WriteProcessMemory
+)
+
+from typing import List, Optional, Type, TypeVar, Union
 
 
 T = TypeVar("T")
@@ -61,6 +68,29 @@ class OpenProcess(object):
         Close the process handle.
         """
         return CloseProcessHandle(self.__process_handle)
+
+    def search_by_value(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        value: Union[bool, int, float, str, bytes]
+    ) -> List[int]:
+        """
+        Search the whole memory space, accessible to the process,
+        for the provided value, returning the found addresses.
+
+        :param pytype: type of value to be queried (bool, int, float, str or bytes).
+        :param bufflength: value size in bytes (1, 2, 4, 8).
+        :param value: value to be queried (bool, int, float, str or bytes).
+        """
+        valid_permissions = [
+            ProcessOperations.PROCESS_ALL_ACCESS.value,
+            ProcessOperations.PROCESS_VM_READ.value
+        ]
+        if self.__permission.value not in valid_permissions:
+            raise PermissionError("The handle does not have permission to read the process memory.")
+
+        return list(SearchAllMemory(self.__process_handle, pytype, bufflength, value))
 
     def read_process_memory(
         self,
