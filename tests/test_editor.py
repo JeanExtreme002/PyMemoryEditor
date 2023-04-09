@@ -2,9 +2,13 @@ from package import OpenProcess, version
 from os import getpid
 from typing import Optional
 import ctypes
+import platform
 import random
 
 print("Testing PyMemoryEditor version %s." % version)
+
+print("\nOS Information: {} - {} {}".format(platform.platform(), *platform.architecture()[::-1]))
+print("Processor Information: {} | {}\n".format(platform.machine(), platform.processor()))
 
 process_id = getpid()
 process: Optional[OpenProcess] = None
