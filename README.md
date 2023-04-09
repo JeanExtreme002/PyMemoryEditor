@@ -15,10 +15,8 @@ pip3 install PyMemoryEditor
 ```
 
 # Basic Usage:
-
 Import `PyMemoryEditor` and open a process using the `OpenProcess` class, passing a window title, process name <br>
 or PID as an argument. You can use the context manager to do this.
-
 ```
 from PyMemoryEditor import OpenProcess
 
@@ -28,7 +26,6 @@ with OpenProcess(process_name = "example.exe") as process:
 
 After that, use the methods `read_process_memory` and `write_process_memory` to manipulate the process <br>
 memory, passing in the function call the memory address, data type and its size. See the example below:
-
 ```
 from PyMemoryEditor import OpenProcess
 
@@ -42,4 +39,21 @@ with OpenProcess(window_title = title) as process:
 
     # Writing to the process memory.
     process.write_process_memory(address, int, 4, value + 7)
+```
+
+## Getting memory addresses by a target value:
+
+You can look up a value in memory and get the address of all matches, like this:
+```
+for address process.search_by_value(int, 4, target_value):
+    print("Found address:", address)
+```
+
+This method also has the `progress_information` parameter that returns a dictionary containing search progress information.
+```
+for address, info process.search_by_value(int, 4, target_value, progress_information = True):
+    template = "Address: 0x{:<10X} | Progress: {:.1f}%"
+    progress = info["progress"] * 100
+    
+    print(template.format(address, progress))
 ```
