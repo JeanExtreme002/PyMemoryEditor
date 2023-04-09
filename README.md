@@ -42,7 +42,6 @@ with OpenProcess(window_title = title) as process:
 ```
 
 ## Getting memory addresses by a target value:
-
 You can look up a value in memory and get the address of all matches, like this:
 ```
 for address process.search_by_value(int, 4, target_value):
