@@ -1,4 +1,4 @@
-from ctypes import Structure, c_ulonglong, c_void_p, sizeof, wintypes
+from ctypes import Structure, WINFUNCTYPE, c_bool, c_ulonglong, c_void_p, sizeof, wintypes
 
 
 class MEMORY_BASIC_INFORMATION_32(Structure):
@@ -45,3 +45,6 @@ class SYSTEM_INFO(Structure):
 
 # The structure changes according to the the Python version (64 or 32 bits).
 MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION_64 if sizeof(c_void_p) == 8 else MEMORY_BASIC_INFORMATION_32
+
+# For EnumWindows and EnumDesktopWindows functions.
+WNDENUMPROC = WINFUNCTYPE(c_bool, wintypes.HWND, wintypes.LPARAM)

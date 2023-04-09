@@ -6,12 +6,13 @@
 # https://learn.microsoft.com/en-us/windows/win32/api/psapi/
 # ...
 
-from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO
+from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
 from .util import get_c_type_of
-from ctypes import byref, c_void_p, sizeof, windll
+from ctypes import byref, c_uint32, c_void_p, create_unicode_buffer, sizeof, windll
 from typing import Generator, Type, TypeVar, Union
 
 kernel32 = windll.LoadLibrary("kernel32.dll")
+user32 = windll.LoadLibrary("user32.dll")
 
 # Get the user's system information.
 system_information = SYSTEM_INFO()
@@ -59,6 +60,42 @@ def GetProcessHandle(access_right: int, inherit: bool, pid: int) -> int:
     :param pid: The identifier of the local process to be opened.
     """
     return kernel32.OpenProcess(access_right, inherit, pid)
+
+
+def GetProcessIdByWindowTitle(window_title: str) -> int:
+    """
+    Return the process ID by querying a window title.
+    """
+    result = c_uint32(0)
+
+    string_buffer_size = len(window_title) + 2  # (+2) for the next possible character of a title and the NULL char.
+    string_buffer = create_unicode_buffer(string_buffer_size)
+
+    def callback(hwnd, size):
+        """
+        This callback is used to get a window handle and compare
+        its title with the target window title.
+
+        To continue enumeration, the callback function must return TRUE;
+        to stop enumeration, it must return FALSE.
+        """
+        nonlocal result, string_buffer
+
+        user32.GetWindowTextW(hwnd, string_buffer, size)
+
+        # Compare the window titles and get the process ID.
+        if window_title == string_buffer.value:
+            user32.GetWindowThreadProcessId(hwnd, byref(result))
+            return False
+
+        # Indicate it must continue enumeration.
+        return True
+
+    # Enumerates all top-level windows on the screen by passing the handle to each window,
+    # in turn, to an application-defined callback function.
+    user32.EnumWindows(WNDENUMPROC(callback), string_buffer_size)
+
+    return result.value
 
 
 def ReadProcessMemory(
