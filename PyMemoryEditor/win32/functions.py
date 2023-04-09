@@ -6,7 +6,7 @@
 # https://learn.microsoft.com/en-us/windows/win32/api/psapi/
 # ...
 
-from .constants import MEM_COMMIT, MEM_PRIVATE, PAGE_READABLE
+from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum
 from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
 from .util import get_c_type_of
 from typing import Generator, Optional, Tuple, Type, TypeVar, Union
@@ -154,9 +154,9 @@ def SearchAllMemory(
     for region in GetMemoryRegions(process_handle):
 
         # Only committed, non-shared and readable memory pages.
-        if region["struct"].State != MEM_COMMIT: continue
-        if region["struct"].Type != MEM_PRIVATE: continue
-        if region["struct"].Protect & PAGE_READABLE == 0: continue
+        if region["struct"].State != MemoryAllocationStatesEnum.MEM_COMMIT.value: continue
+        if region["struct"].Type != MemoryTypesEnum.MEM_PRIVATE.value: continue
+        if region["struct"].Protect & MemoryProtectionsEnum.PAGE_READABLE.value == 0: continue
 
         memory_total += region["size"]
         regions.append(region)

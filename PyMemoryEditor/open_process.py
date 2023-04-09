@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .process import Process
-from .win32.enum import ProcessOperations
+from PyMemoryEditor.win32.enums import ProcessOperationsEnum
 
 from .win32.functions import (
     CloseProcessHandle,
@@ -33,7 +33,7 @@ class OpenProcess(object):
         window_title: Optional[str] = None,
         process_name: Optional[str] = None,
         pid: Optional[int] = None,
-        permission: ProcessOperations = ProcessOperations.PROCESS_ALL_ACCESS
+        permission: ProcessOperationsEnum = ProcessOperationsEnum.PROCESS_ALL_ACCESS
     ):
         """
         :param window_title: window title of the target program.
@@ -87,8 +87,8 @@ class OpenProcess(object):
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
         valid_permissions = [
-            ProcessOperations.PROCESS_ALL_ACCESS.value,
-            ProcessOperations.PROCESS_VM_READ.value
+            ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
+            ProcessOperationsEnum.PROCESS_VM_READ.value
         ]
         if self.__permission.value not in valid_permissions:
             raise PermissionError("The handle does not have permission to read the process memory.")
@@ -109,8 +109,8 @@ class OpenProcess(object):
         :param bufflength: value size in bytes (1, 2, 4, 8).
         """
         valid_permissions = [
-            ProcessOperations.PROCESS_ALL_ACCESS.value,
-            ProcessOperations.PROCESS_VM_READ.value
+            ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
+            ProcessOperationsEnum.PROCESS_VM_READ.value
         ]
         if self.__permission.value not in valid_permissions:
             raise PermissionError("The handle does not have permission to read the process memory.")
@@ -133,8 +133,8 @@ class OpenProcess(object):
         :param value: value to be written (bool, int, float, str or bytes).
         """
         valid_permissions = [
-            ProcessOperations.PROCESS_ALL_ACCESS.value,
-            ProcessOperations.PROCESS_VM_OPERATION.value | ProcessOperations.PROCESS_VM_WRITE.value
+            ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
+            ProcessOperationsEnum.PROCESS_VM_OPERATION.value | ProcessOperationsEnum.PROCESS_VM_WRITE.value
         ]
         if self.__permission.value not in valid_permissions:
             raise PermissionError("The handle does not have permission to write to the process memory.")

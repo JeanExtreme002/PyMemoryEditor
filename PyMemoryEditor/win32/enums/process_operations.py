@@ -2,9 +2,9 @@
 from enum import Enum
 
 
-class ProcessOperations(Enum):
+class ProcessOperationsEnum(Enum):
     """
-    Enum with permissions and operations you can do to a process.
+    Enum with all permissions and operations you can do to a process.
     """
     # All possible access rights for a process object.Windows Server 2003 and Windows XP: The size of
     # the PROCESS_ALL_ACCESS flag increased on Windows Server 2008 and Windows Vista. If an application
