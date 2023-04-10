@@ -13,6 +13,7 @@ from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
 import ctypes
 import ctypes.wintypes
+import sys
 
 # Load the libraries.
 kernel32 = ctypes.windll.LoadLibrary("kernel32.dll")
@@ -147,7 +148,7 @@ def SearchAllMemory(
     target_value.value = value
 
     target_value_bytes = ctypes.cast(ctypes.byref(target_value), ctypes.POINTER(ctypes.c_byte * bufflength))
-    target_value_bytes = bytes(target_value_bytes.contents)
+    target_value_bytes = int.from_bytes(bytes(target_value_bytes.contents), sys.byteorder)
 
     regions = list()
     memory_total = 0
@@ -176,12 +177,15 @@ def SearchAllMemory(
         # Walk by the returned bytes, searching for the target value.
         for index in range(size - bufflength):
             data = region_data[index: index + bufflength]
-            data = bytes((ctypes.c_byte * bufflength)(*data))
+            data = int.from_bytes(bytes((ctypes.c_byte * bufflength)(*data)), sys.byteorder)
 
             # Compare the values.
             if scan_type is ScanTypesEnum.EXACT_VALUE and data != target_value_bytes: continue
+            elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE and data == target_value_bytes: continue
             elif scan_type is ScanTypesEnum.BIGGER_THAN and data <= target_value_bytes: continue
             elif scan_type is ScanTypesEnum.SMALLER_THAN and data >= target_value_bytes: continue
+            elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE and data < target_value_bytes: continue
+            elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE and data > target_value_bytes: continue
 
             found_address = address + index
 
