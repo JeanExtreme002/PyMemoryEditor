@@ -9,7 +9,7 @@ with open("README.md") as file:
 setup(
     name = "PyMemoryEditor",
     version = __version__,
-    description = "Process memory reader and writer.",
+    description = "A Python library to edit and track memory of Windows processes (32 bits and 64 bits).",
     long_description = README,
     long_description_content_type = "text/markdown",
     author = "Jean Loui Bernard Silva de Jesus",
