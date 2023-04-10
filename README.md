@@ -41,13 +41,26 @@ with OpenProcess(window_title = title) as process:
     process.write_process_memory(address, int, 4, value + 7)
 ```
 
-## Getting memory addresses by a target value:
+# Getting memory addresses by a target value:
 You can look up a value in memory and get the address of all matches, like this:
 ```
 for address process.search_by_value(int, 4, target_value):
     print("Found address:", address)
 ```
 
+## Choosing the comparison method used for scanning:
+There are three options to scan the memory:
+- EXACT_VALUE
+- BIGGER_THAN
+- SMALLER_THAN
+
+The default option is `EXACT_VALUE`, but you can change it at `scan_type` parameter:
+```
+for address process.search_by_value(int, 4, target_value, scan_type = ScanTypesEnum.BIGGER_THAN):
+    print("Found address:", address)
+```
+
+## Extra information from search_by_value method:
 This method also has the `progress_information` parameter that returns a dictionary containing search progress information.
 ```
 for address, info process.search_by_value(int, 4, target_value, progress_information = True):
