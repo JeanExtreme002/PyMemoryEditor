@@ -181,7 +181,7 @@ def SearchAllMemory(
 
             # Compare the values.
             if scan_type is ScanTypesEnum.EXACT_VALUE and data != target_value_bytes: continue
-            elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE and data == target_value_bytes: continue
+            elif scan_type is ScanTypesEnum.DIFFERENT_THAN and data == target_value_bytes: continue
             elif scan_type is ScanTypesEnum.BIGGER_THAN and data <= target_value_bytes: continue
             elif scan_type is ScanTypesEnum.SMALLER_THAN and data >= target_value_bytes: continue
             elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE and data < target_value_bytes: continue

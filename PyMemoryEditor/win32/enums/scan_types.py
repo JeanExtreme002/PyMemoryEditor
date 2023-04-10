@@ -7,7 +7,7 @@ class ScanTypesEnum(Enum):
     Enum with scan types. Used by SearchAllMemory function.
     """
     EXACT_VALUE = 0
-    NOT_EXACT_VALUE = 1
+    DIFFERENT_THAN = 1
     BIGGER_THAN = 2
     SMALLER_THAN = 3
     BIGGER_THAN_OR_EXACT_VALUE = 4
