@@ -16,7 +16,12 @@ setup(
     url = "https://github.com/JeanExtreme002/PyMemoryEditor",
     license = "MIT",
     keywords = "memory virtual writer reader read write override address pointer edit editor process win32 api cheat scan scanner debug trainer",
-    packages = ["PyMemoryEditor", "PyMemoryEditor.process", "PyMemoryEditor.win32"],
+    packages = [
+        "PyMemoryEditor",
+        "PyMemoryEditor.process",
+        "PyMemoryEditor.win32",
+        "PyMemoryEditor.win32.enums"
+    ],
     install_requires = ["pywin32", "psutil"],
     classifiers = [
         "License :: OSI Approved :: MIT License",
