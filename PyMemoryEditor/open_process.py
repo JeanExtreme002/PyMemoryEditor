@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .process import Process
-from PyMemoryEditor.win32.enums import ProcessOperationsEnum
+from PyMemoryEditor.win32.enums import ProcessOperationsEnum, ScanTypesEnum
 
 from .win32.functions import (
     CloseProcessHandle,
@@ -74,6 +74,7 @@ class OpenProcess(object):
         pytype: Type[T],
         bufflength: int,
         value: Union[bool, int, float, str, bytes],
+        scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
         progress_information: Optional[bool] = False,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
@@ -84,6 +85,7 @@ class OpenProcess(object):
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
         :param bufflength: value size in bytes (1, 2, 4, 8).
         :param value: value to be queried (bool, int, float, str or bytes).
+        :param scan_type: the way to compare the values.
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
         valid_permissions = [
@@ -93,7 +95,7 @@ class OpenProcess(object):
         if self.__permission.value not in valid_permissions:
             raise PermissionError("The handle does not have permission to read the process memory.")
 
-        return SearchAllMemory(self.__process_handle, pytype, bufflength, value, progress_information)
+        return SearchAllMemory(self.__process_handle, pytype, bufflength, value, scan_type, progress_information)
 
     def read_process_memory(
         self,

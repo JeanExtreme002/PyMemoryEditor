@@ -6,7 +6,7 @@
 # https://learn.microsoft.com/en-us/windows/win32/api/psapi/
 # ...
 
-from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum
+from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum, ScanTypesEnum
 from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
 from .util import get_c_type_of
 from typing import Generator, Optional, Tuple, Type, TypeVar, Union
@@ -132,6 +132,7 @@ def SearchAllMemory(
     pytype: Type[T],
     bufflength: int,
     value: Union[bool, int, float, str, bytes],
+    scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: Optional[bool] = False,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
@@ -145,7 +146,8 @@ def SearchAllMemory(
     target_value = get_c_type_of(pytype, bufflength)
     target_value.value = value
 
-    target_value = bytes(target_value)
+    target_value_bytes = ctypes.cast(ctypes.byref(target_value), ctypes.POINTER(ctypes.c_byte * bufflength))
+    target_value_bytes = bytes(target_value_bytes.contents)
 
     regions = list()
     memory_total = 0
@@ -170,24 +172,22 @@ def SearchAllMemory(
 
         # Get data from the region.
         kernel32.ReadProcessMemory(process_handle, ctypes.c_void_p(address), ctypes.byref(region_data), size, None)
-        region_data = bytes(region_data)
 
         # Walk by the returned bytes, searching for the target value.
-        current_index = 0
-        result_index = 0
+        for index in range(size - bufflength):
+            data = region_data[index: index + bufflength]
+            data = bytes((ctypes.c_byte * bufflength)(*data))
 
-        while current_index < size and result_index != -1:
-            result_index = region_data.find(target_value, current_index)
+            # Compare the values.
+            if scan_type is ScanTypesEnum.EXACT_VALUE and data != target_value_bytes: continue
+            elif scan_type is ScanTypesEnum.BIGGER_THAN and data <= target_value_bytes: continue
+            elif scan_type is ScanTypesEnum.SMALLER_THAN and data >= target_value_bytes: continue
 
-            # Result equals (-1) means that there is no more match in the region data.
-            if result_index == -1: break
-            current_index = result_index + 1
-
-            found_address = address + result_index
+            found_address = address + index
 
             extra_information = {
                 "memory_total": memory_total,
-                "progress": (checked_memory_size + current_index) / memory_total
+                "progress": (checked_memory_size + index) / memory_total,
             }
             yield (found_address, extra_information) if progress_information else found_address
 
