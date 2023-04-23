@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from win32gui import FindWindow
-from win32process import GetWindowThreadProcessId
+from win32.win32gui import FindWindow
+from win32.win32process import GetWindowThreadProcessId
 import psutil
 
 
