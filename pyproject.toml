@@ -1,0 +1,60 @@
+[project]
+name = "PyMemoryEditor"
+dynamic = ["version"]
+description = "A Python library to edit and track memory of Windows processes (32 bits and 64 bits)."
+authors = [
+    { name = "Jean Loui Bernard Silva de Jesus", email = "jeanextreme002@gmail.com" },
+]
+license = "MIT"
+readme = "README.md"
+keywords = [
+    "memory",
+    "address",
+    "pointer",
+    "process",
+    "virtual",
+    "writer",
+    "reader",
+    "editor",
+    "override",
+    "win32", "api", "ctypes",
+    "cheat", "scanner", "debug", "track",
+    "readprocessmemory", "writeprocessmemory"
+]
+
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "Environment :: Win32 (MS Windows)",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring"
+]
+exclude = ["tests"]
+requires-python = ">=3.6"
+dependencies = ["pywin32", "psutil"]
+
+[project.optional-dependencies]
+tests = [
+  "pytest",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/JeanExtreme002/PyMemoryEditor"
+
+[tool.hatch.version]
+path = "PyMemoryEditor/__init__.py"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
