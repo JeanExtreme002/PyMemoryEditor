@@ -17,7 +17,7 @@ pip3 install PyMemoryEditor
 # Basic Usage:
 Import `PyMemoryEditor` and open a process using the `OpenProcess` class, passing a window title, process name <br>
 or PID as an argument. You can use the context manager to do this.
-```
+```py
 from PyMemoryEditor import OpenProcess
 
 with OpenProcess(process_name = "example.exe") as process:
@@ -26,7 +26,7 @@ with OpenProcess(process_name = "example.exe") as process:
 
 After that, use the methods `read_process_memory` and `write_process_memory` to manipulate the process <br>
 memory, passing in the function call the memory address, data type and its size. See the example below:
-```
+```py
 from PyMemoryEditor import OpenProcess
 
 title = "Window title of an example program"
@@ -43,7 +43,7 @@ with OpenProcess(window_title = title) as process:
 
 # Getting memory addresses by a target value:
 You can look up a value in memory and get the address of all matches, like this:
-```
+```py
 for address process.search_by_value(int, 4, target_value):
     print("Found address:", address)
 ```
@@ -52,14 +52,14 @@ for address process.search_by_value(int, 4, target_value):
 There are many options to scan the memory. Check all available options in [`ScanTypesEnum`](https://github.com/JeanExtreme002/PyMemoryEditor/blob/master/PyMemoryEditor/win32/enums/scan_types.py).
 
 The default option is `EXACT_VALUE`, but you can change it at `scan_type` parameter:
-```
+```py
 for address process.search_by_value(int, 4, target_value, scan_type = ScanTypesEnum.BIGGER_THAN):
     print("Found address:", address)
 ```
 
 ## Extra information from search_by_value method:
 This method also has the `progress_information` parameter that returns a dictionary containing search progress information.
-```
+```py
 for address, info process.search_by_value(int, 4, target_value, progress_information = True):
     template = "Address: 0x{:<10X} | Progress: {:.1f}%"
     progress = info["progress"] * 100
