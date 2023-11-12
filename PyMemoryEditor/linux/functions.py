@@ -31,7 +31,10 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
         for line in mapping_file:
 
             # Each line keeps information about a memory region of the process.
-            addressing_range, privileges, offset, device, inode, path = line.split()[0: 6]
+            region_information = line.split()
+
+            addressing_range, privileges, offset, device, inode = region_information[0: 5]
+            path = region_information[5] if len(region_information) >= 6 else str()
 
             # Convert hexadecimal values to decimal.
             start_address, end_address = [int(addr, 16) for addr in addressing_range.split("-")]
