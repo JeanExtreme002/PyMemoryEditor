@@ -2,7 +2,7 @@
 
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
-from .functions import read_process_memory, write_process_memory
+from .functions import read_process_memory, search_all_memory, write_process_memory
 from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
 
@@ -73,7 +73,7 @@ class LinuxProcess(AbstractProcess):
         :param scan_type: the way to compare the values.
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
-        raise NotImplementedError("Not implemented at this version.")
+        return search_all_memory(self.pid, pytype, bufflength, value, scan_type, progress_information)
 
     def write_process_memory(
         self,
