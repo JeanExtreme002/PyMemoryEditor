@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
+from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
-from .enums import ProcessOperationsEnum, ScanTypesEnum
+from .enums import ProcessOperationsEnum
 
 from .functions import (
     CloseProcessHandle,

@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
 
+from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
-
-from .functions import (
-    read_process_memory, write_process_memory
-)
-
+from .functions import read_process_memory, write_process_memory
 from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
 
@@ -62,7 +59,7 @@ class LinuxProcess(AbstractProcess):
         pytype: Type[T],
         bufflength: int,
         value: Union[bool, int, float, str, bytes],
-        scan_type,
+        scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
         progress_information: Optional[bool] = False,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:

@@ -3,15 +3,44 @@
 # Read more about process_vm_(read/write)v here:
 # https://man7.org/linux/man-pages/man2/process_vm_readv.2.html
 
+# Read more about proc and memory mapping here:
+# https://man7.org/linux/man-pages/man5/proc.5.html
+
 from ctypes import addressof, sizeof
-from typing import Type, TypeVar, Union
+from typing import Generator, Type, TypeVar, Union
 
 from ..util import get_c_type_of
 from .ptrace import libc
-from .types import iovec
+from .types import MEMORY_BASIC_INFORMATION, iovec
 
 
 T = TypeVar("T")
+
+
+def get_memory_regions(pid: int) -> Generator[dict, None, None]:
+    """
+    Generates dictionaries with the address and size of a region used by the process.
+    """
+    mapping_filename = "/proc/{}/maps".format(pid)
+
+    with open(mapping_filename, "r") as mapping_file:
+        for line in mapping_file:
+
+            # Each line keeps information about a memory region of the process.
+            addressing_range, privileges, offset, device, inode, path = line.split()[0: 6]
+
+            # Convert hexadecimal values to decimal.
+            start_address, end_address = [int(addr, 16) for addr in addressing_range.split("-")]
+            major_id, minor_id = [int(_id, 16) for _id in device.split("-")]
+
+            offset = int(offset, 16)
+            inode = int(inode, 16)
+
+            # Calculate the region size.
+            size = end_address - start_address
+
+            region = MEMORY_BASIC_INFORMATION(start_address, size, privileges, offset, major_id, minor_id, inode, path)
+            yield {"address": start_address, "size": region.RegionSize, "struct": region}
 
 
 def read_process_memory(

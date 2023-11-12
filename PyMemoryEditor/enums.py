@@ -4,7 +4,7 @@ from enum import Enum
 
 class ScanTypesEnum(Enum):
     """
-    Enum with scan types. Used by SearchAllMemory function.
+    Enum with scan types.
     """
     EXACT_VALUE = 0
     NOT_EXACT_VALUE = 1
