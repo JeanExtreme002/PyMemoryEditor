@@ -35,7 +35,7 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
 
             # Convert hexadecimal values to decimal.
             start_address, end_address = [int(addr, 16) for addr in addressing_range.split("-")]
-            major_id, minor_id = [int(_id, 16) for _id in device.split("-")]
+            major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
 
             offset = int(offset, 16)
             inode = int(inode, 16)
