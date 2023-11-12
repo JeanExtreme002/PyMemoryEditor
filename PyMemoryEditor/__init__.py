@@ -1,16 +1,24 @@
 # -*- coding: utf-8 -*-
 
 """
-A Python library developed with ctypes to manipulate Windows processes (32 bits and 64 bits),
+A Python library developed with ctypes to manipulate Windows and Linux processes (32 bits and 64 bits),
 reading and writing values in the process memory.
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.4.14"
+__version__ = "1.5.0"
+
 
 import sys
 
-if "win" not in sys.platform:
-    raise OSError("Only Windows OS is currently supported.")
+# For Windows.
+if "win" in sys.platform:
+    from .win32.process import WindowsProcess
+    from .win32.enums.process_operations import ProcessOperationsEnum
+    from .win32.enums.scan_types import ScanTypesEnum
+    OpenProcess = WindowsProcess
 
-from .open_process import OpenProcess, ProcessOperationsEnum, ScanTypesEnum
+# For Linux.
+else:
+    from linux.process import LinuxProcess
+    OpenProcess = LinuxProcess

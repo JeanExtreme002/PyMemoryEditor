@@ -1,6 +1,6 @@
 # PyMemoryEditor
 
-A Python library developed with [ctypes](https://docs.python.org/3/library/ctypes.html) to manipulate Windows processes (32 bits and 64 bits), <br>
+A Python library developed with [ctypes](https://docs.python.org/3/library/ctypes.html) to manipulate Windows and Linux processes (32 bits and 64 bits), <br>
 reading and writing values in the process memory.
 
 [![Python Package](https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml/badge.svg)](https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml)

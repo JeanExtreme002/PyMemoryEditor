@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
-from .process import Process
-from PyMemoryEditor.win32.enums import ProcessOperationsEnum, ScanTypesEnum
+from ..process import AbstractProcess
+from .enums import ProcessOperationsEnum, ScanTypesEnum
 
-from .win32.functions import (
+from .functions import (
     CloseProcessHandle,
     GetProcessHandle,
     ReadProcessMemory,
@@ -17,15 +17,10 @@ from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 T = TypeVar("T")
 
 
-class OpenProcess(object):
+class WindowsProcess(AbstractProcess):
     """
-    Class to open a process for reading or writing memory.
+    Class to open a Windows process for reading and writing memory.
     """
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        self.close()
 
     def __init__(
         self,
@@ -41,27 +36,17 @@ class OpenProcess(object):
         :param pid: process ID.
         :param permission: access mode to the process.
         """
+        super().__init__(
+            window_title = window_title,
+            process_name = process_name,
+            pid = pid
+        )
+
         # Instantiate the permission argument.
         self.__permission = permission
 
-        # Create a Process instance.
-        self.__process = Process()
-
-        # Set the attributes to the process.
-        if pid:
-            self.__process.pid = pid
-
-        elif window_title:
-            self.__process.window_title = window_title
-
-        elif process_name:
-            self.__process.process_name = process_name
-
-        else:
-            raise TypeError("You must pass an argument to one of these parameters (window_title, process_name, pid).")
-
         # Get the process handle.
-        self.__process_handle = GetProcessHandle(self.__permission.value, False, self.__process.pid)
+        self.__process_handle = GetProcessHandle(self.__permission.value, False, self.pid)
 
     def close(self):
         """

@@ -1,58 +1,47 @@
 # -*- coding: utf-8 -*-
-from abc import ABC, abstractmethod
-from typing import Optional, Type, TypeVar, Union
 
-from ..process.info import ProcessInfo
+from ..process import AbstractProcess
+
+from functions import (
+    read_process_memory, write_process_memory
+)
+
+from typing import Optional, Type, TypeVar, Union
 
 
 T = TypeVar("T")
 
 
-class AbstractProcess(ABC):
+class LinuxProcess(AbstractProcess):
     """
-    Abstract class to represent a process.
+    Class to open a Linux process for reading and writing memory.
     """
 
-    @abstractmethod
-    def __init__(self, *, window_title: Optional[str] = None, process_name: Optional[str] = None, pid: Optional[int] = None):
+    def __init__(
+        self,
+        *,
+        window_title: Optional[str] = None,
+        process_name: Optional[str] = None,
+        pid: Optional[int] = None,
+        **kwargs
+    ):
         """
         :param window_title: window title of the target program.
         :param process_name: name of the target process.
         :param pid: process ID.
         """
-        self._process_info = ProcessInfo()
+        super().__init__(
+            window_title = window_title,
+            process_name = process_name,
+            pid = pid
+        )
 
-        # Set the attributes to the process.
-        if pid:
-            self._process_info.pid = pid
-
-        elif window_title:
-            self._process_info.window_title = window_title
-
-        elif process_name:
-            self._process_info.process_name = process_name
-
-        else:
-            raise TypeError("You must pass an argument to one of these parameters (window_title, process_name, pid).")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        self.close()
-
-    @property
-    def pid(self):
-        return self._process_info.pid
-
-    @abstractmethod
     def close(self):
         """
         Close the process handle.
         """
-        raise NotImplementedError()
+        pass
 
-    @abstractmethod
     def read_process_memory(
         self,
         address: int,
@@ -66,7 +55,7 @@ class AbstractProcess(ABC):
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
         :param bufflength: value size in bytes (1, 2, 4, 8).
         """
-        raise NotImplementedError()
+        return read_process_memory(self.pid, address, pytype, bufflength)
 
     def write_process_memory(
         self,
@@ -83,4 +72,4 @@ class AbstractProcess(ABC):
         :param bufflength: value size in bytes (1, 2, 4, 8).
         :param value: value to be written (bool, int, float, str or bytes).
         """
-        raise NotImplementedError()
+        return write_process_memory(self.pid, address, pytype, bufflength, value)

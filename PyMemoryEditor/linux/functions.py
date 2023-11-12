@@ -14,7 +14,7 @@ from types import iovec
 T = TypeVar("T")
 
 
-def read_memory(
+def read_process_memory(
     pid: int,
     address: int,
     pytype: Type[T],
@@ -35,7 +35,7 @@ def read_memory(
     return str(data.value) if pytype is str else data.value
 
 
-def write_memory(
+def write_process_memory(
     pid: int,
     address: int,
     pytype: Type[T],
