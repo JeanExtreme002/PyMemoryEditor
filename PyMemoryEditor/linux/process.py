@@ -6,7 +6,7 @@ from .functions import (
     read_process_memory, write_process_memory
 )
 
-from typing import Optional, Type, TypeVar, Union
+from typing import Generator, Optional, Type, TypeVar, Union
 
 
 T = TypeVar("T")
