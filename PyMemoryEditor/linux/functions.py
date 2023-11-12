@@ -43,7 +43,7 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
             # Calculate the region size.
             size = end_address - start_address
 
-            region = MEMORY_BASIC_INFORMATION(start_address, size, privileges, offset, major_id, minor_id, inode, path)
+            region = MEMORY_BASIC_INFORMATION(start_address, size, privileges.encode(), offset, major_id, minor_id, inode, path.encode())
             yield {"address": start_address, "size": region.RegionSize, "struct": region}
 
 
@@ -97,7 +97,7 @@ def search_all_memory(
     for region in get_memory_regions(pid):
 
         # Only committed, non-shared and readable memory pages.
-        if not "r" in region["struct"].Privileges: continue
+        if not b"r" in region["struct"].Privileges: continue
 
         memory_total += region["size"]
         regions.append(region)
