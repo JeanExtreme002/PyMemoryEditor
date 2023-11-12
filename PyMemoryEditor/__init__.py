@@ -20,5 +20,5 @@ if "win" in sys.platform:
 
 # For Linux.
 else:
-    from linux.process import LinuxProcess
+    from .linux.process import LinuxProcess
     OpenProcess = LinuxProcess

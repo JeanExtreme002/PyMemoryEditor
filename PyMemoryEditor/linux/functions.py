@@ -7,8 +7,8 @@ from ctypes import addressof, sizeof
 from typing import Type, TypeVar, Union
 
 from ..util import get_c_type_of
-from ptrace import libc
-from types import iovec
+from .ptrace import libc
+from .types import iovec
 
 
 T = TypeVar("T")

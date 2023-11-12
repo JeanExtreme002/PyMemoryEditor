@@ -5,8 +5,9 @@
 # https://refspecs.linuxbase.org/LSB_5.0.0/LSB-Core-generic/LSB-Core-generic/baselib-ptrace-1.html
 # ...
 
+from .enums import CommandsEnum
+
 from ctypes.util import find_library
-from enums import CommandsEnum
 import ctypes
 
 libc = ctypes.CDLL(find_library("c"), use_errno = True)

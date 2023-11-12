@@ -6,10 +6,10 @@
 # https://learn.microsoft.com/en-us/windows/win32/api/psapi/
 # ...
 
-from PyMemoryEditor.util import get_c_type_of
-
+from ..util import get_c_type_of
 from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum, ScanTypesEnum
 from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
+
 from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
 import ctypes

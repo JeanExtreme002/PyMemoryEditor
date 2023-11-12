@@ -2,7 +2,7 @@
 
 from ..process import AbstractProcess
 
-from functions import (
+from .functions import (
     read_process_memory, write_process_memory
 )
 
