@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from ctypes import Structure, WINFUNCTYPE, c_bool, c_ulonglong, c_void_p, sizeof, wintypes
 
 
