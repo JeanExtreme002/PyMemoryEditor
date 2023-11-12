@@ -48,7 +48,7 @@ class WindowsProcess(AbstractProcess):
         # Get the process handle.
         self.__process_handle = GetProcessHandle(self.__permission.value, False, self.pid)
 
-    def close(self):
+    def close(self) -> int:
         """
         Close the process handle.
         """

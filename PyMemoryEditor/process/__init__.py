@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
-from typing import Optional, Type, TypeVar, Union
+from typing import Any, Optional, Type, TypeVar, Union
 
 from ..process.info import ProcessInfo
 
@@ -42,11 +42,11 @@ class AbstractProcess(ABC):
         self.close()
 
     @property
-    def pid(self):
+    def pid(self) -> int:
         return self._process_info.pid
 
     @abstractmethod
-    def close(self):
+    def close(self) -> Any:
         """
         Close the process handle.
         """

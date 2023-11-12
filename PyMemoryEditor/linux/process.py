@@ -36,11 +36,11 @@ class LinuxProcess(AbstractProcess):
             pid = pid
         )
 
-    def close(self):
+    def close(self) -> bool:
         """
         Close the process handle.
         """
-        pass
+        return True
 
     def read_process_memory(
         self,
