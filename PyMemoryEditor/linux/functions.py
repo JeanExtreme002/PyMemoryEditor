@@ -7,15 +7,14 @@
 # https://man7.org/linux/man-pages/man5/proc.5.html
 
 from ctypes import addressof, sizeof
-from typing import Generator, Optional, Tuple, Type, TypeVar, Union
+from typing import Generator, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
-from ..util import get_c_type_of
+from ..util import get_c_type_of, scan_memory, scan_memory_for_exact_value
 from .ptrace import libc
 from .types import MEMORY_BASIC_INFORMATION, iovec
 
 import ctypes
-import sys
 
 
 T = TypeVar("T")
@@ -77,7 +76,7 @@ def search_all_memory(
     bufflength: int,
     value: Union[bool, int, float, str, bytes],
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
-    progress_information: Optional[bool] = False,
+    progress_information: bool = False,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -91,21 +90,20 @@ def search_all_memory(
     target_value.value = value
 
     target_value_bytes = ctypes.cast(ctypes.byref(target_value), ctypes.POINTER(ctypes.c_byte * bufflength))
-    target_value_bytes = int.from_bytes(bytes(target_value_bytes.contents), sys.byteorder)
+    target_value_bytes = bytes(target_value_bytes.contents)
 
-    regions = list()
+    checked_memory_size = 0
     memory_total = 0
+    regions = list()
 
-    # Get the memory regions, computing the space size.
+    # Get the memory regions, computing the total amount of memory to be scanned.
     for region in get_memory_regions(pid):
 
-        # Only committed, non-shared and readable memory pages.
+        # Only readable memory pages.
         if not b"r" in region["struct"].Privileges: continue
 
         memory_total += region["size"]
         regions.append(region)
-
-    checked_memory_size = 0
 
     # Check each memory region used by the process.
     for region in regions:
@@ -118,24 +116,19 @@ def search_all_memory(
             1, (iovec * 1)(iovec(address, sizeof(region_data))), 1, 0
         )
 
-        # Walk by the returned bytes, searching for the target value.
-        for index in range(size - bufflength):
-            data = region_data[index: index + bufflength]
-            data = int.from_bytes(bytes((ctypes.c_byte * bufflength)(*data)), sys.byteorder)
+        # Choose the searching method.
+        searching_method = scan_memory
 
-            # Compare the values.
-            if scan_type is ScanTypesEnum.EXACT_VALUE and data != target_value_bytes: continue
-            elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE and data == target_value_bytes: continue
-            elif scan_type is ScanTypesEnum.BIGGER_THAN and data <= target_value_bytes: continue
-            elif scan_type is ScanTypesEnum.SMALLER_THAN and data >= target_value_bytes: continue
-            elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE and data < target_value_bytes: continue
-            elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE and data > target_value_bytes: continue
+        if scan_type in [ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE]:
+            searching_method = scan_memory_for_exact_value
 
-            found_address = address + index
+        # Search the value and return the found addresses.
+        for offset in searching_method(region_data, size, target_value_bytes, bufflength, scan_type):
+            found_address = address + offset
 
             extra_information = {
                 "memory_total": memory_total,
-                "progress": (checked_memory_size + index) / memory_total,
+                "progress": (checked_memory_size + offset) / memory_total,
             }
             yield (found_address, extra_information) if progress_information else found_address
 

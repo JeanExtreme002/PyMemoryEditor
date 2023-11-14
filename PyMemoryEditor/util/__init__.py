@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from .scan import scan_memory, scan_memory_for_exact_value
 from typing import Type
 import ctypes
 

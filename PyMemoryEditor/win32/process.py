@@ -62,7 +62,7 @@ class WindowsProcess(AbstractProcess):
         value: Union[bool, int, float, str, bytes],
         scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
-        progress_information: Optional[bool] = False,
+        progress_information: bool = False,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
