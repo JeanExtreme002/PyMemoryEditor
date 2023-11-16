@@ -7,6 +7,7 @@ from .enums import ProcessOperationsEnum
 
 from .functions import (
     CloseProcessHandle,
+    GetMemoryRegions,
     GetProcessHandle,
     ReadProcessMemory,
     SearchAllMemory,
@@ -57,6 +58,15 @@ class WindowsProcess(AbstractProcess):
         """
         self.__closed = True
         return CloseProcessHandle(self.__process_handle) != 0
+
+    def get_memory_regions(self) -> Generator[dict, None, None]:
+        """
+        Generates dictionaries with the address, size and other
+        information of each memory region used by the process.
+        """
+        if self.__closed: raise ClosedProcess()
+
+        return GetMemoryRegions(self.__process_handle)
 
     def search_by_value(
         self,

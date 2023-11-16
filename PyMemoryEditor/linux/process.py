@@ -3,7 +3,7 @@
 from ..enums import ScanTypesEnum
 from ..errors import ClosedProcess
 from ..process import AbstractProcess
-from .functions import read_process_memory, search_all_memory, write_process_memory
+from .functions import get_memory_regions, read_process_memory, search_all_memory, write_process_memory
 from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
 
@@ -42,6 +42,15 @@ class LinuxProcess(AbstractProcess):
         self.__closed = True
         return True
 
+    def get_memory_regions(self) -> Generator[dict, None, None]:
+        """
+        Generates dictionaries with the address, size and other
+        information of each memory region used by the process.
+        """
+        if self.__closed: raise ClosedProcess()
+
+        return get_memory_regions(self.pid)
+
     def read_process_memory(
         self,
         address: int,
@@ -56,6 +65,7 @@ class LinuxProcess(AbstractProcess):
         :param bufflength: value size in bytes (1, 2, 4, 8).
         """
         if self.__closed: raise ClosedProcess()
+
         return read_process_memory(self.pid, address, pytype, bufflength)
 
     def search_by_value(
