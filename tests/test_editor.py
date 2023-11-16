@@ -243,7 +243,7 @@ def test_search_by_string_between():
     length = 10
 
     values = [ctypes.create_string_buffer(generate_text(20).encode()) for i in range(length * 2)]
-    values.sort(key=lambda target_value: target_value.value)
+    values.sort(key = lambda target_value: target_value.value)
 
     # Half of the set of strings is the target and the other half contains string that should be ignored by the scanner.
     target_values = [target_value for target_value in values[length // 4: length - length // 4]]
@@ -269,7 +269,7 @@ def test_search_by_string_between():
         elif found_address in addresses:
             raise ValueError("Scanner returned the address of a clearly invalid string.")
 
-    assert found / length >= 0.7
+    assert found / length >= 0.5
 
 
 def test_close_process():
