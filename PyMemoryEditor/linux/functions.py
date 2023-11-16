@@ -74,7 +74,7 @@ def search_all_memory(
     pid: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes],
+    value: Union[bool, int, float, str, bytes, tuple],
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: bool = False,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
@@ -85,12 +85,19 @@ def search_all_memory(
     if pytype not in [bool, int, float, str, bytes]:
         raise ValueError("The type must be bool, int, float, str or bytes.")
 
-    # Get the target value as bytes.
-    target_value = get_c_type_of(pytype, bufflength)
-    target_value.value = value
+    # Convert the target value, or all values of a tuple, as bytes.
+    target_values = value if isinstance(value, tuple) else (value,)
 
-    target_value_bytes = ctypes.cast(ctypes.byref(target_value), ctypes.POINTER(ctypes.c_byte * bufflength))
-    target_value_bytes = bytes(target_value_bytes.contents)
+    conversion_buffer = list()
+
+    for v in target_values:
+        target_value = get_c_type_of(pytype, bufflength)
+        target_value.value = v
+
+        target_value_bytes = ctypes.cast(ctypes.byref(target_value), ctypes.POINTER(ctypes.c_byte * bufflength))
+        conversion_buffer.append(bytes(target_value_bytes.contents))
+
+    target_value_bytes = tuple(conversion_buffer) if isinstance(value, tuple) else conversion_buffer[0]
 
     checked_memory_size = 0
     memory_total = 0

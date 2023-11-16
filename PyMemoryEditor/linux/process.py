@@ -73,7 +73,34 @@ class LinuxProcess(AbstractProcess):
         :param scan_type: the way to compare the values.
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
+        if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
+            raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
+
         return search_all_memory(self.pid, pytype, bufflength, value, scan_type, progress_information)
+
+    def search_by_value_between(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        start: Union[bool, int, float, str, bytes],
+        end: Union[bool, int, float, str, bytes],
+        *,
+        not_between: bool = False,
+        progress_information: bool = False,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        """
+        Search the whole memory space, accessible to the process,
+        for a value within the provided range, returning the found addresses.
+
+        :param pytype: type of value to be queried (bool, int, float, str or bytes).
+        :param bufflength: value size in bytes (1, 2, 4, 8).
+        :param start: minimum inclusive value to be queried (bool, int, float, str or bytes).
+        :param end: maximum inclusive value to be queried (bool, int, float, str or bytes).
+        :param not_between: if True, return only addresses of values that are NOT within the range.
+        :param progress_information: if True, a dictionary with the progress information will be return.
+        """
+        scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
+        return search_all_memory(self.pid, pytype, bufflength, (start, end), scan_type, progress_information)
 
     def write_process_memory(
         self,

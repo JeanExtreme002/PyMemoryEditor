@@ -3,7 +3,7 @@
 from ..enums import ScanTypesEnum
 from .search.kmp import KMPSearch
 
-from typing import Sequence
+from typing import Sequence, Tuple, Union
 import ctypes
 import sys
 
@@ -46,14 +46,18 @@ def scan_memory_for_exact_value(
 def scan_memory(
     memory_region_data: Sequence,
     memory_region_data_size: int,
-    target_value: bytes,
+    target_value: Union[bytes, Tuple[bytes]],
     target_value_size: int,
     scan_type: ScanTypesEnum,
 ):
     """
     Search for a value at the memory region.
     """
-    target_value_int = int.from_bytes(target_value, sys.byteorder)
+    # If target_value is a tuple, it means the user wants to compare to more than one value.
+    if isinstance(target_value, tuple):
+        start_target_value_int = int.from_bytes(target_value[0], sys.byteorder)
+        end_target_value_int = int.from_bytes(target_value[1], sys.byteorder)
+    else: target_value_int = int.from_bytes(target_value, sys.byteorder)
 
     for found_index in range(memory_region_data_size - target_value_size):
 
@@ -62,8 +66,12 @@ def scan_memory(
         data = bytes((ctypes.c_byte * target_value_size)(*data))
         data = int.from_bytes(data, sys.byteorder)
 
-        # Compare the values.
-        if scan_type is ScanTypesEnum.EXACT_VALUE and data != target_value_int: continue
+        # Compare value between.
+        if scan_type is ScanTypesEnum.VALUE_BETWEEN and (start_target_value_int > data or data > end_target_value_int): continue
+        elif scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN and (start_target_value_int < data < end_target_value_int): continue
+
+        # Compare the value.
+        elif scan_type is ScanTypesEnum.EXACT_VALUE and data != target_value_int: continue
         elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE and data == target_value_int: continue
         elif scan_type is ScanTypesEnum.BIGGER_THAN and data <= target_value_int: continue
         elif scan_type is ScanTypesEnum.SMALLER_THAN and data >= target_value_int: continue
