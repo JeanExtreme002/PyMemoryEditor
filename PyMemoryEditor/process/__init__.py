@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Type, TypeVar, Union
+from typing import Optional, Type, TypeVar, Union
 
 from ..process.info import ProcessInfo
 
@@ -46,7 +46,7 @@ class AbstractProcess(ABC):
         return self._process_info.pid
 
     @abstractmethod
-    def close(self) -> Any:
+    def close(self) -> bool:
         """
         Close the process handle.
         """
@@ -68,6 +68,7 @@ class AbstractProcess(ABC):
         """
         raise NotImplementedError()
 
+    @abstractmethod
     def write_process_memory(
         self,
         address: int,

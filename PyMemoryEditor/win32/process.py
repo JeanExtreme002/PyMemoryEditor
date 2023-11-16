@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from ..enums import ScanTypesEnum
+from ..errors import ClosedProcess
 from ..process import AbstractProcess
 from .enums import ProcessOperationsEnum
 
@@ -42,6 +43,7 @@ class WindowsProcess(AbstractProcess):
             process_name = process_name,
             pid = pid
         )
+        self.__closed = False
 
         # Instantiate the permission argument.
         self.__permission = permission
@@ -49,11 +51,12 @@ class WindowsProcess(AbstractProcess):
         # Get the process handle.
         self.__process_handle = GetProcessHandle(self.__permission.value, False, self.pid)
 
-    def close(self) -> int:
+    def close(self) -> bool:
         """
         Close the process handle.
         """
-        return CloseProcessHandle(self.__process_handle)
+        self.__closed = True
+        return CloseProcessHandle(self.__process_handle) != 0
 
     def search_by_value(
         self,
@@ -74,6 +77,8 @@ class WindowsProcess(AbstractProcess):
         :param scan_type: the way to compare the values.
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
+        if self.__closed: raise ClosedProcess()
+
         valid_permissions = [
             ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
             ProcessOperationsEnum.PROCESS_VM_READ.value
@@ -107,6 +112,8 @@ class WindowsProcess(AbstractProcess):
         :param not_between: if True, return only addresses of values that are NOT within the range.
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
+        if self.__closed: raise ClosedProcess()
+
         valid_permissions = [
             ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
             ProcessOperationsEnum.PROCESS_VM_READ.value
@@ -130,6 +137,8 @@ class WindowsProcess(AbstractProcess):
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
         :param bufflength: value size in bytes (1, 2, 4, 8).
         """
+        if self.__closed: raise ClosedProcess()
+
         valid_permissions = [
             ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
             ProcessOperationsEnum.PROCESS_VM_READ.value
@@ -154,6 +163,8 @@ class WindowsProcess(AbstractProcess):
         :param bufflength: value size in bytes (1, 2, 4, 8).
         :param value: value to be written (bool, int, float, str or bytes).
         """
+        if self.__closed: raise ClosedProcess()
+
         valid_permissions = [
             ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
             ProcessOperationsEnum.PROCESS_VM_OPERATION.value | ProcessOperationsEnum.PROCESS_VM_WRITE.value

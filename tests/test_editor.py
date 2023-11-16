@@ -1,4 +1,4 @@
-from package import OpenProcess, version
+from package import OpenProcess, ScanTypesEnum, version
 from os import getpid
 from typing import Optional
 import ctypes
@@ -141,6 +141,97 @@ def test_write_string():
     # Write to the process memory and compare the result.
     process.write_process_memory(address, str, data_length, new_value)
     assert target_value.value != original_value and target_value.value == new_value
+
+
+def test_search_by_int():
+    # Get random values to compare the result.
+    length = 10
+
+    target_values = [ctypes.c_int(random.randint(0, 10000)) for i in range(length)]
+    addresses = [ctypes.addressof(v) for v in target_values]
+    data_length = ctypes.sizeof(target_values[0])
+
+    min_value = min([v.value for v in target_values])
+    max_value = max([v.value for v in target_values])
+
+    total = 0
+    found = 0
+    correct = 0
+
+    # Get addresses of values exact or smaller than max_value.
+    for found_address in process.search_by_value_between(int, data_length, min_value, max_value):
+        if found_address in addresses:
+            addresses.remove(found_address)
+            found += 1
+
+        total += 1
+
+        # Check if the address really points to a valid value.
+        value = process.read_process_memory(found_address, int, data_length)
+        if min_value <= value <= max_value: correct += 1
+
+    assert found / length >= 0.7
+    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+
+
+def test_search_by_float():
+    # Get random values to compare the result.
+    length = 10
+
+    target_values = [ctypes.c_double(random.randint(0, 10000)) for i in range(length)]
+    addresses = [ctypes.addressof(v) for v in target_values]
+    data_length = ctypes.sizeof(target_values[0])
+
+    min_value = min([v.value for v in target_values])
+    max_value = max([v.value for v in target_values])
+
+    total = 0
+    found = 0
+    correct = 0
+
+    # Get addresses of values exact or smaller than max_value.
+    for found_address in process.search_by_value_between(float, data_length, min_value, max_value):
+        if found_address in addresses:
+            addresses.remove(found_address)
+            found += 1
+
+        total += 1
+
+        # Check if the address really points to a valid value.
+        value = process.read_process_memory(found_address, float, data_length)
+        if min_value <= value <= max_value: correct += 1
+
+    assert found / length >= 0.7
+    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+
+
+def test_search_by_string():
+    # Get random values to compare the result.
+    length = 10
+
+    target_values = [ctypes.create_string_buffer(generate_text(20).encode()) for i in range(length)]
+    data_length = ctypes.sizeof(target_values[0])
+
+    total = 0
+    found = 0
+    correct = 0
+
+    # Get addresses of values exact or smaller than max_value.
+    for target_value in target_values:
+        for found_address in process.search_by_value(str, data_length, target_value.value, ScanTypesEnum.EXACT_VALUE):
+
+            # Check if the found address is the target address.
+            if found_address == ctypes.addressof(target_value):
+                found += 1
+
+            total += 1
+
+            # Check if the address really points to a valid value.
+            value = process.read_process_memory(found_address, str, data_length)
+            if value == str(target_value.value): correct += 1
+
+    assert found / length >= 0.7
+    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
 
 
 def test_close_process():

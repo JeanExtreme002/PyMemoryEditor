@@ -152,7 +152,7 @@ def SearchAllMemory(
 
     for v in target_values:
         target_value = get_c_type_of(pytype, bufflength)
-        target_value.value = v
+        target_value.value = v.encode() if isinstance(v, str) else v
 
         target_value_bytes = ctypes.cast(ctypes.byref(target_value), ctypes.POINTER(ctypes.c_byte * bufflength))
         conversion_buffer.append(bytes(target_value_bytes.contents))

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from ..enums import ScanTypesEnum
+from ..errors import ClosedProcess
 from ..process import AbstractProcess
 from .functions import read_process_memory, search_all_memory, write_process_memory
 from typing import Generator, Optional, Tuple, Type, TypeVar, Union
@@ -32,11 +33,13 @@ class LinuxProcess(AbstractProcess):
             process_name = process_name,
             pid = pid
         )
+        self.__closed = False
 
     def close(self) -> bool:
         """
         Close the process handle.
         """
+        self.__closed = True
         return True
 
     def read_process_memory(
@@ -52,6 +55,7 @@ class LinuxProcess(AbstractProcess):
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
         :param bufflength: value size in bytes (1, 2, 4, 8).
         """
+        if self.__closed: raise ClosedProcess()
         return read_process_memory(self.pid, address, pytype, bufflength)
 
     def search_by_value(
@@ -73,6 +77,8 @@ class LinuxProcess(AbstractProcess):
         :param scan_type: the way to compare the values.
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
+        if self.__closed: raise ClosedProcess()
+
         if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
             raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
 
@@ -99,6 +105,8 @@ class LinuxProcess(AbstractProcess):
         :param not_between: if True, return only addresses of values that are NOT within the range.
         :param progress_information: if True, a dictionary with the progress information will be return.
         """
+        if self.__closed: raise ClosedProcess()
+
         scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
         return search_all_memory(self.pid, pytype, bufflength, (start, end), scan_type, progress_information)
 
@@ -117,4 +125,6 @@ class LinuxProcess(AbstractProcess):
         :param bufflength: value size in bytes (1, 2, 4, 8).
         :param value: value to be written (bool, int, float, str or bytes).
         """
+        if self.__closed: raise ClosedProcess()
+
         return write_process_memory(self.pid, address, pytype, bufflength, value)
