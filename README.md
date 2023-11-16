@@ -58,6 +58,16 @@ for address process.search_by_value(int, 4, target_value, scan_type = ScanTypesE
     print("Found address:", address)
 ```
 
+**Note:** The scan types `EXACT_VALUE` and `NOT_EXACT_VALUE` uses [KMP (Knuth–Morris–Pratt) Algorithm](https://en.wikipedia.org/wiki/Knuth%E2%80%93Morris%E2%80%93Pratt_algorithm) to speed up the search process.
+
+You can also search for a value within a range:
+```py
+for address process.search_by_value_between(int, 4, min_value, max_value, ...):
+    print("Found address:", address)
+```
+
+All the methods above even work for strings.
+
 ## Extra information from search_by_value method:
 This method also has the `progress_information` parameter that returns a dictionary containing search progress information.
 ```py
