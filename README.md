@@ -58,7 +58,7 @@ for address in process.search_by_value(int, 4, target_value, scan_type = ScanTyp
     print("Found address:", address)
 ```
 
-**Note:** The scan types `EXACT_VALUE` and `NOT_EXACT_VALUE` uses [KMP (Knuth–Morris–Pratt) Algorithm](https://en.wikipedia.org/wiki/Knuth%E2%80%93Morris%E2%80%93Pratt_algorithm), that has completixy O(n + m) — `n` is the size of the memory page and `m` is the value length — to speed up the search process. The other scan types use the [brute force algorithm](https://en.wikipedia.org/wiki/Brute-force_search), which is O(n*m), so the search may be slower depending on the length of the target value.
+**Note:** The scan types `EXACT_VALUE` and `NOT_EXACT_VALUE` uses [KMP (Knuth–Morris–Pratt) Algorithm](https://en.wikipedia.org/wiki/Knuth%E2%80%93Morris%E2%80%93Pratt_algorithm), that has completixy O(n + m) — `n` is the size of the memory page and `m` is the value length — to speed up the search process. The other scan types use the [brute force algorithm](https://en.wikipedia.org/wiki/Brute-force_search), which is O(n * m), so the search may be slower depending on the length of the target value.
 
 You can also search for a value within a range:
 ```py
