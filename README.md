@@ -68,10 +68,10 @@ for address process.search_by_value_between(int, 4, min_value, max_value, ...):
 
 All methods described above work even for strings, including the method `search_by_value_between` — however, `bytes` comparison may work differently than `str` comparison, depending on the `byteorder` of your system.
 
-## Extra information from search_by_value method:
-This method also has the `progress_information` parameter that returns a dictionary containing search progress information.
+## Progress information on searching:
+These methods has the `progress_information` parameter that returns a dictionary containing the search progress information.
 ```py
-for address, info process.search_by_value(int, 4, target_value, progress_information = True):
+for address, info process.search_by_value(..., progress_information = True):
     template = "Address: 0x{:<10X} | Progress: {:.1f}%"
     progress = info["progress"] * 100
     
