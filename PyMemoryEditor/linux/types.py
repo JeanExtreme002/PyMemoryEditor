@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+
+# Read more about proc and memory mapping here:
+# https://man7.org/linux/man-pages/man5/proc.5.html
+
+# Read more about iovec here:
+# https://man7.org/linux/man-pages/man3/iovec.3type.html
+
 from ctypes import Structure, c_char_p, c_size_t, c_uint, c_void_p
 
 

@@ -77,6 +77,7 @@ def search_all_memory(
     value: Union[bool, int, float, str, bytes, tuple],
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: bool = False,
+    writeable_only: bool = False,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -108,6 +109,9 @@ def search_all_memory(
 
         # Only readable memory pages.
         if not b"r" in region["struct"].Privileges: continue
+
+        # If writeable_only is True, checks if the memory page is writeable.
+        if writeable_only and not b"w" in region["struct"].Privileges: continue
 
         memory_total += region["size"]
         regions.append(region)

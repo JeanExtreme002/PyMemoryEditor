@@ -59,6 +59,9 @@ class MemoryProtectionsEnum(Enum):
     # Indicates memory page is readable. (Custom constant)
     PAGE_READABLE = PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_READWRITE
 
+    # Indicates memory page is readable and writeable. (Custom constant)
+    PAGE_READWRITEABLE = PAGE_EXECUTE_READWRITE | PAGE_READWRITE
+
     # Sets all locations in the pages as invalid targets for CFG. Used along with any execute page protection like
     # PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE and PAGE_EXECUTE_WRITECOPY. Any indirect call to locations
     # in those pages will fail CFG checks and the process will be terminated. The default behavior for executable pages
