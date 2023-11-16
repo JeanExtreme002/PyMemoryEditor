@@ -189,7 +189,7 @@ def SearchAllMemory(
             searching_method = scan_memory_for_exact_value
 
         # Search the value and return the found addresses.
-        for offset in searching_method(region_data, size, target_value_bytes, bufflength, scan_type):
+        for offset in searching_method(region_data, size, target_value_bytes, bufflength, scan_type, pytype is str):
             found_address = address + offset
 
             extra_information = {

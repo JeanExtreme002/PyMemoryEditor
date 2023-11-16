@@ -160,6 +160,8 @@ def test_search_by_int():
 
     # Get addresses of values exact or smaller than max_value.
     for found_address in process.search_by_value_between(int, data_length, min_value, max_value):
+
+        # Check if the found address is a target address.
         if found_address in addresses:
             addresses.remove(found_address)
             found += 1
@@ -191,6 +193,8 @@ def test_search_by_float():
 
     # Get addresses of values exact or smaller than max_value.
     for found_address in process.search_by_value_between(float, data_length, min_value, max_value):
+
+        # Check if the found address is a target address.
         if found_address in addresses:
             addresses.remove(found_address)
             found += 1
@@ -232,6 +236,40 @@ def test_search_by_string():
 
     assert found / length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+
+
+def test_search_by_string_between():
+    # Get random values to compare the result.
+    length = 10
+
+    values = [ctypes.create_string_buffer(generate_text(20).encode()) for i in range(length * 2)]
+    values.sort(key=lambda target_value: target_value.value)
+
+    # Half of the set of strings is the target and the other half contains string that should be ignored by the scanner.
+    target_values = [target_value for target_value in values[length // 4: length - length // 4]]
+
+    addresses = [ctypes.addressof(v) for v in values]
+    target_addresses = [ctypes.addressof(v) for v in target_values]
+
+    data_length = ctypes.sizeof(target_values[0])
+
+    min_value = target_values[0].value
+    max_value = target_values[-1].value
+
+    found = 0
+
+    # Get addresses of values exact or smaller than max_value.
+    for found_address in process.search_by_value_between(str, data_length, min_value, max_value):
+
+        # Check if the found address is a target address.
+        if found_address in target_addresses:
+            addresses.remove(found_address)
+            found += 1
+
+        elif found_address in addresses:
+            raise ValueError("Scanner returned the address of a clearly invalid string.")
+
+    assert found / length >= 0.7
 
 
 def test_close_process():

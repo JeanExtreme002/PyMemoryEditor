@@ -14,6 +14,7 @@ def scan_memory_for_exact_value(
     target_value: bytes,
     target_value_size: int,
     comparison: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
+    *args, **kwargs
 ):
     """
     Search for an exact value at the memory region.
@@ -22,7 +23,6 @@ def scan_memory_for_exact_value(
     """
     kmp_searcher = KMPSearch(target_value, target_value_size)
     last_index = 0
-    found_index = 0
 
     for found_index in kmp_searcher.search(memory_region_data, memory_region_data_size):
 
@@ -49,22 +49,25 @@ def scan_memory(
     target_value: Union[bytes, Tuple[bytes]],
     target_value_size: int,
     scan_type: ScanTypesEnum,
+    is_string: bool,
 ):
     """
     Search for a value at the memory region.
     """
+    byte_order = sys.byteorder if not is_string else "big"
+
     # If target_value is a tuple, it means the user wants to compare to more than one value.
     if isinstance(target_value, tuple):
-        start_target_value_int = int.from_bytes(target_value[0], sys.byteorder)
-        end_target_value_int = int.from_bytes(target_value[1], sys.byteorder)
-    else: target_value_int = int.from_bytes(target_value, sys.byteorder)
+        start_target_value_int = int.from_bytes(target_value[0], byte_order)
+        end_target_value_int = int.from_bytes(target_value[1], byte_order)
+    else: target_value_int = int.from_bytes(target_value, byte_order)
 
     for found_index in range(memory_region_data_size - target_value_size):
 
         # Convert data to an integer.
         data = memory_region_data[found_index: found_index + target_value_size]
         data = bytes((ctypes.c_byte * target_value_size)(*data))
-        data = int.from_bytes(data, sys.byteorder)
+        data = int.from_bytes(data, byte_order)
 
         # Compare value between.
         if scan_type is ScanTypesEnum.VALUE_BETWEEN and (start_target_value_int > data or data > end_target_value_int): continue
