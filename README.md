@@ -66,7 +66,7 @@ for address process.search_by_value_between(int, 4, min_value, max_value, ...):
     print("Found address:", address)
 ```
 
-All the methods above even work for strings.
+All methods described above work even for strings, including the method `search_by_value_between` — however, `bytes` comparison may work differently than `str` comparison, depending on the `byteorder` of your system.
 
 ## Extra information from search_by_value method:
 This method also has the `progress_information` parameter that returns a dictionary containing search progress information.
