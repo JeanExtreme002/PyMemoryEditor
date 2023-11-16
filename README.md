@@ -77,3 +77,13 @@ for address, info process.search_by_value(..., progress_information = True):
     
     print(template.format(address, progress))
 ```
+
+# Getting memory regions:
+Use the method `get_memory_regions()` to get the base address, size and more information of all memory regions used by the process.
+
+```py
+for memory_region in process.get_memory_regions():
+    base_address = memory_region["address"]
+    size = memory_region["size"]
+    information = memory_region["struct"]
+```
