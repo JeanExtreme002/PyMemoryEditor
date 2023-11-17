@@ -5,7 +5,7 @@
 # https://refspecs.linuxbase.org/LSB_5.0.0/LSB-Core-generic/LSB-Core-generic/baselib-ptrace-1.html
 # ...
 
-from .enums import CommandsEnum
+from .enums import PtraceCommandsEnum
 
 from ctypes.util import find_library
 import ctypes
@@ -15,7 +15,7 @@ libc.ptrace.argtypes = (ctypes.c_ulong,) * 4
 libc.ptrace.restype = ctypes.c_long
 
 
-def ptrace(command: CommandsEnum, pid: int, *args: int) -> int:
+def ptrace(command: PtraceCommandsEnum, pid: int, *args: int) -> int:
     """
     Run ptrace() system call with the provided command, pid and arguments.
     """

@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 
 """
-A Python library developed with ctypes to manipulate Windows and Linux processes (32 bits and 64 bits),
-reading and writing values in the process memory.
+Multi-platform library developed with ctypes for reading, writing and
+searching process memory, in a simple and friendly way with Python 3.
+
+The package supports Windows and Linux (32-bit and 64-bit).
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.5.6"
+__version__ = "1.5.7"
 
 
 from .enums import ScanTypesEnum
@@ -21,4 +23,6 @@ if "win" in sys.platform:
 # For Linux.
 else:
     from .linux.process import LinuxProcess
+    from .linux.ptrace import ptrace
+    from .linux.ptrace.enums import PtraceCommandsEnum
     OpenProcess = LinuxProcess

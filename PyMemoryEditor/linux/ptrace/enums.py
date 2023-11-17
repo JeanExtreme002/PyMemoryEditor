@@ -3,7 +3,7 @@
 from enum import Enum
 
 
-class CommandsEnum(Enum):
+class PtraceCommandsEnum(Enum):
     """
     Enum with commands for ptrace() system call.
 

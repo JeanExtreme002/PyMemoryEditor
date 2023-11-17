@@ -1,7 +1,7 @@
 [project]
 name = "PyMemoryEditor"
 dynamic = ["version"]
-description = "A Python library to edit and track memory of Windows and Linux processes (32 bits and 64 bits)."
+description = "Multi-platform library developed with ctypes for reading, writing and searching process memory, in a simple and friendly way with Python 3. The package supports Windows and Linux (32-bit and 64-bit)."
 authors = [
     { name = "Jean Loui Bernard Silva de Jesus", email = "jeanextreme002@gmail.com" },
 ]
@@ -36,13 +36,14 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
     "Topic :: Security",
     "Topic :: System :: Monitoring"
 ]
 exclude = ["tests"]
 requires-python = ">=3.6"
-dependencies = ['pywin32 ; platform_system == "Windows"', "psutil"]
+dependencies = ["psutil"]
 
 [project.optional-dependencies]
 tests = [

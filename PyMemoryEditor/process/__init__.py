@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
-from typing import Optional, Type, TypeVar, Union
+from typing import Generator, Optional, Tuple, Type, TypeVar, Union
 
+from ..enums import ScanTypesEnum
 from ..process.info import ProcessInfo
 
 
@@ -49,6 +50,63 @@ class AbstractProcess(ABC):
     def close(self) -> bool:
         """
         Close the process handle.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def get_memory_regions(self) -> Generator[dict, None, None]:
+        """
+        Generates dictionaries with the address, size and other
+        information of each memory region used by the process.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def search_by_value(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        value: Union[bool, int, float, str, bytes],
+        scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
+        *,
+        progress_information: bool = False,
+        writeable_only: bool = False,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        """
+        Search the whole memory space, accessible to the process,
+        for the provided value, returning the found addresses.
+
+        :param pytype: type of value to be queried (bool, int, float, str or bytes).
+        :param bufflength: value size in bytes (1, 2, 4, 8).
+        :param value: value to be queried (bool, int, float, str or bytes).
+        :param scan_type: the way to compare the values.
+        :param progress_information: if True, a dictionary with the progress information will be return.
+        :param writeable_only: if True, search only at writeable memory regions.
+        """
+        raise NotImplementedError()
+
+    def search_by_value_between(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        start: Union[bool, int, float, str, bytes],
+        end: Union[bool, int, float, str, bytes],
+        *,
+        not_between: bool = False,
+        progress_information: bool = False,
+        writeable_only: bool = False,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        """
+        Search the whole memory space, accessible to the process,
+        for a value within the provided range, returning the found addresses.
+
+        :param pytype: type of value to be queried (bool, int, float, str or bytes).
+        :param bufflength: value size in bytes (1, 2, 4, 8).
+        :param start: minimum inclusive value to be queried (bool, int, float, str or bytes).
+        :param end: maximum inclusive value to be queried (bool, int, float, str or bytes).
+        :param not_between: if True, return only addresses of values that are NOT within the range.
+        :param progress_information: if True, a dictionary with the progress information will be return.
+        :param writeable_only: if True, search only at writeable memory regions.
         """
         raise NotImplementedError()
 
