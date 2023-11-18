@@ -3,8 +3,14 @@
 from ..enums import ScanTypesEnum
 from ..errors import ClosedProcess
 from ..process import AbstractProcess
-from .functions import get_memory_regions, read_process_memory, search_all_memory, write_process_memory
-from typing import Generator, Optional, Tuple, Type, TypeVar, Union
+from .functions import (
+    get_memory_regions,
+    read_process_memory,
+    search_addresses_by_value,
+    search_values_by_addresses,
+    write_process_memory
+)
+from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 
 T = TypeVar("T")
@@ -68,6 +74,21 @@ class LinuxProcess(AbstractProcess):
 
         return read_process_memory(self.pid, address, pytype, bufflength)
 
+    def search_by_addresses(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        addresses: Sequence[int],
+        *,
+        raise_error: bool = False,
+    ) -> Generator[Tuple[int, Optional[T]], None, None]:
+        """
+        Search the whole memory space, accessible to the process,
+        for the provided list of addresses, returning their values.
+        """
+        if self.__closed: raise ClosedProcess()
+        return search_values_by_addresses(self.pid, pytype, bufflength, addresses, raise_error=raise_error)
+
     def search_by_value(
         self,
         pytype: Type[T],
@@ -94,7 +115,7 @@ class LinuxProcess(AbstractProcess):
         if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
             raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
 
-        return search_all_memory(self.pid, pytype, bufflength, value, scan_type, progress_information, writeable_only)
+        return search_addresses_by_value(self.pid, pytype, bufflength, value, scan_type, progress_information, writeable_only)
 
     def search_by_value_between(
         self,
@@ -122,7 +143,7 @@ class LinuxProcess(AbstractProcess):
         if self.__closed: raise ClosedProcess()
 
         scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
-        return search_all_memory(self.pid, pytype, bufflength, (start, end), scan_type, progress_information, writeable_only)
+        return search_addresses_by_value(self.pid, pytype, bufflength, (start, end), scan_type, progress_information, writeable_only)
 
     def write_process_memory(
         self,

@@ -68,13 +68,15 @@ def test_read_int():
 
 def test_read_string():
     # Get a random text to compare the result.
-    target_value = ctypes.create_string_buffer(generate_text(20).encode())
+    target_value = ctypes.create_string_buffer(20)
+    target_value.value = generate_text(20).encode()
+
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
     # Read the process memory and compare the result.
     result = process.read_process_memory(address, str, data_length)
-    assert type(result) is str and result == str(target_value.value)
+    assert type(result) is str and result == target_value.value.decode()
 
 
 def test_write_bool():
@@ -134,20 +136,69 @@ def test_write_string():
     original_value = generate_text(20).encode()
     new_value = generate_text(20).encode()
 
-    target_value = ctypes.create_string_buffer(original_value)
+    target_value = ctypes.create_string_buffer(20)
+    target_value.value = original_value
+
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
     # Write to the process memory and compare the result.
-    process.write_process_memory(address, str, data_length, new_value)
+    process.write_process_memory(address, str, data_length, new_value.decode())
     assert target_value.value != original_value and target_value.value == new_value
+
+
+def test_search_by_int_addresses():
+    # Get random values to compare the result.
+    test_length = 10
+
+    target_values = [ctypes.c_int(random.randint(0, 10000)) for i in range(test_length)]
+    data_length = ctypes.sizeof(target_values[0])
+
+    target_values = {ctypes.addressof(v): v for v in target_values}
+    addresses = list(target_values.keys())
+
+    for address, value in process.search_by_addresses(int, data_length, addresses):
+        assert target_values[address].value == value and type(value) is int
+
+def test_search_by_float_addresses():
+    # Get random values to compare the result.
+    test_length = 10
+
+    target_values = [ctypes.c_double(random.randint(0, 10000) / random.randint(0, 10000)) for i in range(test_length)]
+    data_length = ctypes.sizeof(target_values[0])
+
+    target_values = {ctypes.addressof(v): v for v in target_values}
+    addresses = list(target_values.keys())
+
+    for address, value in process.search_by_addresses(float, data_length, addresses):
+        assert target_values[address].value == value and type(value) is float
+
+
+def test_search_by_string_addresses():
+    # Get random values to compare the result.
+    string_length, test_length = 20, 10
+
+    target_values = list()
+
+    for i in range(test_length):
+        value = ctypes.create_string_buffer(string_length)
+        value.value = generate_text(string_length).encode()
+        target_values.append(value)
+
+    data_length = ctypes.sizeof(target_values[0])
+
+    target_values = {ctypes.addressof(v): v for v in target_values}
+    addresses = list(target_values.keys())
+
+    for address, value in process.search_by_addresses(str, data_length, addresses):
+        assert target_values[address].value.decode() == value and type(value) is str
 
 
 def test_search_by_int():
     # Get random values to compare the result.
-    length = 10
+    test_length = 10
 
-    target_values = [ctypes.c_int(random.randint(0, 10000)) for i in range(length)]
+    target_values = [ctypes.c_int(random.randint(0, 10000)) for i in range(test_length)]
     addresses = [ctypes.addressof(v) for v in target_values]
     data_length = ctypes.sizeof(target_values[0])
 
@@ -172,15 +223,15 @@ def test_search_by_int():
         value = process.read_process_memory(found_address, int, data_length)
         if min_value <= value <= max_value: correct += 1
 
-    assert found / length >= 0.7
+    assert found / test_length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
 
 
 def test_search_by_float():
     # Get random values to compare the result.
-    length = 10
+    test_length = 10
 
-    target_values = [ctypes.c_double(random.randint(0, 10000)) for i in range(length)]
+    target_values = [ctypes.c_double(random.randint(0, 10000)) for i in range(test_length)]
     addresses = [ctypes.addressof(v) for v in target_values]
     data_length = ctypes.sizeof(target_values[0])
 
@@ -205,15 +256,21 @@ def test_search_by_float():
         value = process.read_process_memory(found_address, float, data_length)
         if min_value <= value <= max_value: correct += 1
 
-    assert found / length >= 0.7
+    assert found / test_length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
 
 
 def test_search_by_string():
     # Get random values to compare the result.
-    length = 10
+    string_length, test_length = 20, 10
 
-    target_values = [ctypes.create_string_buffer(generate_text(20).encode()) for i in range(length)]
+    target_values = list()
+
+    for i in range(test_length):
+        value = ctypes.create_string_buffer(string_length)
+        value.value = generate_text(string_length).encode()
+        target_values.append(value)
+
     data_length = ctypes.sizeof(target_values[0])
 
     total = 0
@@ -234,19 +291,25 @@ def test_search_by_string():
             value = process.read_process_memory(found_address, str, data_length)
             if value == str(target_value.value): correct += 1
 
-    assert found / length >= 0.7
+    assert found / test_length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
 
 
 def test_search_by_string_between():
     # Get random values to compare the result.
-    length = 10
+    string_length, test_length = 20, 10
 
-    values = [ctypes.create_string_buffer(generate_text(20).encode()) for i in range(length * 2)]
+    values = list()
+
+    for i in range(test_length * 2):
+        value = ctypes.create_string_buffer(string_length)
+        value.value = generate_text(string_length).encode()
+        values.append(value)
+
     values.sort(key = lambda target_value: target_value.value)
 
     # Half of the set of strings is the target and the other half contains string that should be ignored by the scanner.
-    target_values = [target_value for target_value in values[length // 4: length - length // 4]]
+    target_values = [target_value for target_value in values[test_length // 4: test_length - test_length // 4]]
 
     addresses = [ctypes.addressof(v) for v in values]
     target_addresses = [ctypes.addressof(v) for v in target_values]
@@ -269,7 +332,7 @@ def test_search_by_string_between():
         elif found_address in addresses:
             raise ValueError("Scanner returned the address of a clearly invalid string.")
 
-    assert found / length >= 0.5
+    assert found / test_length >= 0.5
 
 
 def test_close_process():

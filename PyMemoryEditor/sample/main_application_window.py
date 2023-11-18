@@ -21,7 +21,6 @@ class ApplicationWindow(Tk):
         self.__process = process
 
         self.__scan_type = ScanTypesEnum.EXACT_VALUE
-        self.__value = 0
         self.__value_type = int
         self.__value_length = 4
         self.__addresses = []
@@ -211,9 +210,7 @@ class ApplicationWindow(Tk):
 
         # Start the scan.
         value = pytype(value)
-
         self.__value_length = length
-        self.__value = value
 
         self.after(100, lambda: self.__start_scan(pytype, length, value, scan_type))
 
@@ -288,13 +285,15 @@ class ApplicationWindow(Tk):
             if self.__close: break
 
             self.__address_list.insert("end", f"Addr: {hex(address)[2:].upper()}")
-            self.__value_list.insert("end", f"Value: {value}")
+            self.__value_list.insert("end", f"Value: loading...")
 
             self.__progress_var.set(info["progress"] * 100)
             self.__addresses.append(address)
             self.update()
 
             self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
+
+        self.__update_values()
 
         self.__new_scan_button.config(text="New Scan")
         self.__next_scan_button.config(text="Next Scan")
@@ -344,73 +343,67 @@ class ApplicationWindow(Tk):
             if char not in "0123456789ABCDEF": return False
         return True
 
-    def __update_values(self, index = 0, *, remove = False, first_call = True):
+    def __update_values(self, *, remove: bool = False):
         """
         Update the values of the found addresses. If "remove" is True, it will
         compare the current value in memory and remove the address from the
         results if the comparison is False.
         """
-        if self.__updating and first_call: return  # Allow call the method once.
+        if self.__updating: return
 
-        # Return if user asked for closing the application.
-        if self.__close:
-            self.__updating = False
-            return
+        if not self.__addresses: return self.__progress_var.set(100)
 
         # Get the value to compare.
-        if first_call:
-            value = self.__value_entry.get().strip()
+        value = self.__value_entry.get().strip()
+        total = len(self.__addresses)
 
-            try:
-                if str(self.__value_type(value)) != value:
-                    raise ValueError()
-            except:
-                self.__value_entry.delete(0, "end")
-                return self.__value_entry.insert(0, "Invalid value")
+        try:
+            if str(self.__value_type(value)) != value:
+                raise ValueError()
+        except:
+            self.__value_entry.delete(0, "end")
+            return self.__value_entry.insert(0, "Invalid value")
 
-            self.__value = self.__value_type(value)
-            self.__progress_var.set(0)
+        self.__value = self.__value_type(value)
+        self.__progress_var.set(0)
 
         # Indicate the application is updating the values.
         self.__updating = True
 
-        if index % 10 == 0: self.update()
+        new_scan_button_text = self.__new_scan_button["text"]
+        self.__new_scan_button.config(text="Updating")
 
-        # Get the address from the list.
-        try:
-            address = self.__addresses[index]
-        except:
-            self.__updating = False
+        # Get the address and its current value in memory.
+        total, count = len(self.__addresses), 0
 
-            self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
-            return self.__progress_var.set(100 if not first_call else 0)
+        for address, value in self.__process.search_by_addresses(self.__value_type, self.__value_length, self.__addresses):
+            self.__progress_var.set((count / total) * 100)
+            self.update()
 
-        # Get the current value of the address.
-        corrupted = False
-        value = None
+            index = self.__addresses.index(address)
+            count += 1
 
-        try: value = self.__process.read_process_memory(address, self.__value_type, self.__value_length)
-        except: corrupted = True
+            # Return if user asked for closing the application.
+            if self.__close:
+                self.__updating = False
+                return
 
-        # If "remove" is True, compare the value.
-        if remove or corrupted:
-            compare = self.__comp_methods[self.__scan_type]
-
-            # Remove the address from the results.
-            if corrupted or not compare(value, self.__value):
+            # If value is corrupted or "remove" is True and comparison is False, remove the value from the results.
+            if value is None or (remove and not self.__comp_methods[self.__scan_type](value, self.__value)):
                 self.__address_list.delete(index)
                 self.__value_list.delete(index)
                 self.__addresses.remove(address)
-                index -= 1
 
-        # Update the value at the listbox.
-        else:
-            self.__value_list.delete(index)
-            self.__value_list.insert(index, f"Value: {value}")
+            # Update the value at the listbox.
+            else:
+                self.__value_list.delete(index)
+                self.__value_list.insert(index, f"Value: {value}")
 
-        # Call the method again recursively
-        if index % 10 == 0: self.__progress_var.set((index / len(self.__addresses)) * 100)
-        self.after(5, lambda: self.__update_values(index + 1, remove=remove, first_call=False))
+        self.__new_scan_button.config(text=new_scan_button_text)
+        self.__updating = False
+
+        self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
+        self.__progress_var.set(100)
 
     def __write_value(self):
         """

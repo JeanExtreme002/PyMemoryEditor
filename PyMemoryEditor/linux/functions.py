@@ -7,10 +7,10 @@
 # https://man7.org/linux/man-pages/man5/proc.5.html
 
 from ctypes import addressof, sizeof
-from typing import Generator, Tuple, Type, TypeVar, Union
+from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
-from ..util import get_c_type_of, scan_memory, scan_memory_for_exact_value
+from ..util import convert_from_bytearray, get_c_type_of, scan_memory, scan_memory_for_exact_value
 from .ptrace import libc
 from .types import MEMORY_BASIC_INFORMATION, iovec
 
@@ -70,7 +70,7 @@ def read_process_memory(
     return str(data.value) if pytype is str else data.value
 
 
-def search_all_memory(
+def search_addresses_by_value(
     pid: int,
     pytype: Type[T],
     bufflength: int,
@@ -145,6 +145,70 @@ def search_all_memory(
 
         # Compute the region size to the checked memory size.
         checked_memory_size += size
+
+
+def search_values_by_addresses(
+    pid: int,
+    pytype: Type[T],
+    bufflength: int,
+    addresses: Sequence[int],
+    *,
+    memory_regions: Optional[Sequence[Dict]] = None,
+    raise_error: bool = False,
+) -> Generator[Tuple[int, Optional[T]], None, None]:
+    """
+    Search the whole memory space, accessible to the process,
+    for the provided list of addresses, returning their values.
+    """
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    memory_regions = list(memory_regions) if memory_regions else list()
+    addresses = sorted(addresses)
+
+    # If no memory page has been given, get all readable memory pages.
+    if not memory_regions:
+        for region in get_memory_regions(pid):
+            if not b"r" in region["struct"].Privileges: continue
+            memory_regions.append(region)
+
+    memory_regions.sort(key=lambda region: region["address"])
+    address_index = 0
+
+    # Walk by each memory region.
+    for region in memory_regions:
+        if address_index >= len(addresses): continue
+
+        target_address = addresses[address_index]
+
+        # Check if the memory region contains the target address.
+        base_address, size = region["address"], region["size"]
+        if not (base_address <= target_address < base_address + size): continue
+
+        region_data = (ctypes.c_byte * size)()
+
+        # Get data from the region.
+        libc.process_vm_readv(
+            pid, (iovec * 1)(iovec(addressof(region_data), sizeof(region_data))),
+            1, (iovec * 1)(iovec(base_address, sizeof(region_data))), 1, 0
+        )
+
+        # Get the value of each address.
+        while base_address <= target_address < base_address + size:
+            offset = target_address - base_address
+            address_index += 1
+
+            try:
+                data = region_data[offset: offset + bufflength]
+                data = (ctypes.c_byte * bufflength)(*data)
+                yield target_address, convert_from_bytearray(data, pytype, bufflength)
+
+            except Exception as error:
+                if raise_error: raise error
+                yield target_address, None
+
+            if address_index >= len(addresses): break
+            target_address = addresses[address_index]
 
 
 def write_process_memory(

@@ -1,8 +1,23 @@
 # -*- coding: utf-8 -*-
 
 from .scan import scan_memory, scan_memory_for_exact_value
-from typing import Type
+from typing import Type, TypeVar
 import ctypes
+
+
+T = TypeVar("T")
+
+
+def convert_from_bytearray(bytearray: ctypes.Array, pytype: Type[T], length: int = 1) -> T:
+    """
+    Convert a byte array to a Python type.
+    """
+    if pytype is bytes: return bytes(bytearray)
+    if pytype is str: return bytes(bytearray).decode()
+
+    c_value = get_c_type_of(pytype, length)
+
+    return c_value.__class__.from_buffer(bytearray).value
 
 
 def get_c_type_of(pytype: Type, length: int = 1) -> ctypes._SimpleCData:

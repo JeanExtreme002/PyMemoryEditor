@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
-from typing import Generator, Optional, Tuple, Type, TypeVar, Union
+from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.info import ProcessInfo
@@ -58,6 +58,21 @@ class AbstractProcess(ABC):
         """
         Generates dictionaries with the address, size and other
         information of each memory region used by the process.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def search_by_addresses(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        addresses: Sequence[int],
+        *,
+        raise_error: bool = False,
+    ) -> Generator[Tuple[int, Optional[T]], None, None]:
+        """
+        Search the whole memory space, accessible to the process,
+        for the provided list of addresses, returning their values.
         """
         raise NotImplementedError()
 

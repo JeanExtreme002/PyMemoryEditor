@@ -7,12 +7,12 @@
 # ...
 
 from ..enums import ScanTypesEnum
-from ..util import get_c_type_of, scan_memory, scan_memory_for_exact_value
+from ..util import convert_from_bytearray, get_c_type_of, scan_memory, scan_memory_for_exact_value
 
 from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum
 from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
 
-from typing import Generator, Tuple, Type, TypeVar, Union
+from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 import ctypes
 import ctypes.wintypes
@@ -130,7 +130,7 @@ def ReadProcessMemory(
     return data.value.decode() if pytype is str else data.value
 
 
-def SearchAllMemory(
+def SearchAddressesByValue(
     process_handle: int,
     pytype: Type[T],
     bufflength: int,
@@ -163,7 +163,7 @@ def SearchAllMemory(
     # Get the memory regions, computing the total amount of memory to be scanned.
     checked_memory_size = 0
     memory_total = 0
-    regions = list()
+    memory_regions = list()
 
     for region in GetMemoryRegions(process_handle):
 
@@ -176,10 +176,10 @@ def SearchAllMemory(
         if writeable_only and region["struct"].Protect & MemoryProtectionsEnum.PAGE_READWRITEABLE.value == 0: continue
 
         memory_total += region["size"]
-        regions.append(region)
+        memory_regions.append(region)
 
     # Check each memory region used by the process.
-    for region in regions:
+    for region in memory_regions:
         address, size = region["address"], region["size"]
         region_data = (ctypes.c_byte * size)()
 
@@ -204,6 +204,70 @@ def SearchAllMemory(
 
         # Compute the region size to the checked memory size.
         checked_memory_size += size
+
+
+def SearchValuesByAddresses(
+    process_handle: int,
+    pytype: Type[T],
+    bufflength: int,
+    addresses: Sequence[int],
+    *,
+    memory_regions: Optional[Sequence[Dict]] = None,
+    raise_error: bool = False,
+) -> Generator[Tuple[int, Optional[T]], None, None]:
+    """
+    Search the whole memory space, accessible to the process,
+    for the provided list of addresses, returning their values.
+    """
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    memory_regions = list(memory_regions) if memory_regions else list()
+    addresses = sorted(addresses)
+
+    # If no memory page has been given, get all committed, non-shared and readable memory pages.
+    if not memory_regions:
+        for region in GetMemoryRegions(process_handle):
+            if region["struct"].State != MemoryAllocationStatesEnum.MEM_COMMIT.value: continue
+            if region["struct"].Type != MemoryTypesEnum.MEM_PRIVATE.value: continue
+            if region["struct"].Protect & MemoryProtectionsEnum.PAGE_READABLE.value == 0: continue
+
+            memory_regions.append(region)
+
+    memory_regions.sort(key=lambda region: region["address"])
+    address_index = 0
+
+    # Walk by each memory region.
+    for region in memory_regions:
+        if address_index >= len(addresses): continue
+
+        target_address = addresses[address_index]
+
+        # Check if the memory region contains the target address.
+        base_address, size = region["address"], region["size"]
+        if not (base_address <= target_address < base_address + size): continue
+
+        region_data = (ctypes.c_byte * size)()
+
+        # Get data from the region.
+        kernel32.ReadProcessMemory(process_handle, ctypes.c_void_p(base_address), ctypes.byref(region_data), size, None)
+
+        # Get the value of each address.
+        while base_address <= target_address < base_address + size:
+            offset = target_address - base_address
+            address_index += 1
+
+            try:
+                data = region_data[offset: offset + bufflength]
+                data = (ctypes.c_byte * bufflength)(*data)
+                yield target_address, convert_from_bytearray(data, pytype, bufflength)
+
+            except Exception as error:
+                if raise_error: raise error
+                yield target_address, None
+
+            if address_index >= len(addresses): break
+            target_address = addresses[address_index]
 
 
 def WriteProcessMemory(

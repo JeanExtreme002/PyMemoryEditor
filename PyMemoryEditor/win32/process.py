@@ -10,11 +10,12 @@ from .functions import (
     GetMemoryRegions,
     GetProcessHandle,
     ReadProcessMemory,
-    SearchAllMemory,
+    SearchAddressesByValue,
+    SearchValuesByAddresses,
     WriteProcessMemory
 )
 
-from typing import Generator, Optional, Tuple, Type, TypeVar, Union
+from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 
 T = TypeVar("T")
@@ -70,6 +71,29 @@ class WindowsProcess(AbstractProcess):
 
         return GetMemoryRegions(self.__process_handle)
 
+    def search_by_addresses(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        addresses: Sequence[int],
+        *,
+        raise_error: bool = False,
+    ) -> Generator[Tuple[int, Optional[T]], None, None]:
+        """
+        Search the whole memory space, accessible to the process,
+        for the provided list of addresses, returning their values.
+        """
+        if self.__closed: raise ClosedProcess()
+
+        valid_permissions = [
+            ProcessOperationsEnum.PROCESS_ALL_ACCESS.value,
+            ProcessOperationsEnum.PROCESS_VM_READ.value
+        ]
+        if self.__permission.value not in valid_permissions:
+            raise PermissionError("The handle does not have permission to read the process memory.")
+
+        return SearchValuesByAddresses(self.__process_handle, pytype, bufflength, addresses, raise_error=raise_error)
+
     def search_by_value(
         self,
         pytype: Type[T],
@@ -103,7 +127,7 @@ class WindowsProcess(AbstractProcess):
         if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
             raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
 
-        return SearchAllMemory(self.__process_handle, pytype, bufflength, value, scan_type, progress_information, writeable_only)
+        return SearchAddressesByValue(self.__process_handle, pytype, bufflength, value, scan_type, progress_information, writeable_only)
 
     def search_by_value_between(
         self,
@@ -138,7 +162,7 @@ class WindowsProcess(AbstractProcess):
             raise PermissionError("The handle does not have permission to read the process memory.")
 
         scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
-        return SearchAllMemory(self.__process_handle, pytype, bufflength, (start, end), scan_type, progress_information, writeable_only)
+        return SearchAddressesByValue(self.__process_handle, pytype, bufflength, (start, end), scan_type, progress_information, writeable_only)
 
     def read_process_memory(
         self,
