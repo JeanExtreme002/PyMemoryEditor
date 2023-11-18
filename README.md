@@ -78,7 +78,7 @@ for address, info process.search_by_value(..., progress_information = True):
     print(template.format(address, progress))
 ```
 
-# Getting memory regions:
+## Getting memory regions:
 Use the method `get_memory_regions()` to get the base address, size and more information of all memory regions used by the process.
 
 ```py
@@ -87,3 +87,6 @@ for memory_region in process.get_memory_regions():
     size = memory_region["size"]
     information = memory_region["struct"]
 ```
+
+# Tkinter application sample:
+You can run a simple tkinter application to scan the memory of a process by typing `pymemoryeditor` at the CLI.
