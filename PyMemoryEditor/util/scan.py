@@ -3,7 +3,7 @@
 from ..enums import ScanTypesEnum
 from .search.kmp import KMPSearch
 
-from typing import Sequence, Tuple, Union
+from typing import Generator, Sequence, Tuple, Union
 import ctypes
 import sys
 
@@ -15,7 +15,7 @@ def scan_memory_for_exact_value(
     target_value_size: int,
     comparison: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     *args, **kwargs
-):
+) -> Generator[int, None, None]:
     """
     Search for an exact value at the memory region.
 
@@ -50,7 +50,7 @@ def scan_memory(
     target_value_size: int,
     scan_type: ScanTypesEnum,
     is_string: bool,
-):
+) -> Generator[int, None, None]:
     """
     Search for a value at the memory region.
     """

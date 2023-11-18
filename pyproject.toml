@@ -1,7 +1,7 @@
 [project]
 name = "PyMemoryEditor"
 dynamic = ["version"]
-description = "Multi-platform library developed with ctypes for reading, writing and searching process memory, in a simple and friendly way with Python 3. It supports Windows and Linux (32-bit and 64-bit)."
+description = "Multi-platform library developed with ctypes for reading, writing and searching process memory, in a simple and friendly way with Python 3."
 authors = [
     { name = "Jean Loui Bernard Silva de Jesus", email = "jeanextreme002@gmail.com" },
 ]
@@ -59,3 +59,6 @@ path = "PyMemoryEditor/__init__.py"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+pymemoryeditor = "PyMemoryEditor.sample.application:main"

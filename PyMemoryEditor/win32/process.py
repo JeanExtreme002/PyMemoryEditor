@@ -56,8 +56,10 @@ class WindowsProcess(AbstractProcess):
         """
         Close the process handle.
         """
-        self.__closed = True
-        return CloseProcessHandle(self.__process_handle) != 0
+        if self.__closed: return True
+
+        self.__closed = CloseProcessHandle(self.__process_handle) != 0
+        return self.__closed
 
     def get_memory_regions(self) -> Generator[dict, None, None]:
         """
