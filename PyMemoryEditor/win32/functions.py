@@ -127,7 +127,7 @@ def ReadProcessMemory(
     data = get_c_type_of(pytype, bufflength)
     kernel32.ReadProcessMemory(process_handle, ctypes.c_void_p(address), ctypes.byref(data), bufflength, None)
 
-    return str(data.value) if pytype is str else data.value
+    return data.value.decode() if pytype is str else data.value
 
 
 def SearchAllMemory(

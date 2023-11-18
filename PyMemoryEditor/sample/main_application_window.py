@@ -203,7 +203,7 @@ class ApplicationWindow(Tk):
 
         # Check if the value is valid for the selected value type.
         try:
-            if str(pytype(value)) != value:
+            if str(pytype(value)) != value or (pytype is str and length < len(value)):
                 raise ValueError()
         except:
             self.__value_entry.delete(0, "end")
@@ -386,14 +386,18 @@ class ApplicationWindow(Tk):
             return self.__progress_var.set(100 if not first_call else 0)
 
         # Get the current value of the address.
-        value = self.__process.read_process_memory(address, self.__value_type, self.__value_length)
+        corrupted = False
+        value = None
+
+        try: value = self.__process.read_process_memory(address, self.__value_type, self.__value_length)
+        except: corrupted = True
 
         # If "remove" is True, compare the value.
-        if remove:
+        if remove or corrupted:
             compare = self.__comp_methods[self.__scan_type]
 
             # Remove the address from the results.
-            if not compare(value, self.__value):
+            if corrupted or not compare(value, self.__value):
                 self.__address_list.delete(index)
                 self.__value_list.delete(index)
                 self.__addresses.remove(address)
@@ -428,7 +432,7 @@ class ApplicationWindow(Tk):
 
         # Check if the value is valid for the selected value type.
         try:
-            if str(pytype(value)) != value:
+            if str(pytype(value)) != value or (pytype is str and length < len(value)):
                 raise ValueError()
         except:
             self.__new_value_entry.delete(0, "end")
