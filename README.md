@@ -82,7 +82,7 @@ for address, info process.search_by_value(..., progress_information = True):
 ```
 
 # Reading multiple addresses efficiently:
-If you have a large number of addresses where their values need to be read from memory, using the 'search_by_addresses' method is much more efficient than reading the value of each address one by one.
+If you have a large number of addresses where their values need to be read from memory, using the `search_by_addresses` method is much more efficient than reading the value of each address one by one.
 ```py
 for address, value process.search_by_addresses(int, 4, addresses_list):
     print(f"Address", address, "holds the value", value)
