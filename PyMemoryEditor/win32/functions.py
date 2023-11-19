@@ -7,7 +7,7 @@
 # ...
 
 from ..enums import ScanTypesEnum
-from ..util import convert_from_bytearray, get_c_type_of, scan_memory, scan_memory_for_exact_value
+from ..util import convert_from_byte_array, get_c_type_of, scan_memory, scan_memory_for_exact_value
 
 from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum
 from .types import MEMORY_BASIC_INFORMATION, SYSTEM_INFO, WNDENUMPROC
@@ -178,6 +178,9 @@ def SearchAddressesByValue(
         memory_total += region["size"]
         memory_regions.append(region)
 
+    # Sort the list to return ordered addresses.
+    memory_regions.sort(key=lambda region: region["address"])
+
     # Check each memory region used by the process.
     for region in memory_regions:
         address, size = region["address"], region["size"]
@@ -239,7 +242,7 @@ def SearchValuesByAddresses(
 
     # Walk by each memory region.
     for region in memory_regions:
-        if address_index >= len(addresses): continue
+        if address_index >= len(addresses): break
 
         target_address = addresses[address_index]
 
@@ -260,7 +263,7 @@ def SearchValuesByAddresses(
             try:
                 data = region_data[offset: offset + bufflength]
                 data = (ctypes.c_byte * bufflength)(*data)
-                yield target_address, convert_from_bytearray(data, pytype, bufflength)
+                yield target_address, convert_from_byte_array(data, pytype, bufflength)
 
             except Exception as error:
                 if raise_error: raise error

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from tkinter import Label, Tk
 from tkinter.ttk import Button, Entry
 from typing import Optional
@@ -17,8 +19,9 @@ class OpenProcessWindow(Tk):
 
         self["bg"] = "white"
 
-        self.geometry("350x100")
         self.title("PyMemoryEditor (Sample)")
+        self.geometry("350x100")
+        self.resizable(False, False)
 
         Label(self, text="Insert the PID or the process name:", bg="white", font=("Arial", 10)).pack(padx=20)
 
@@ -29,7 +32,7 @@ class OpenProcessWindow(Tk):
 
         self.mainloop()
 
-    def __open_process(self):
+    def __open_process(self) -> None:
         """
         Open the process by the user input.
         """

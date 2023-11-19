@@ -10,7 +10,7 @@ from ctypes import addressof, sizeof
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
-from ..util import convert_from_bytearray, get_c_type_of, scan_memory, scan_memory_for_exact_value
+from ..util import convert_from_byte_array, get_c_type_of, scan_memory, scan_memory_for_exact_value
 from .ptrace import libc
 from .types import MEMORY_BASIC_INFORMATION, iovec
 
@@ -102,7 +102,7 @@ def search_addresses_by_value(
 
     checked_memory_size = 0
     memory_total = 0
-    regions = list()
+    memory_regions = list()
 
     # Get the memory regions, computing the total amount of memory to be scanned.
     for region in get_memory_regions(pid):
@@ -114,10 +114,13 @@ def search_addresses_by_value(
         if writeable_only and not b"w" in region["struct"].Privileges: continue
 
         memory_total += region["size"]
-        regions.append(region)
+        memory_regions.append(region)
+
+    # Sort the list to return ordered addresses.
+    memory_regions.sort(key=lambda region: region["address"])
 
     # Check each memory region used by the process.
-    for region in regions:
+    for region in memory_regions:
         address, size = region["address"], region["size"]
         region_data = (ctypes.c_byte * size)()
 
@@ -177,7 +180,7 @@ def search_values_by_addresses(
 
     # Walk by each memory region.
     for region in memory_regions:
-        if address_index >= len(addresses): continue
+        if address_index >= len(addresses): break
 
         target_address = addresses[address_index]
 
@@ -201,7 +204,7 @@ def search_values_by_addresses(
             try:
                 data = region_data[offset: offset + bufflength]
                 data = (ctypes.c_byte * bufflength)(*data)
-                yield target_address, convert_from_bytearray(data, pytype, bufflength)
+                yield target_address, convert_from_byte_array(data, pytype, bufflength)
 
             except Exception as error:
                 if raise_error: raise error

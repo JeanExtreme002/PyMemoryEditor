@@ -1,15 +1,21 @@
+# -*- coding: utf-8 -*-
+
 from tkinter import DoubleVar, Frame, Label, Menu, Listbox, Scrollbar, Tk
 from tkinter.ttk import Button, Entry, Menubutton, Progressbar
+from typing import Type, TypeVar
 
 from PyMemoryEditor import ScanTypesEnum
 from PyMemoryEditor.process import AbstractProcess
 
 
+T = TypeVar("T")
+
+
 class ApplicationWindow(Tk):
     """
-    Main window.
+    Main window of the application.
     """
-    __comp_methods = {
+    __comparison_methods = {
         ScanTypesEnum.EXACT_VALUE: lambda x, y: x == y,
         ScanTypesEnum.NOT_EXACT_VALUE: lambda x, y: x != y,
         ScanTypesEnum.BIGGER_THAN: lambda x, y: x > y,
@@ -23,31 +29,34 @@ class ApplicationWindow(Tk):
         self.__scan_type = ScanTypesEnum.EXACT_VALUE
         self.__value_type = int
         self.__value_length = 4
+
         self.__addresses = []
 
-        self.__updating = False  # Indicate the application is updating the values of the found addresses.
-        self.__scanning = False  # Indicate a scan has started.
+        self.__finding_addresses = False  # Indicate it is searching for addresses (first step of a new scan).
+        self.__updating = False           # Indicate it is updating the values of the found addresses.
+        self.__scanning = False           # Indicate a scan has started.
 
         self["bg"] = "white"
 
         self.title(f"PyMemoryEditor (Sample) - Process ID: {process.pid}")
         self.geometry("900x400")
+        self.resizable(False, False)
 
         self.protocol("WM_DELETE_WINDOW", self.__on_close)
         self.__close = False
 
-        self.__addresses = []
-
         self.__build()
         self.mainloop()
 
-    def __build(self):
+    def __build(self) -> None:
         """
         Build the widgets of the window.
         """
+        # Register to validate numeric entries.
         self.__entry_register_int = self.register(self.__validate_int_entry)
         self.__entry_register_hex = self.register(self.__validate_hex_entry)
 
+        # Frame for scan input.
         self.__input_frame_1 = Frame(self)
         self.__input_frame_1["bg"] = "white"
         self.__input_frame_1.pack(padx=5, fill="x", expand=True)
@@ -111,7 +120,7 @@ class ApplicationWindow(Tk):
         self.__next_scan_button = Button(self.__scan_input_frame, command=self.__next_scan)
         self.__next_scan_button.pack(side="left")
 
-        # Scanning process bar.
+        # Progress bar for scanning and updating.
         self.__progress_var = DoubleVar()
 
         self.__progress_bar = Progressbar(self.__input_frame_1, variable=self.__progress_var)
@@ -153,7 +162,7 @@ class ApplicationWindow(Tk):
 
         self.__scrollbar.pack(side="left", fill="y")
 
-        # Widgets for change the value of a memory address.
+        # Frame and widgets to allow user changing the value of a memory address.
         self.__input_frame_2 = Frame(self)
         self.__input_frame_2["bg"] = "white"
         self.__input_frame_2.pack(padx=5, fill="x", expand=True)
@@ -173,24 +182,62 @@ class ApplicationWindow(Tk):
 
         Button(self.__input_frame_2, text="Replace", command=self.__write_value).pack(side="left")
 
-    def __new_scan(self):
+    def __add_found_address(self, address: int) -> None:
+        """
+        Add a new address to the results.
+        """
+        self.__address_list.insert("end", f"Addr: {hex(address)[2:].upper()}")
+        self.__value_list.insert("end", f"Value: loading...")
+        self.__addresses.append(address)
+
+    def __check_address_entry(self, address: str) -> bool:
+        """
+        Check if the address entry is valid.
+        """
+        try:
+            if int(address, 16) in self.__addresses:
+                return True
+            raise ValueError()
+        except ValueError:
+            self.__address_entry.delete(0, "end")
+            self.__address_entry.insert(0, "00000000")
+        return False
+
+    def __check_new_value_entry(self, value: str, value_type: Type, length: int) -> bool:
+        """
+        Check if the new value entry is valid.
+        """
+        try:
+            if str(value_type(value)) == value and (not value_type is str or len(value) <= length):
+                return True
+            raise ValueError()
+        except ValueError:
+            self.__new_value_entry.delete(0, "end")
+            self.__new_value_entry.insert(0, "Invalid value")
+        return False
+
+    def __check_value_entry(self, value: str, value_type: Type, length: int) -> bool:
+        """
+        Check if the value entry is valid.
+        """
+        try:
+            if str(value_type(value)) == value and (not value_type is str or len(value) <= length):
+                return True
+            raise ValueError()
+        except ValueError:
+            self.__value_entry.delete(0, "end")
+            self.__value_entry.insert(0, "Invalid value")
+        return False
+
+    def __new_scan(self) -> None:
         """
         Start a new seach at the whole memory of the process.
         """
-        if self.__new_scan_button["text"].lower() == "scanning" or self.__updating: return
+        if self.__finding_addresses or self.__updating: return
         self.__next_scan_button.config(text="")
 
-        self.__addresses = []
-
-        # If a scan is already in progress, clear all results and get everything ready for a new scan.
-        if self.__scanning:
-            self.__new_scan_button.config(text="First Scan")
-            self.__count_label.config(text="Start a new scan to find memory addresses.")
-            self.__address_list.delete(0, "end")
-            self.__value_list.delete(0, "end")
-            self.__progress_var.set(0)
-            self.__scanning = False
-            return
+        # If a scan is already in progress, clear all results for a new scan.
+        if self.__scanning: return self.__stop_scan()
 
         # Get the inputs.
         value = self.__value_entry.get().strip()
@@ -198,15 +245,8 @@ class ApplicationWindow(Tk):
         pytype = self.__value_type
         scan_type = self.__scan_type
 
-        if not value or length == 0: return
-
-        # Check if the value is valid for the selected value type.
-        try:
-            if str(pytype(value)) != value or (pytype is str and length < len(value)):
-                raise ValueError()
-        except:
-            self.__value_entry.delete(0, "end")
-            return self.__value_entry.insert(0, "Invalid value")
+        # Validate the input.
+        if not value or length == 0 or not self.__check_value_entry(value, pytype, length): return
 
         # Start the scan.
         value = pytype(value)
@@ -214,32 +254,26 @@ class ApplicationWindow(Tk):
 
         self.after(100, lambda: self.__start_scan(pytype, length, value, scan_type))
 
-    def __next_scan(self):
+    def __next_scan(self) -> None:
         """
         Filter the found addresses.
         """
         self.__update_values(remove=True)
 
-    def __on_close(self, *args):
+    def __on_close(self, *args) -> None:
         """
         Event to close the program graciously.
         """
         self.__close = True
+        self.update()
 
-        if self.__updating or self.__new_scan_button["text"].lower() == "scanning":
-            self.update()
-            return self.after(10, self.__on_close)
+        if self.__updating or self.__finding_addresses:
+            self.after(10, self.__on_close)
+            return
 
         self.destroy()
 
-    def __on_move_list_box(self, *args):
-        """
-        Event to sync the listboxes.
-        """
-        self.__address_list.yview(*args)
-        self.__value_list.yview(*args)
-
-    def __on_mouse_wheel(self, event):
+    def __on_mouse_wheel(self, event) -> str:
         """
         Event to sync the listboxes.
         """
@@ -247,7 +281,14 @@ class ApplicationWindow(Tk):
         self.__value_list.yview("scroll", event.delta, "units")
         return "break"
 
-    def __select_address(self, event):
+    def __on_move_list_box(self, *args) -> None:
+        """
+        Event to sync the listboxes.
+        """
+        self.__address_list.yview(*args)
+        self.__value_list.yview(*args)
+
+    def __select_address(self, event) -> None:
         """
         Event to get the selected address and copy it.
         """
@@ -260,7 +301,7 @@ class ApplicationWindow(Tk):
         self.__address_entry.delete(0, "end")
         self.__address_entry.insert(0, address)
 
-    def __select_value(self, event):
+    def __select_value(self, event) -> None:
         """
         Event to get the selected value and copy it.
         """
@@ -271,40 +312,12 @@ class ApplicationWindow(Tk):
         self.__new_value_entry.delete(0, "end")
         self.__new_value_entry.insert(0, value)
 
-    def __start_scan(self, pytype, length, value, scan_type):
-        """
-        Search for a value on the whole memory of the process.
-        """
-        self.__new_scan_button.config(text="Scanning")
-        self.update()
-
-        self.__scanning = True
-        self.__addresses = []
-
-        for address, info in self.__process.search_by_value(pytype, length, value, scan_type, progress_information=True):
-            if self.__close: break
-
-            self.__address_list.insert("end", f"Addr: {hex(address)[2:].upper()}")
-            self.__value_list.insert("end", f"Value: loading...")
-
-            self.__progress_var.set(info["progress"] * 100)
-            self.__addresses.append(address)
-            self.update()
-
-            self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
-
-        self.__update_values()
-
-        self.__new_scan_button.config(text="New Scan")
-        self.__next_scan_button.config(text="Next Scan")
-        self.__progress_var.set(100)
-
-    def __set_scan_type(self, scan_type: int):
+    def __set_scan_type(self, scan_type: int) -> None:
         """
         Method for the Menubutton to select a scan type.
         """
         # Allow select a new scan type only if program is not getting new addresses or updating their values.
-        if self.__new_scan_button["text"].lower() == "scanning" or self.__updating: return
+        if self.__finding_addresses or self.__updating: return
 
         self.__scan_type = [
             ScanTypesEnum.EXACT_VALUE,
@@ -325,7 +338,50 @@ class ApplicationWindow(Tk):
         self.__value_type = [bool, int, float, str][value_type]
         self.__type_menu_button.config(text=["Boolean", "Integer", "Float", "String"][value_type])
 
-    def __validate_int_entry(self, string):
+    def __start_scan(self, pytype: Type[T], length: int, value: T, scan_type: ScanTypesEnum) -> None:
+        """
+        Search for a value on the whole memory of the process.
+        """
+        self.__new_scan_button.config(text="Scanning")
+        self.update()
+
+        self.__finding_addresses = True
+        self.__scanning = True
+
+        # Search for the addresses and add the results to the listbox.
+        for address, info in self.__process.search_by_value(pytype, length, value, scan_type, progress_information=True):
+            if self.__close: break
+
+            self.__progress_var.set(info["progress"] * 100)
+            self.__add_found_address(address)
+            self.update()
+
+            self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
+
+        # Get the value of each address and update the listbox.
+        self.__finding_addresses = False
+        self.__update_values()
+
+        self.__new_scan_button.config(text="New Scan")
+        self.__next_scan_button.config(text="Next Scan")
+        self.__progress_var.set(100)
+
+    def __stop_scan(self) -> None:
+        """
+        Clear all results and get everything ready for a new scan.
+        """
+        self.__count_label.config(text="Start a new scan to find memory addresses.")
+        self.__new_scan_button.config(text="First Scan")
+
+        self.__address_list.delete(0, "end")
+        self.__value_list.delete(0, "end")
+
+        self.__progress_var.set(0)
+
+        self.__scanning = False
+        self.__addresses = []
+
+    def __validate_int_entry(self, string: str) -> bool:
         """
         Method to validate if an input is integer.
         """
@@ -335,7 +391,7 @@ class ApplicationWindow(Tk):
             if char not in "0123456789": return False
         return True
 
-    def __validate_hex_entry(self, string):
+    def __validate_hex_entry(self, string: str) -> bool:
         """
         Method to validate if an input is hexadecimal.
         """
@@ -343,44 +399,42 @@ class ApplicationWindow(Tk):
             if char not in "0123456789ABCDEF": return False
         return True
 
-    def __update_values(self, *, remove: bool = False):
+    def __update_values(self, *, remove: bool = False) -> None:
         """
         Update the values of the found addresses. If "remove" is True, it will
         compare the current value in memory and remove the address from the
         results if the comparison is False.
         """
-        if self.__updating: return
+        if self.__updating or self.__finding_addresses: return
 
         if not self.__addresses: return self.__progress_var.set(100)
 
         # Get the value to compare.
-        value = self.__value_entry.get().strip()
-        total = len(self.__addresses)
+        expected_value = self.__value_entry.get().strip()
 
-        try:
-            if str(self.__value_type(value)) != value:
-                raise ValueError()
-        except:
-            self.__value_entry.delete(0, "end")
-            return self.__value_entry.insert(0, "Invalid value")
+        value_type = self.__value_type
+        value_length = self.__value_length
 
-        self.__value = self.__value_type(value)
-        self.__progress_var.set(0)
+        expected_value = value_type(expected_value)
+
+        # Get the comparison method.
+        compare = self.__comparison_methods[self.__scan_type]
 
         # Indicate the application is updating the values.
         self.__updating = True
+        self.__progress_var.set(0)
 
+        # Tell user application is updating the values.
         new_scan_button_text = self.__new_scan_button["text"]
         self.__new_scan_button.config(text="Updating")
 
         # Get the address and its current value in memory.
-        total, count = len(self.__addresses), 0
+        total, count, index = len(self.__addresses), 0, 0
 
-        for address, value in self.__process.search_by_addresses(self.__value_type, self.__value_length, self.__addresses):
+        for address, current_value in self.__process.search_by_addresses(value_type, value_length, self.__addresses):
             self.__progress_var.set((count / total) * 100)
             self.update()
 
-            index = self.__addresses.index(address)
             count += 1
 
             # Return if user asked for closing the application.
@@ -389,7 +443,7 @@ class ApplicationWindow(Tk):
                 return
 
             # If value is corrupted or "remove" is True and comparison is False, remove the value from the results.
-            if value is None or (remove and not self.__comp_methods[self.__scan_type](value, self.__value)):
+            if expected_value is None or (remove and not compare(current_value, expected_value)):
                 self.__address_list.delete(index)
                 self.__value_list.delete(index)
                 self.__addresses.remove(address)
@@ -397,39 +451,31 @@ class ApplicationWindow(Tk):
             # Update the value at the listbox.
             else:
                 self.__value_list.delete(index)
-                self.__value_list.insert(index, f"Value: {value}")
+                self.__value_list.insert(index, f"Value: {current_value}")
+                index += 1
 
+        # Indicate update has finished.
         self.__new_scan_button.config(text=new_scan_button_text)
         self.__updating = False
 
         self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
         self.__progress_var.set(100)
 
-    def __write_value(self):
+    def __write_value(self) -> None:
         """
         Change the value in memory of an address of the result list.
         """
-        try:
-            address = int(self.__address_entry.get().strip(), 16)
-            if address not in self.__addresses: raise ValueError()
-        except:
-            self.__address_entry.delete(0, "end")
-            return self.__address_entry.insert(0, "00000000")
+        address = self.__address_entry.get().strip()
+        if not self.__check_address_entry(address): return
 
         # Get the inputs.
+        address = int(address, 16)
         value = self.__new_value_entry.get()
         pytype = self.__value_type
         length = self.__value_length
 
-        if not value or length == 0: return
-
-        # Check if the value is valid for the selected value type.
-        try:
-            if str(pytype(value)) != value or (pytype is str and length < len(value)):
-                raise ValueError()
-        except:
-            self.__new_value_entry.delete(0, "end")
-            return self.__new_value_entry.insert(0, "Invalid value")
+        # Validate the input.
+        if not value or length == 0 or not self.__check_new_value_entry(value, pytype, length): return
 
         # Write the new value.
         self.__process.write_process_memory(address, pytype, length, pytype(value))
