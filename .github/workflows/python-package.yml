@@ -34,7 +34,7 @@ jobs:
         pip install -r requirements.txt
     - name: Test with pytest
       run: |
-        pytest tests -v -s
+        pytest tests -v -s -x
     - name: Install package
       run: |
         pip install PyMemoryEditor
