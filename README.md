@@ -74,7 +74,7 @@ All methods described above work even for strings, including the method `search_
 ## Progress information on searching:
 These methods has the `progress_information` parameter that returns a dictionary containing the search progress information.
 ```py
-for address, info process.search_by_value(..., progress_information = True):
+for address, info in process.search_by_value(..., progress_information = True):
     template = "Address: 0x{:<10X} | Progress: {:.1f}%"
     progress = info["progress"] * 100
     
@@ -84,7 +84,7 @@ for address, info process.search_by_value(..., progress_information = True):
 # Reading multiple addresses efficiently:
 If you have a large number of addresses where their values need to be read from memory, using the `search_by_addresses` method is much more efficient than reading the value of each address one by one.
 ```py
-for address, value process.search_by_addresses(int, 4, addresses_list):
+for address, value in process.search_by_addresses(int, 4, addresses_list):
     print(f"Address", address, "holds the value", value)
 ```
 The key advantage of this method is that it reads a memory page just once, obtaining the values of the addresses within the page. This approach reduces the frequency of system calls.
