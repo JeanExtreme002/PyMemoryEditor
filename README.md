@@ -15,6 +15,9 @@ reading and writing values in the process memory.
 pip3 install PyMemoryEditor
 ```
 
+### Tkinter application sample:
+You can run a simple tkinter application to scan the memory of a process by typing `pymemoryeditor` at the CLI.
+
 # Basic Usage:
 Import `PyMemoryEditor` and open a process using the `OpenProcess` class, passing a window title, process name <br>
 or PID as an argument. You can use the context manager to do this.
@@ -78,6 +81,14 @@ for address, info process.search_by_value(..., progress_information = True):
     print(template.format(address, progress))
 ```
 
+# Reading multiple addresses efficiently:
+If you have a large number of addresses where their values need to be read from memory, using the 'search_by_addresses' method is much more efficient than reading the value of each address one by one.
+```py
+for address, value process.search_by_addresses(int, 4, addresses_list):
+    print(f"Address", address, "holds the value", value)
+```
+The key advantage of this method is that it reads a memory page just once, obtaining the values of the addresses within the page. This approach reduces the frequency of system calls.
+
 ## Getting memory regions:
 Use the method `get_memory_regions()` to get the base address, size and more information of all memory regions used by the process.
 
@@ -87,6 +98,3 @@ for memory_region in process.get_memory_regions():
     size = memory_region["size"]
     information = memory_region["struct"]
 ```
-
-# Tkinter application sample:
-You can run a simple tkinter application to scan the memory of a process by typing `pymemoryeditor` at the CLI.
