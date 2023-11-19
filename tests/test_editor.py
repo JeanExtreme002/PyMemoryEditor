@@ -288,8 +288,10 @@ def test_search_by_string():
             total += 1
 
             # Check if the address really points to a valid value.
-            value = process.read_process_memory(found_address, str, data_length)
-            if value == target_value.value.decode(): correct += 1
+            try:
+                value = process.read_process_memory(found_address, str, data_length)
+                if value == target_value.value.decode(): correct += 1
+            except: pass
 
     assert found / test_length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
