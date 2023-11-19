@@ -2,7 +2,7 @@
 
 from tkinter import DoubleVar, Frame, Label, Menu, Listbox, Scrollbar, Tk
 from tkinter.ttk import Button, Entry, Menubutton, Progressbar
-from typing import Type, TypeVar
+from typing import Tuple, Type, TypeVar, Union
 
 from PyMemoryEditor import ScanTypesEnum
 from PyMemoryEditor.process import AbstractProcess
@@ -20,6 +20,8 @@ class ApplicationWindow(Tk):
         ScanTypesEnum.NOT_EXACT_VALUE: lambda x, y: x != y,
         ScanTypesEnum.BIGGER_THAN: lambda x, y: x > y,
         ScanTypesEnum.SMALLER_THAN: lambda x, y: x < y,
+        ScanTypesEnum.VALUE_BETWEEN: lambda x, y: y[0] <= x <= y[1],
+        ScanTypesEnum.NOT_VALUE_BETWEEN: lambda x, y: y[0] > x or x > y[1],
     }
 
     def __init__(self, process: AbstractProcess):
@@ -39,7 +41,7 @@ class ApplicationWindow(Tk):
         self["bg"] = "white"
 
         self.title(f"PyMemoryEditor (Sample) - Process ID: {process.pid}")
-        self.geometry("900x400")
+        self.geometry("1100x400")
         self.resizable(False, False)
 
         self.protocol("WM_DELETE_WINDOW", self.__on_close)
@@ -66,10 +68,17 @@ class ApplicationWindow(Tk):
         self.__scan_input_frame.pack(fill="x", expand=True)
 
         # Value input.
-        Label(self.__scan_input_frame, text="Value: ", bg="white", font=("Arial", 12)).pack(side="left")
+        self.__values_frame = Frame(self.__scan_input_frame)
+        self.__values_frame["bg"] = "white"
+        self.__values_frame.pack(side="left", fill="x", expand=True)
 
-        self.__value_entry = Entry(self.__scan_input_frame)
+        self.__value_label = Label(self.__values_frame, text="Value: ", bg="white", font=("Arial", 12))
+        self.__value_label.pack(side="left")
+
+        self.__value_entry = Entry(self.__values_frame)
         self.__value_entry.pack(side="left", expand=True, fill="x")
+
+        self.__second_value_entry = Entry(self.__values_frame)
 
         Label(self.__scan_input_frame, bg="white").pack(side="left")
 
@@ -99,7 +108,7 @@ class ApplicationWindow(Tk):
         # Scan type input.
         Label(self.__scan_input_frame, text="Scan Type: ", bg="white", font=("Arial", 12)).pack(side="left")
 
-        self.__scan_menu_button = Menubutton(self.__scan_input_frame, width=15)
+        self.__scan_menu_button = Menubutton(self.__scan_input_frame, width=20)
         self.__scan_menu_button.pack(side="left")
 
         self.__scan_menu = Menu(tearoff=0, bg="white")
@@ -107,6 +116,8 @@ class ApplicationWindow(Tk):
         self.__scan_menu.add_command(label="Not Exact Value", command=lambda: self.__set_scan_type(1))
         self.__scan_menu.add_command(label="Smaller Than", command=lambda: self.__set_scan_type(2))
         self.__scan_menu.add_command(label="Bigger Than", command=lambda: self.__set_scan_type(3))
+        self.__scan_menu.add_command(label="Value Between", command=lambda: self.__set_scan_type(4))
+        self.__scan_menu.add_command(label="Not Value Between", command=lambda: self.__set_scan_type(5))
         self.__scan_menu_button.config(menu=self.__scan_menu, text = "Exact Value")
 
         Label(self.__scan_input_frame, bg="white").pack(side="left", padx=5)
@@ -203,30 +214,22 @@ class ApplicationWindow(Tk):
             self.__address_entry.insert(0, "00000000")
         return False
 
-    def __check_new_value_entry(self, value: str, value_type: Type, length: int) -> bool:
+    def __check_value_entry(self, value: str, value_type: Type, length: int, entry: Entry) -> bool:
         """
         Check if the new value entry is valid.
         """
-        try:
-            if str(value_type(value)) == value and (not value_type is str or len(value) <= length):
-                return True
-            raise ValueError()
-        except ValueError:
-            self.__new_value_entry.delete(0, "end")
-            self.__new_value_entry.insert(0, "Invalid value")
-        return False
+        if length == 0:
+            self.__length_entry.delete(0, "end")
+            self.__length_entry.insert(0, "1")
+            return False
 
-    def __check_value_entry(self, value: str, value_type: Type, length: int) -> bool:
-        """
-        Check if the value entry is valid.
-        """
         try:
-            if str(value_type(value)) == value and (not value_type is str or len(value) <= length):
+            if not value or str(value_type(value)) == value and (not value_type is str or len(value) <= length):
                 return True
             raise ValueError()
         except ValueError:
-            self.__value_entry.delete(0, "end")
-            self.__value_entry.insert(0, "Invalid value")
+            entry.delete(0, "end")
+            entry.insert(0, "Invalid value")
         return False
 
     def __new_scan(self) -> None:
@@ -241,15 +244,22 @@ class ApplicationWindow(Tk):
 
         # Get the inputs.
         value = self.__value_entry.get().strip()
+        value_2 = self.__second_value_entry.get().strip()
+
         length = int(self.__length_entry.get())
         pytype = self.__value_type
         scan_type = self.__scan_type
 
         # Validate the input.
-        if not value or length == 0 or not self.__check_value_entry(value, pytype, length): return
+        if not self.__check_value_entry(value, pytype, length, self.__value_entry): return
+
+        value = pytype(value)
+
+        if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
+            if not self.__check_value_entry(value_2, pytype, length, self.__second_value_entry): return
+            value = (value, pytype(value_2))
 
         # Start the scan.
-        value = pytype(value)
         self.__value_length = length
 
         self.after(100, lambda: self.__start_scan(pytype, length, value, scan_type))
@@ -324,7 +334,17 @@ class ApplicationWindow(Tk):
             ScanTypesEnum.NOT_EXACT_VALUE,
             ScanTypesEnum.SMALLER_THAN,
             ScanTypesEnum.BIGGER_THAN,
+            ScanTypesEnum.VALUE_BETWEEN,
+            ScanTypesEnum.NOT_VALUE_BETWEEN
         ][scan_type]
+
+        if self.__scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
+            self.__value_label.config(text="Values:")
+            self.__second_value_entry.pack(padx=5, side="left", expand=True, fill="x")
+        else:
+            self.__value_label.config(text="Value:")
+            self.__second_value_entry.delete(0, "end")
+            self.__second_value_entry.forget()
 
         text = " ".join(word.capitalize() for word in self.__scan_type.name.split("_"))
         self.__scan_menu_button.config(text=text)
@@ -338,7 +358,7 @@ class ApplicationWindow(Tk):
         self.__value_type = [bool, int, float, str][value_type]
         self.__type_menu_button.config(text=["Boolean", "Integer", "Float", "String"][value_type])
 
-    def __start_scan(self, pytype: Type[T], length: int, value: T, scan_type: ScanTypesEnum) -> None:
+    def __start_scan(self, pytype: Type[T], length: int, value: Union[T, Tuple[T, T]], scan_type: ScanTypesEnum) -> None:
         """
         Search for a value on the whole memory of the process.
         """
@@ -348,8 +368,17 @@ class ApplicationWindow(Tk):
         self.__finding_addresses = True
         self.__scanning = True
 
+        # Get a generator object to find the addresses by a value or within a range.
+        if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
+            address_finder = self.__process.search_by_value_between(
+                pytype, length, value[0], value[1], progress_information=True,
+                not_between=scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN,
+            )
+        else:
+            address_finder = self.__process.search_by_value(pytype, length, value, scan_type, progress_information=True)
+
         # Search for the addresses and add the results to the listbox.
-        for address, info in self.__process.search_by_value(pytype, length, value, scan_type, progress_information=True):
+        for address, info in address_finder:
             if self.__close: break
 
             self.__progress_var.set(info["progress"] * 100)
@@ -411,11 +440,17 @@ class ApplicationWindow(Tk):
 
         # Get the value to compare.
         expected_value = self.__value_entry.get().strip()
+        expected_value_2 = self.__second_value_entry.get().strip()
 
         value_type = self.__value_type
         value_length = self.__value_length
 
+        if not self.__check_value_entry(expected_value, value_type, value_length, self.__value_entry): return
         expected_value = value_type(expected_value)
+
+        if self.__scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
+            if not self.__check_value_entry(expected_value_2, value_type, value_length, self.__second_value_entry): return
+            expected_value = (expected_value, value_type(expected_value_2))
 
         # Get the comparison method.
         compare = self.__comparison_methods[self.__scan_type]
@@ -443,7 +478,7 @@ class ApplicationWindow(Tk):
                 return
 
             # If value is corrupted or "remove" is True and comparison is False, remove the value from the results.
-            if expected_value is None or (remove and not compare(current_value, expected_value)):
+            if current_value is None or (remove and not compare(current_value, expected_value)):
                 self.__address_list.delete(index)
                 self.__value_list.delete(index)
                 self.__addresses.remove(address)
@@ -475,7 +510,7 @@ class ApplicationWindow(Tk):
         length = self.__value_length
 
         # Validate the input.
-        if not value or length == 0 or not self.__check_new_value_entry(value, pytype, length): return
+        if not self.__check_value_entry(value, pytype, length, self.__new_value_entry): return
 
         # Write the new value.
         self.__process.write_process_memory(address, pytype, length, pytype(value))
