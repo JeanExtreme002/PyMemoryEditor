@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from main_application_window import ApplicationWindow
-from open_process_window import OpenProcessWindow
+from .main_application_window import ApplicationWindow
+from .open_process_window import OpenProcessWindow
 
 
 def main(*args, **kwargs):
