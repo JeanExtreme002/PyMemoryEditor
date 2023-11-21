@@ -16,7 +16,7 @@ pip3 install PyMemoryEditor
 ```
 
 ### Tkinter application sample:
-You can run a tkinter application to scan the memory of a process by typing `pymemoryeditor` at the CLI.
+You can run a tkinter application to scan the memory of a process — similar to the Cheat Engine — by typing `pymemoryeditor` at the CLI.
 
 # Basic Usage:
 Import `PyMemoryEditor` and open a process using the `OpenProcess` class, passing a window title, process name <br>
