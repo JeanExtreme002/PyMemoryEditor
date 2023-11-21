@@ -24,6 +24,8 @@ class ApplicationWindow(Tk):
         ScanTypesEnum.NOT_VALUE_BETWEEN: lambda x, y: y[0] > x or x > y[1],
     }
 
+    __max_listbox_length = 200
+
     def __init__(self, process: AbstractProcess):
         super().__init__()
         self.__process = process
@@ -32,11 +34,13 @@ class ApplicationWindow(Tk):
         self.__value_type = int
         self.__value_length = 4
 
-        self.__addresses = []
+        self.__addresses = dict()
+        self.__selected_page = 0
+        self.__max_page = 0
 
         self.__finding_addresses = False  # Indicate it is searching for addresses (first step of a new scan).
-        self.__updating = False           # Indicate it is updating the values of the found addresses.
         self.__scanning = False           # Indicate a scan has started.
+        self.__updating = False           # Indicate it is updating the values of the found addresses.
 
         self["bg"] = "white"
 
@@ -137,7 +141,7 @@ class ApplicationWindow(Tk):
         self.__progress_bar = Progressbar(self.__input_frame_1, variable=self.__progress_var)
         self.__progress_bar.pack(pady=5, fill="x", expand=True)
 
-        # Label for counting and button for updating values.
+        # Label for counting and buttons for changing page and updating values.
         self.__result_frame = Frame(self)
         self.__result_frame["bg"] = "white"
         self.__result_frame.pack(padx=5, fill="both", expand=True)
@@ -151,6 +155,14 @@ class ApplicationWindow(Tk):
         self.__count_label.pack(side="left")
 
         Button(self.__count_frame, text="Update Values", command=self.__update_values).pack(side="right")
+        Label(self.__count_frame, bg="white").pack(side="right", padx=10)
+
+        Button(self.__count_frame, text="Next Page", command=lambda: self.__change_results_page(1)).pack(side="right")
+
+        self.__page_label = Label(self.__count_frame, text="0 of 0", width=12, borderwidth=2, relief="solid")
+        self.__page_label.pack(side="right", padx=10)
+
+        Button(self.__count_frame, text="Previous Page", command=lambda: self.__change_results_page(-1)).pack(side="right")
 
         # List with addresses and their values.
         self.__list_frame = Frame(self.__result_frame)
@@ -193,13 +205,29 @@ class ApplicationWindow(Tk):
 
         Button(self.__input_frame_2, text="Replace", command=self.__write_value).pack(side="left")
 
-    def __add_found_address(self, address: int) -> None:
+    def __change_results_page(self, step: int):
         """
-        Add a new address to the results.
+        Change the page of results.
         """
-        self.__address_list.insert("end", f"Addr: {hex(address)[2:].upper()}")
-        self.__value_list.insert("end", f"Value: loading...")
-        self.__addresses.append(address)
+        if step != 0 and (self.__finding_addresses or self.__updating): return
+
+        max_page = len(self.__addresses) // self.__max_listbox_length
+
+        if self.__selected_page > max_page:
+            self.__selected_page = max_page
+
+        next_page = self.__selected_page + step
+
+        if next_page < 0 or next_page > max_page: return
+
+        if not (0 <= next_page <= max_page):
+            next_page = self.__selected_page
+
+        text = f"{next_page} of {max_page}"
+        self.__page_label.config(text=text)
+
+        self.__selected_page = next_page
+        self.__update_listboxes()
 
     def __check_address_entry(self, address: str) -> bool:
         """
@@ -224,12 +252,14 @@ class ApplicationWindow(Tk):
             return False
 
         try:
-            if not value or str(value_type(value)) == value and (not value_type is str or len(value) <= length):
+            if value and str(value_type(value)) == value and (not value_type is str or len(value) <= length):
                 return True
             raise ValueError()
+
         except ValueError:
             entry.delete(0, "end")
             entry.insert(0, "Invalid value")
+
         return False
 
     def __new_scan(self) -> None:
@@ -237,7 +267,6 @@ class ApplicationWindow(Tk):
         Start a new seach at the whole memory of the process.
         """
         if self.__finding_addresses or self.__updating: return
-        self.__next_scan_button.config(text="")
 
         # If a scan is already in progress, clear all results for a new scan.
         if self.__scanning: return self.__stop_scan()
@@ -382,7 +411,7 @@ class ApplicationWindow(Tk):
             if self.__close: break
 
             self.__progress_var.set(info["progress"] * 100)
-            self.__add_found_address(address)
+            self.__addresses[address] = "loading..."
             self.update()
 
             self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
@@ -401,6 +430,7 @@ class ApplicationWindow(Tk):
         """
         self.__count_label.config(text="Start a new scan to find memory addresses.")
         self.__new_scan_button.config(text="First Scan")
+        self.__next_scan_button.config(text="")
 
         self.__address_list.delete(0, "end")
         self.__value_list.delete(0, "end")
@@ -408,7 +438,10 @@ class ApplicationWindow(Tk):
         self.__progress_var.set(0)
 
         self.__scanning = False
-        self.__addresses = []
+        self.__addresses = dict()
+
+        self.__change_results_page(0)
+        self.__selected_page = 0
 
     def __validate_int_entry(self, string: str) -> bool:
         """
@@ -428,6 +461,23 @@ class ApplicationWindow(Tk):
             if char not in "0123456789ABCDEF": return False
         return True
 
+    def __update_listboxes(self) -> None:
+        """
+        Update the listboxes with the found addresses and theirs values.
+        """
+        start = self.__selected_page * self.__max_listbox_length
+
+        items = [(address, value) for address, value in self.__addresses.items()]
+        items = items[start: start + self.__max_listbox_length]
+
+        self.__address_list.delete(0, "end")
+        self.__value_list.delete(0, "end")
+
+        for address, value in items:
+            self.__address_list.insert("end", f"Addr: {hex(address)[2:].upper()}")
+            self.__value_list.insert("end", f"Value: {value}")
+            self.update()
+
     def __update_values(self, *, remove: bool = False) -> None:
         """
         Update the values of the found addresses. If "remove" is True, it will
@@ -435,7 +485,6 @@ class ApplicationWindow(Tk):
         results if the comparison is False.
         """
         if self.__updating or self.__finding_addresses: return
-
         if not self.__addresses: return self.__progress_var.set(100)
 
         # Get the value to compare.
@@ -481,13 +530,15 @@ class ApplicationWindow(Tk):
             if current_value is None or (remove and not compare(current_value, expected_value)):
                 self.__address_list.delete(index)
                 self.__value_list.delete(index)
-                self.__addresses.remove(address)
+                self.__addresses.pop(address)
 
-            # Update the value at the listbox.
             else:
-                self.__value_list.delete(index)
-                self.__value_list.insert(index, f"Value: {current_value}")
+                self.__addresses[address] = current_value
                 index += 1
+
+        # Start the process of updating the listboxes.
+        self.__change_results_page(0)
+        self.__update_listboxes()
 
         # Indicate update has finished.
         self.__new_scan_button.config(text=new_scan_button_text)
