@@ -441,7 +441,6 @@ class ApplicationWindow(Tk):
         self.__addresses = dict()
 
         self.__change_results_page(0)
-        self.__selected_page = 0
 
     def __validate_int_entry(self, string: str) -> bool:
         """
