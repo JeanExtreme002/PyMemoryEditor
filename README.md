@@ -1,7 +1,6 @@
 # PyMemoryEditor
-
 A Python library developed with [ctypes](https://docs.python.org/3/library/ctypes.html) to manipulate Windows and Linux processes (32 bits and 64 bits), <br>
-reading and writing values in the process memory.
+reading, writing and searching values in the process memory.
 
 [![Python Package](https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml/badge.svg)](https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml)
 [![Pypi](https://img.shields.io/pypi/v/PyMemoryEditor)](https://pypi.org/project/PyMemoryEditor/)
@@ -12,11 +11,11 @@ reading and writing values in the process memory.
 
 # Installing PyMemoryEditor:
 ```
-pip3 install PyMemoryEditor
+pip install PyMemoryEditor
 ```
 
 ### Tkinter application sample:
-Type `pymemoryeditor` at the CLI to run a tkinter app — similar to the Cheat Engine — to scan a process.
+Type `pymemoryeditor` at the CLI to run a tkinter app — similar to the [Cheat Engine](https://en.wikipedia.org/wiki/Cheat_Engine) — to scan a process.
 
 # Basic Usage:
 Import `PyMemoryEditor` and open a process using the `OpenProcess` class, passing a window title, process name <br>
