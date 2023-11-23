@@ -8,7 +8,7 @@ import sys
 
 
 def main(*args, **kwargs):
-    if len(sys.argv) >= 1 and sys.argv[1].strip() in ["--version", "-v"]:
+    if len(sys.argv) > 1 and sys.argv[1].strip() in ["--version", "-v"]:
         return print(__version__)
 
     open_process_window = OpenProcessWindow()
