@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 
-from tkinter import DoubleVar, Frame, Label, Menu, Listbox, Scrollbar, Tk
+from tkinter import DoubleVar, Frame, Label, Menu, Listbox, Scrollbar, Tk, filedialog
 from tkinter.ttk import Button, Entry, Menubutton, Progressbar
 from typing import Tuple, Type, TypeVar, Union
 
 from PyMemoryEditor import ScanTypesEnum
 from PyMemoryEditor.process import AbstractProcess
+
+import json
 
 
 T = TypeVar("T")
@@ -205,6 +207,10 @@ class ApplicationWindow(Tk):
 
         Button(self.__input_frame_2, text="Replace", command=self.__write_value).pack(side="left")
 
+        Label(self.__input_frame_2, bg="white").pack(side="left")
+
+        Button(self.__input_frame_2, text="Export Data", command=self.__export_data).pack(side="left")
+
     def __change_results_page(self, step: int):
         """
         Change the page of results.
@@ -259,8 +265,27 @@ class ApplicationWindow(Tk):
         except ValueError:
             entry.delete(0, "end")
             entry.insert(0, "Invalid value")
-
         return False
+
+    def __export_data(self):
+        """
+        Export found addresses and values from the scan.
+        """
+        data = self.__addresses.copy()
+
+        filename = filedialog.asksaveasfilename(
+            title="Save as...",
+            filetypes=(
+                ("JSON (*.json)", "*.json"),
+                ("All files (*.*)", "*.*"),
+            ),
+            defaultextension=".json"
+        )
+        if not filename: return
+
+        with open(filename, "w") as file:
+            data = json.dumps(data, indent=4)
+            file.write(data)
 
     def __new_scan(self) -> None:
         """
