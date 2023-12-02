@@ -417,6 +417,7 @@ class ApplicationWindow(Tk):
         Search for a value on the whole memory of the process.
         """
         self.__new_scan_button.config(text="Scanning")
+        self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
         self.update()
 
         self.__finding_addresses = True
