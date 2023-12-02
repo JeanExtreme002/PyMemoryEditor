@@ -8,7 +8,7 @@ class BMHSearch(AbstractSearchAlgorithm):
     """
     Algorithm Boyer-Moore-Horspool (BMH) for matching pattern in sequences.
     """
-    def __init__(self, pattern: Sequence, pattern_length: Optional[int] = None):
+    def __init__(self, pattern: Sequence, pattern_length: Optional[int] = None, alphabet_length: int = 256):
         if pattern_length is None:
             pattern_length = len(pattern)
 
@@ -18,7 +18,7 @@ class BMHSearch(AbstractSearchAlgorithm):
         self.__pattern = pattern
         self.__pattern_length = pattern_length
 
-        self.__skip = defaultdict(lambda: self.__pattern_length)
+        self.__skip = [self.__pattern_length,] * alphabet_length
 
         for k in range(self.__pattern_length - 1):
             self.__skip[self.__get_value(pattern[k])] = self.__pattern_length - k - 1
@@ -26,10 +26,10 @@ class BMHSearch(AbstractSearchAlgorithm):
     def __get_value(self, element: Union[str, int]) -> int:
         """
         Return the ID of the element, whether element is a string.
-        If element is an integer, return itself or (256 - element) whether it is negative.
+        If element is an integer, return itself or (256 + element) whether it is negative.
         """
         if self.__is_string: return ord(element)
-        else: return (256 - element) if element < 0 else element
+        else: return (256 + element) if element < 0 else element
 
     def search(self, sequence: Sequence, length: Optional[int] = None) -> Generator[int, None, None]:
         """
