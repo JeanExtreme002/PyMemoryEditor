@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 from .abstract import AbstractSearchAlgorithm
-
-from typing import Generator, Optional, Sequence, Type
-import ctypes
+from typing import Generator, Optional, Sequence
 
 
 class KMPSearch(AbstractSearchAlgorithm):
     """
-    Algorithm KMP for matching pattern in sequences.
+    Algorithm Knuth-Morris-Pratt (KMP) for matching pattern in sequences.
     """
     def __init__(self, pattern: Sequence, pattern_length: Optional[int] = None):
         if pattern_length is None:
