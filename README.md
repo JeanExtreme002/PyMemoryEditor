@@ -19,7 +19,7 @@ Type `pymemoryeditor` at the CLI to run a tkinter app — similar to the [Cheat 
 
 # Basic Usage:
 Import `PyMemoryEditor` and open a process using the `OpenProcess` class, passing a window title, process name <br>
-or PID as an argument. You can use the context manager to do this.
+or PID as an argument. You can use the context manager for doing it.
 ```py
 from PyMemoryEditor import OpenProcess
 
