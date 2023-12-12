@@ -18,7 +18,7 @@ T = TypeVar("T")
 
 class LinuxProcess(AbstractProcess):
     """
-    Class to open a Linux process for reading and writing memory.
+    Class to open a Linux process for reading, writing and searching at its memory.
     """
 
     def __init__(
@@ -42,19 +42,13 @@ class LinuxProcess(AbstractProcess):
         self.__closed = False
 
     def close(self) -> bool:
-        """
-        Close the process handle.
-        """
+        # Check the documentation of this method in the AbstractProcess superclass for more information.
         self.__closed = True
         return True
 
     def get_memory_regions(self) -> Generator[dict, None, None]:
-        """
-        Generates dictionaries with the address, size and other
-        information of each memory region used by the process.
-        """
+        # Check the documentation of this method in the AbstractProcess superclass for more information.
         if self.__closed: raise ClosedProcess()
-
         return get_memory_regions(self.pid)
 
     def read_process_memory(
@@ -63,15 +57,8 @@ class LinuxProcess(AbstractProcess):
         pytype: Type[T],
         bufflength: int
     ) -> T:
-        """
-        Return a value from a memory address.
-
-        :param address: target memory address (ex: 0x006A9EC0).
-        :param pytype: type of the value to be received (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
-        """
+        # Check the documentation of this method in the AbstractProcess superclass for more information.
         if self.__closed: raise ClosedProcess()
-
         return read_process_memory(self.pid, address, pytype, bufflength)
 
     def search_by_addresses(
@@ -82,10 +69,8 @@ class LinuxProcess(AbstractProcess):
         *,
         raise_error: bool = False,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
-        """
-        Search the whole memory space, accessible to the process,
-        for the provided list of addresses, returning their values.
-        """
+
+        # Check the documentation of this method in the AbstractProcess superclass for more information.
         if self.__closed: raise ClosedProcess()
         return search_values_by_addresses(self.pid, pytype, bufflength, addresses, raise_error=raise_error)
 
@@ -99,17 +84,8 @@ class LinuxProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        """
-        Search the whole memory space, accessible to the process,
-        for the provided value, returning the found addresses.
 
-        :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
-        :param value: value to be queried (bool, int, float, str or bytes).
-        :param scan_type: the way to compare the values.
-        :param progress_information: if True, a dictionary with the progress information will be return.
-        :param writeable_only: if True, search only at writeable memory regions.
-        """
+        # Check the documentation of this method in the AbstractProcess superclass for more information.
         if self.__closed: raise ClosedProcess()
 
         if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
@@ -128,18 +104,8 @@ class LinuxProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        """
-        Search the whole memory space, accessible to the process,
-        for a value within the provided range, returning the found addresses.
 
-        :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
-        :param start: minimum inclusive value to be queried (bool, int, float, str or bytes).
-        :param end: maximum inclusive value to be queried (bool, int, float, str or bytes).
-        :param not_between: if True, return only addresses of values that are NOT within the range.
-        :param progress_information: if True, a dictionary with the progress information will be return.
-        :param writeable_only: if True, search only at writeable memory regions.
-        """
+        # Check the documentation of this method in the AbstractProcess superclass for more information.
         if self.__closed: raise ClosedProcess()
 
         scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
@@ -152,14 +118,6 @@ class LinuxProcess(AbstractProcess):
         bufflength: int,
         value: Union[bool, int, float, str, bytes]
     ) -> T:
-        """
-        Write a value to a memory address.
-
-        :param address: target memory address (ex: 0x006A9EC0).
-        :param pytype: type of value to be written into memory (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
-        :param value: value to be written (bool, int, float, str or bytes).
-        """
+        # Check the documentation of this method in the AbstractProcess superclass for more information.
         if self.__closed: raise ClosedProcess()
-
         return write_process_memory(self.pid, address, pytype, bufflength, value)

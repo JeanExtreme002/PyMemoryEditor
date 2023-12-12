@@ -2,13 +2,13 @@
 
 """
 Multi-platform library developed with ctypes for reading, writing and
-searching process memory, in a simple and friendly way with Python 3.
+searching at process memory, in a simple and friendly way with Python 3.
 
 The package supports Windows and Linux (32-bit and 64-bit).
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "1.5.19"
+__version__ = "1.5.20"
 
 
 from .enums import ScanTypesEnum

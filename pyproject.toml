@@ -1,7 +1,7 @@
 [project]
 name = "PyMemoryEditor"
 dynamic = ["version"]
-description = "Multi-platform library developed with ctypes for reading, writing and searching process memory, in a simple and friendly way with Python 3."
+description = "Multi-platform library developed with ctypes for reading, writing and searching at process memory, in a simple and friendly way with Python 3."
 authors = [
     { name = "Jean Loui Bernard Silva de Jesus", email = "jeanextreme002@gmail.com" },
 ]
