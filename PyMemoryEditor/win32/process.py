@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
 from ..enums import ScanTypesEnum
-from ..errors import ClosedProcess
 from ..process import AbstractProcess
+from ..process.errors import ClosedProcess
 from .enums import ProcessOperationsEnum
 
 from .functions import (
