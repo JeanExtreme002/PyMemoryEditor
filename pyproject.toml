@@ -41,7 +41,7 @@ classifiers = [
     "Topic :: Security",
     "Topic :: System :: Monitoring"
 ]
-exclude = ["tests"]
+exclude = ["tests", ".flake8"]
 requires-python = ">=3.6"
 dependencies = ["psutil"]
 

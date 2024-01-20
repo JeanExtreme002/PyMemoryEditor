@@ -10,8 +10,8 @@ The package supports Windows and Linux (32-bit and 64-bit).
 __author__ = "Jean Loui Bernard Silva de Jesus"
 __version__ = "1.5.21"
 
-
 from .enums import ScanTypesEnum
+from .process.errors import ClosedProcess, ProcessIDNotExistsError, ProcessNotFoundError
 import sys
 
 # For Windows.

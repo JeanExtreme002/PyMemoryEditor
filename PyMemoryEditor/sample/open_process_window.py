@@ -74,12 +74,12 @@ class OpenProcessWindow(Tk):
         entry = self.__entry.get().strip()
 
         try:
-            self.__process = OpenProcess(pid = int(entry))
+            self.__process = OpenProcess(pid=int(entry))
             return self.destroy()
 
         except ValueError:
             try:
-                self.__process = OpenProcess(process_name = entry)
+                self.__process = OpenProcess(process_name=entry)
                 return self.destroy()
             except (ProcessIDNotExistsError, ProcessNotFoundError): pass
         except (ProcessIDNotExistsError, ProcessNotFoundError): pass

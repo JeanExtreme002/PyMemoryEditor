@@ -108,10 +108,10 @@ def search_addresses_by_value(
     for region in get_memory_regions(pid):
 
         # Only readable memory pages.
-        if not b"r" in region["struct"].Privileges: continue
+        if b"r" not in region["struct"].Privileges: continue
 
         # If writeable_only is True, checks if the memory page is writeable.
-        if writeable_only and not b"w" in region["struct"].Privileges: continue
+        if writeable_only and b"w" not in region["struct"].Privileges: continue
 
         memory_total += region["size"]
         memory_regions.append(region)
@@ -172,7 +172,7 @@ def search_values_by_addresses(
     # If no memory page has been given, get all readable memory pages.
     if not memory_regions:
         for region in get_memory_regions(pid):
-            if not b"r" in region["struct"].Privileges: continue
+            if b"r" not in region["struct"].Privileges: continue
             memory_regions.append(region)
 
     memory_regions.sort(key=lambda region: region["address"])

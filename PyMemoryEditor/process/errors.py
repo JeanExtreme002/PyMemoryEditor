@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 
+class ClosedProcess(Exception):
+    def __str__(self):
+        return "Operation not allowed on a closed process."
+
+
 class ProcessIDNotExistsError(Exception):
 
     def __init__(self, pid: int):

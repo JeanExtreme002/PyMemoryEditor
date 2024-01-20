@@ -107,7 +107,7 @@ class ApplicationWindow(Tk):
         self.__type_menu.add_command(label="Integer", command=lambda: self.__set_value_type(1))
         self.__type_menu.add_command(label="Float", command=lambda: self.__set_value_type(2))
         self.__type_menu.add_command(label="String", command=lambda: self.__set_value_type(3))
-        self.__type_menu_button.config(menu=self.__type_menu, text = "Integer")
+        self.__type_menu_button.config(menu=self.__type_menu, text="Integer")
 
         Label(self.__scan_input_frame, bg="white").pack(side="left", padx=10)
 
@@ -124,7 +124,7 @@ class ApplicationWindow(Tk):
         self.__scan_menu.add_command(label="Bigger Than", command=lambda: self.__set_scan_type(3))
         self.__scan_menu.add_command(label="Value Between", command=lambda: self.__set_scan_type(4))
         self.__scan_menu.add_command(label="Not Value Between", command=lambda: self.__set_scan_type(5))
-        self.__scan_menu_button.config(menu=self.__scan_menu, text = "Exact Value")
+        self.__scan_menu_button.config(menu=self.__scan_menu, text="Exact Value")
 
         Label(self.__scan_input_frame, bg="white").pack(side="left", padx=5)
 
@@ -176,13 +176,13 @@ class ApplicationWindow(Tk):
         self.__address_list = Listbox(self.__list_frame, width=20)
         self.__address_list.bind("<MouseWheel>", self.__on_mouse_wheel)
         self.__address_list.bind("<<ListboxSelect>>", self.__select_address)
-        self.__address_list.config(yscrollcommand = self.__scrollbar.set)
+        self.__address_list.config(yscrollcommand=self.__scrollbar.set)
         self.__address_list.pack(side="left", fill="y")
 
         self.__value_list = Listbox(self.__list_frame)
         self.__value_list.bind("<MouseWheel>", self.__on_mouse_wheel)
         self.__value_list.bind("<<ListboxSelect>>", self.__select_value)
-        self.__value_list.config(yscrollcommand = self.__scrollbar.set)
+        self.__value_list.config(yscrollcommand=self.__scrollbar.set)
         self.__value_list.pack(side="left", fill="both", expand=True)
 
         self.__scrollbar.pack(side="left", fill="y")
@@ -258,7 +258,7 @@ class ApplicationWindow(Tk):
             return False
 
         try:
-            if value and str(value_type(value)) == value and (not value_type is str or len(value) <= length):
+            if value and str(value_type(value)) == value and (value_type is not str or len(value) <= length):
                 return True
             raise ValueError()
 
@@ -590,4 +590,3 @@ class ApplicationWindow(Tk):
 
         # Write the new value.
         self.__process.write_process_memory(address, pytype, length, pytype(value))
-

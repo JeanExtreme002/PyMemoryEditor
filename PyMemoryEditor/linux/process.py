@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
 from ..enums import ScanTypesEnum
-from ..errors import ClosedProcess
 from ..process import AbstractProcess
+from ..process.errors import ClosedProcess
 from .functions import (
     get_memory_regions,
     read_process_memory,
@@ -35,9 +35,9 @@ class LinuxProcess(AbstractProcess):
         :param pid: process ID.
         """
         super().__init__(
-            window_title = window_title,
-            process_name = process_name,
-            pid = pid
+            window_title=window_title,
+            process_name=process_name,
+            pid=pid
         )
         self.__closed = False
 

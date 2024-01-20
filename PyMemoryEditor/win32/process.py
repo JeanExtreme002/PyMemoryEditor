@@ -41,9 +41,9 @@ class WindowsProcess(AbstractProcess):
         :param permission: access mode to the process.
         """
         super().__init__(
-            window_title = window_title,
-            process_name = process_name,
-            pid = pid
+            window_title=window_title,
+            process_name=process_name,
+            pid=pid
         )
         self.__closed = False
 

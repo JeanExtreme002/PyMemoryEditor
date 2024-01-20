@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from .abstract import AbstractSearchAlgorithm
-from collections import defaultdict
 from typing import Generator, Optional, Sequence, Union
 
 
@@ -55,4 +54,3 @@ class BMHSearch(AbstractSearchAlgorithm):
                 yield i + 1
 
             k += self.__skip[self.__get_value(sequence[k])]
-

@@ -23,7 +23,7 @@ def test_open_process():
     global process
 
     # Open the process to write and read the process memory.
-    process = OpenProcess(pid = process_id)
+    process = OpenProcess(pid=process_id)
 
 
 def test_read_bool():
@@ -159,6 +159,7 @@ def test_search_by_int_addresses():
 
     for address, value in process.search_by_addresses(int, data_length, addresses):
         assert target_values[address].value == value and type(value) is int
+
 
 def test_search_by_float_addresses():
     # Get random values to compare the result.
@@ -308,7 +309,7 @@ def test_search_by_string_between():
         value.value = generate_text(string_length).encode()
         values.append(value)
 
-    values.sort(key = lambda target_value: target_value.value)
+    values.sort(key=lambda target_value: target_value.value)
 
     # Half of the set of strings is the target and the other half contains string that should be ignored by the scanner.
     target_values = [target_value for target_value in values[test_length // 4: test_length - test_length // 4]]

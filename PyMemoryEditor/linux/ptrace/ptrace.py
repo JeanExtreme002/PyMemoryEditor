@@ -10,7 +10,7 @@ from .enums import PtraceCommandsEnum
 from ctypes.util import find_library
 import ctypes
 
-libc = ctypes.CDLL(find_library("c"), use_errno = True)
+libc = ctypes.CDLL(find_library("c"), use_errno=True)
 libc.ptrace.argtypes = (ctypes.c_ulong,) * 4
 libc.ptrace.restype = ctypes.c_long
 
