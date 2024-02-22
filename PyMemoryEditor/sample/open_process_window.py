@@ -4,8 +4,7 @@ from tkinter import Frame, Label, Listbox, Scrollbar, Tk
 from tkinter.ttk import Button, Entry, Style
 from typing import Optional
 
-from PyMemoryEditor import OpenProcess
-from PyMemoryEditor.errors import ProcessIDNotExistsError, ProcessNotFoundError
+from PyMemoryEditor import OpenProcess, ProcessIDNotExistsError, ProcessNotFoundError
 from PyMemoryEditor.process import AbstractProcess
 
 import psutil
