@@ -1,11 +1,11 @@
-from package import OpenProcess, ScanTypesEnum, version
+from PyMemoryEditor import OpenProcess, ScanTypesEnum, __version__
 from os import getpid
 from typing import Optional
 import ctypes
 import platform
 import random
 
-print("Testing PyMemoryEditor version %s." % version)
+print("Testing PyMemoryEditor version %s." % __version__)
 
 print("\nOS Information: {} - {} {}".format(platform.platform(), *platform.architecture()[::-1]))
 print("Processor Information: {} | {}\n".format(platform.machine(), platform.processor()))
