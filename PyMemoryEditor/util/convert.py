@@ -32,9 +32,10 @@ def get_c_type_of(pytype: Type, length) -> ctypes._SimpleCData:
         if length <= 4: return ctypes.c_int32()     # 4 Bytes
         return ctypes.c_int64()                     # 8 Bytes
 
-    # Float values lose their precision when converted to c_float. For that reason,
-    # any float value will be converted to double.
-    elif pytype is float: return ctypes.c_double()  # 8 Bytes
+    elif pytype is float:
+
+        if length == 4: return ctypes.c_float()     # 4 Bytes
+        return ctypes.c_double()                    # 8 Bytes
 
     elif pytype is bool: return ctypes.c_bool()
 

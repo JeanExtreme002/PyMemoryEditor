@@ -67,7 +67,13 @@ def read_process_memory(
         pid, (iovec * 1)(iovec(addressof(data), sizeof(data))),
         1, (iovec * 1)(iovec(address, sizeof(data))), 1, 0
     )
-    return data.value.decode() if pytype is str else data.value
+
+    if pytype is str:
+        return data.value.decode()
+    elif pytype is bytes:
+        return bytes(data)
+    else:
+        return data.value
 
 
 def search_addresses_by_value(
