@@ -128,7 +128,7 @@ def ReadProcessMemory(
     kernel32.ReadProcessMemory(process_handle, ctypes.c_void_p(address), ctypes.byref(data), bufflength, None)
 
     if pytype is str:
-        return data.value.decode()
+        return bytes(data).decode()
     elif pytype is bytes:
         return bytes(data)
     else:

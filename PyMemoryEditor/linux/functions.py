@@ -69,7 +69,7 @@ def read_process_memory(
     )
 
     if pytype is str:
-        return data.value.decode()
+        return bytes(data).decode()
     elif pytype is bytes:
         return bytes(data)
     else:
