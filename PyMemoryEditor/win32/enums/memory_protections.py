@@ -57,7 +57,7 @@ class MemoryProtectionsEnum(Enum):
     PAGE_READWRITE = 0x04
 
     # Indicates memory page is readable. (Custom constant)
-    PAGE_READABLE = PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_READWRITE
+    PAGE_READABLE = PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_READWRITE | PAGE_READONLY
 
     # Indicates memory page is readable and writeable. (Custom constant)
     PAGE_READWRITEABLE = PAGE_EXECUTE_READWRITE | PAGE_READWRITE
