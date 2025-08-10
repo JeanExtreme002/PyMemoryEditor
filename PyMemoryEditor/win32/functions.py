@@ -174,7 +174,8 @@ def SearchAddressesByValue(
 
         # Only committed, non-shared and readable memory pages.
         if region["struct"].State != MemoryAllocationStatesEnum.MEM_COMMIT.value: continue
-        if region["struct"].Type != MemoryTypesEnum.MEM_PRIVATE.value: continue
+        if (region["struct"].Type != MemoryTypesEnum.MEM_PRIVATE.value and
+                region["struct"].Type != MemoryTypesEnum.MEM_IMAGE.value): continue
         if region["struct"].Protect & MemoryProtectionsEnum.PAGE_READABLE.value == 0: continue
 
         # If writeable_only is True, checks if the memory page is writeable.
