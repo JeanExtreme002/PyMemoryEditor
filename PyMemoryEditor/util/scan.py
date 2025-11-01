@@ -19,29 +19,26 @@ def scan_memory_for_exact_value(
     """
     Search for an exact value at the memory region.
 
-    This method uses an efficient searching algorithm.
+    This method uses an efficient searching algorithm. Default find function literally)
     """
-    searcher = KMPSearch(target_value, target_value_size)
+    data = bytes(memory_region_data)
     last_index = 0
+    found_index = data.find(target_value, 0)
 
-    for found_index in searcher.search(memory_region_data, memory_region_data_size):
-
-        # Return the found index if user is searching for an exact value.
+    while found_index != -1:
         if comparison is ScanTypesEnum.EXACT_VALUE:
             yield found_index
-            continue
+        elif comparison is ScanTypesEnum.NOT_EXACT_VALUE:
+            for different_index in range(last_index, found_index):
+                yield different_index
+            last_index = found_index + 1
+        found_index = data.find(target_value, found_index+1)
 
-        # Return the interval between last_index and found_address, if user is searching for a different value.
-        for different_index in range(last_index, found_index):
-            yield different_index
-        last_index = found_index + 1
-
-    # If user is searching for a different value, return the rest of the addresses that were not found.
     if comparison is ScanTypesEnum.NOT_EXACT_VALUE:
         for different_index in range(last_index, memory_region_data_size):
             yield different_index
-
-
+    
+    
 def scan_memory(
     memory_region_data: Sequence,
     memory_region_data_size: int,
