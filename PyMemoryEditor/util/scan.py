@@ -19,7 +19,7 @@ def scan_memory_for_exact_value(
     """
     Search for an exact value at the memory region.
 
-    This method uses an efficient searching algorithm. Default find function literally)
+    This method uses an efficient searching algorithm.
     """
     data = bytes(memory_region_data)
     last_index = 0
