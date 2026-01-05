@@ -230,14 +230,16 @@ def write_process_memory(
     """
     Write a value to a memory address.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
-
     data = get_c_type_of(pytype, bufflength)
     data.value = value.encode() if isinstance(value, str) else value
 
-    libc.process_vm_writev(
-        pid, (iovec * 1)(iovec(addressof(data), sizeof(data))),
-        1, (iovec * 1)(iovec(address, sizeof(data))), 1, 0
-    )
+    mem = open(f"/proc/{pid}/mem", "rb+")
+    try:
+        mem.seek(address)
+        mem.write(data)
+        mem.close()
+    except (OSError, ValueError):
+        raise PermissionError(f"Can't access the memory of process {pid} at {hex(address)}")
+    
     return value
+
