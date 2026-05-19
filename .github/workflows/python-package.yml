@@ -85,28 +85,8 @@ jobs:
       run: |
         pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term
 
-  # macOS is split out and only runs on push-to-main / weekly cron / manual
-  # dispatch — NEVER on `pull_request`. GitHub-hosted macOS runner pools are
-  # frequently congested (jobs sit in queue for 30+ minutes without acquiring
-  # a runner), which would stall every PR for hours waiting on macOS to
-  # validate something that's already covered by the Mach API surface tests.
-  # Local self-process tests run as part of dev validation; this CI job is
-  # the safety net for that.
-  build-macos:
-    needs: lint
-    if: github.event_name != 'pull_request'
-    runs-on: macos-13
-    timeout-minutes: 25
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
-    - name: Test with pytest
-      run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term
+# macOS is intentionally NOT in CI: GitHub-hosted macOS runners are heavily
+# congested for free-tier accounts (jobs sit in queue for 30+ min without
+# acquiring a runner). The Mach backend is validated by local self-process
+# tests during development; contributors with macOS hardware can run
+# `pytest tests` locally.
