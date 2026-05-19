@@ -238,9 +238,15 @@ def test_search_by_int():
 
         total += 1
 
-        # Check if the address really points to a valid value.
-        value = process.read_process_memory(found_address, int, data_length)
-        if min_value <= value <= max_value: correct += 1
+        # Check if the address really points to a valid value. A page may have
+        # been decommitted between scan and read (genuine race condition); the
+        # syscall now surfaces it as OSError instead of returning zeros.
+        try:
+            value = process.read_process_memory(found_address, int, data_length)
+            if min_value <= value <= max_value:
+                correct += 1
+        except OSError:
+            pass
 
     assert found / test_length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
@@ -271,9 +277,13 @@ def test_search_by_float():
 
         total += 1
 
-        # Check if the address really points to a valid value.
-        value = process.read_process_memory(found_address, float, data_length)
-        if min_value <= value <= max_value: correct += 1
+        # Same race as test_search_by_int — tolerate OSError on read.
+        try:
+            value = process.read_process_memory(found_address, float, data_length)
+            if min_value <= value <= max_value:
+                correct += 1
+        except OSError:
+            pass
 
     assert found / test_length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
