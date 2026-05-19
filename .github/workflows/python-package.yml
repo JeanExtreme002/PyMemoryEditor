@@ -68,10 +68,17 @@ jobs:
         # macOS validates the Mach backend; the Python version doesn't change
         # that surface. The GitHub-hosted macOS runner pool is much smaller
         # than ubuntu/windows, so we cap macOS at a single (stable) Python
-        # to avoid 6-way queueing that can stall the PR for hours.
+        # to avoid multi-way queueing that can stall the PR for hours.
+        #
+        # Why macos-13 (Intel) instead of macos-latest (Apple Silicon):
+        # the free-tier pool for arm64 runners is heavily congested, while
+        # macos-13 has a much larger queue and equivalent test coverage —
+        # Mach VM structs are fixed-size by design (mach_port_t = uint32,
+        # mach_vm_address_t = uint64, etc.), so x86_64 and arm64 exercise
+        # the same code paths.
         include:
           - python-version: '3.12'
-            os: macos-latest
+            os: macos-13
 
     steps:
     - uses: actions/checkout@v4
