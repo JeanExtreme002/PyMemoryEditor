@@ -4,6 +4,7 @@ from typing import Optional
 import ctypes
 import platform
 import random
+import sys
 
 print("Testing PyMemoryEditor version %s." % __version__)
 
@@ -12,6 +13,20 @@ print("Processor Information: {} | {}\n".format(platform.machine(), platform.pro
 
 process_id = getpid()
 process: Optional[OpenProcess] = None
+
+
+# The default permission on Windows is PROCESS_VM_READ; this test suite also
+# exercises write_process_memory, so request write access explicitly. Linux
+# and macOS ignore the `permission` kwarg.
+if sys.platform == "win32":
+    from PyMemoryEditor import ProcessOperationsEnum
+    _PERMISSION = (
+        ProcessOperationsEnum.PROCESS_VM_READ.value
+        | ProcessOperationsEnum.PROCESS_VM_WRITE.value
+        | ProcessOperationsEnum.PROCESS_VM_OPERATION.value
+    )
+else:
+    _PERMISSION = None
 
 
 def generate_text(size):
@@ -23,7 +38,10 @@ def test_open_process():
     global process
 
     # Open the process to write and read the process memory.
-    process = OpenProcess(pid=process_id)
+    if _PERMISSION is not None:
+        process = OpenProcess(pid=process_id, permission=_PERMISSION)
+    else:
+        process = OpenProcess(pid=process_id)
 
 
 def test_read_bool():
