@@ -40,7 +40,7 @@ PyMemoryEditor/
 ├── win32/               # Windows implementation (kernel32, user32)
 ├── linux/               # Linux implementation (process_vm_readv/writev, /proc/<pid>/maps)
 ├── macos/               # macOS implementation (task_for_pid, mach_vm_*)
-└── sample/              # Tkinter demo app exposed as `pymemoryeditor` CLI
+└── app/                 # PySide6 (Qt) demo app exposed as `pymemoryeditor` CLI
 ```
 
 The three platform packages implement `AbstractProcess` from `process/abstract.py`.

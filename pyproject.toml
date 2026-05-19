@@ -48,6 +48,9 @@ dependencies = ["psutil>=5.9,<7"]
 tests = [
   "pytest",
 ]
+app = [
+  "PySide6>=6.5",
+]
 dev = [
   "pytest",
   "pytest-cov",
@@ -61,10 +64,11 @@ dev = [
 "Homepage" = "https://github.com/JeanExtreme002/PyMemoryEditor"
 
 [tool.mypy]
-# The sample Tk app uses dynamic types that aren't worth annotating strictly.
-# Library code under PyMemoryEditor/ (excluding sample/) is the surface that
-# ships with `py.typed` and should aim for clean mypy output over time.
-exclude = ["PyMemoryEditor/sample/"]
+# The Qt app uses dynamic types and depends on the optional PySide6 GUI
+# toolkit, so it isn't worth annotating strictly. Library code under
+# PyMemoryEditor/ (excluding app/) is the surface that ships with
+# `py.typed` and should aim for clean mypy output over time.
+exclude = ["PyMemoryEditor/app/"]
 ignore_missing_imports = true
 # Initial pass: surface issues without immediately blocking CI. Tighten this
 # over time as the pre-existing type debt gets paid down.
@@ -96,4 +100,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-pymemoryeditor = "PyMemoryEditor.sample.application:main"
+pymemoryeditor = "PyMemoryEditor.app.application:main"
