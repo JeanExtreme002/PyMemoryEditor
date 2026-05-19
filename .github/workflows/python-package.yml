@@ -58,6 +58,13 @@ jobs:
   build:
     needs: lint
     runs-on: ${{ matrix.os }}
+    # macOS jobs are non-blocking: GitHub-hosted macOS runner pools are often
+    # congested and a job can sit in queue for 30+ minutes without acquiring a
+    # runner. ubuntu and windows still gate the merge; macOS is best-effort.
+    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
+    # 25 min cap — if no runner picks up the job by then, skip rather than
+    # stalling the PR forever. Real test runs finish well under this.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -72,8 +79,8 @@ jobs:
         #
         # Why macos-13 (Intel) instead of macos-latest (Apple Silicon):
         # the free-tier pool for arm64 runners is heavily congested, while
-        # macos-13 has a much larger queue and equivalent test coverage —
-        # Mach VM structs are fixed-size by design (mach_port_t = uint32,
+        # macos-13 has a larger queue and equivalent test coverage — Mach VM
+        # structs are fixed-size by design (mach_port_t = uint32,
         # mach_vm_address_t = uint64, etc.), so x86_64 and arm64 exercise
         # the same code paths.
         include:
