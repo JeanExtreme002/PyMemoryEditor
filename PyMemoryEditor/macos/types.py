@@ -13,8 +13,8 @@ References:
 from ctypes import Structure, c_int, c_uint, c_uint64, c_ushort, sizeof
 
 # Basic Mach types
-mach_port_t = c_uint                  # 32-bit port name
-task_t = mach_port_t                  # Same as mach_port_t for task ports
+mach_port_t = c_uint  # 32-bit port name
+task_t = mach_port_t  # Same as mach_port_t for task ports
 vm_map_t = mach_port_t
 kern_return_t = c_int
 vm_prot_t = c_int
@@ -34,7 +34,7 @@ VM_PROT_NONE = 0x00
 VM_PROT_READ = 0x01
 VM_PROT_WRITE = 0x02
 VM_PROT_EXECUTE = 0x04
-VM_PROT_COPY = 0x10        # Used with mach_vm_protect on read-only/mapped pages.
+VM_PROT_COPY = 0x10  # Used with mach_vm_protect on read-only/mapped pages.
 
 # Selected kern_return_t values
 KERN_SUCCESS = 0
@@ -47,6 +47,7 @@ KERN_NO_ACCESS = 8
 
 class vm_region_basic_info_64(Structure):
     """Layout of struct vm_region_basic_info_64 from <mach/vm_region.h>."""
+
     _fields_ = [
         ("protection", vm_prot_t),
         ("max_protection", vm_prot_t),
@@ -70,6 +71,7 @@ class MEMORY_BASIC_INFORMATION(Structure):
     `process.get_memory_regions()["struct"]`. Mirrors the Linux/Windows
     structures shipped by PyMemoryEditor.
     """
+
     _fields_ = [
         ("BaseAddress", c_uint64),
         ("RegionSize", c_uint64),

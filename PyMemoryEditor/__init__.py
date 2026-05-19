@@ -26,16 +26,19 @@ from .process.errors import (
 if sys.platform == "win32":
     from .win32.process import WindowsProcess
     from .win32.enums.process_operations import ProcessOperationsEnum
+
     OpenProcess = WindowsProcess
     _PLATFORM_EXPORTS = ("ProcessOperationsEnum",)
 
 elif sys.platform.startswith("linux"):
     from .linux.process import LinuxProcess
+
     OpenProcess = LinuxProcess
     _PLATFORM_EXPORTS = ()
 
 elif sys.platform == "darwin":
     from .macos.process import MacProcess
+
     OpenProcess = MacProcess
     _PLATFORM_EXPORTS = ()
 

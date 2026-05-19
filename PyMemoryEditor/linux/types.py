@@ -36,7 +36,5 @@ class iovec(Structure):
 
     Reference: https://man7.org/linux/man-pages/man3/iovec.3type.html
     """
-    _fields_ = [
-        ("iov_base", c_void_p),
-        ("iov_len", c_size_t)
-    ]
+
+    _fields_ = [("iov_base", c_void_p), ("iov_len", c_size_t)]

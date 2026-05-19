@@ -19,7 +19,9 @@ if sys.platform != "win32":
 
 
 from PyMemoryEditor.win32.process import _can_read, _can_write  # noqa: E402
-from PyMemoryEditor.win32.enums.process_operations import ProcessOperationsEnum  # noqa: E402
+from PyMemoryEditor.win32.enums.process_operations import (
+    ProcessOperationsEnum,
+)  # noqa: E402
 
 
 def test_explicit_vm_read_grants_read():
@@ -41,7 +43,10 @@ def test_terminate_and_suspend_resume_have_distinct_values():
     # Python's Enum semantics. Per MSDN, PROCESS_TERMINATE = 0x0001.
     assert ProcessOperationsEnum.PROCESS_TERMINATE.value == 0x0001
     assert ProcessOperationsEnum.PROCESS_SUSPEND_RESUME.value == 0x0800
-    assert ProcessOperationsEnum.PROCESS_TERMINATE is not ProcessOperationsEnum.PROCESS_SUSPEND_RESUME
+    assert (
+        ProcessOperationsEnum.PROCESS_TERMINATE
+        is not ProcessOperationsEnum.PROCESS_SUSPEND_RESUME
+    )
 
 
 def test_all_access_grants_both_read_and_write():

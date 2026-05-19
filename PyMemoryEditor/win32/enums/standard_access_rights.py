@@ -7,6 +7,7 @@ class StandardAccessRightsEnum(Enum):
     Enum with of standard access rights that correspond to operations
     common to most types of securable objects.
     """
+
     # Required to delete the object.
     DELETE = 0x00010000
 

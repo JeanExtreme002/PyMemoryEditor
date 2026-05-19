@@ -38,21 +38,31 @@ user32 = ctypes.windll.LoadLibrary("user32.dll")
 # Skipping argtypes silently truncates 64-bit handles to 32-bit on x64 Python builds
 # and lets Python misinterpret return values, hiding errors.
 
-kernel32.OpenProcess.argtypes = (ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD)
+kernel32.OpenProcess.argtypes = (
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.BOOL,
+    ctypes.wintypes.DWORD,
+)
 kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
 
 kernel32.CloseHandle.argtypes = (ctypes.wintypes.HANDLE,)
 kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
 
 kernel32.ReadProcessMemory.argtypes = (
-    ctypes.wintypes.HANDLE, ctypes.wintypes.LPCVOID, ctypes.wintypes.LPVOID,
-    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPCVOID,
+    ctypes.wintypes.LPVOID,
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
 )
 kernel32.ReadProcessMemory.restype = ctypes.wintypes.BOOL
 
 kernel32.WriteProcessMemory.argtypes = (
-    ctypes.wintypes.HANDLE, ctypes.wintypes.LPVOID, ctypes.wintypes.LPCVOID,
-    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPVOID,
+    ctypes.wintypes.LPCVOID,
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
 )
 kernel32.WriteProcessMemory.restype = ctypes.wintypes.BOOL
 
@@ -60,8 +70,10 @@ kernel32.VirtualQueryEx.argtypes = (
     # The output struct varies between 32-bit and 64-bit layouts; declare the
     # buffer as a raw void pointer and rely on the caller passing a correctly
     # sized struct (see mbi_class_for_handle).
-    ctypes.wintypes.HANDLE, ctypes.wintypes.LPCVOID,
-    ctypes.c_void_p, ctypes.c_size_t,
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPCVOID,
+    ctypes.c_void_p,
+    ctypes.c_size_t,
 )
 kernel32.VirtualQueryEx.restype = ctypes.c_size_t
 
@@ -71,15 +83,25 @@ kernel32.GetSystemInfo.restype = None
 user32.EnumWindows.argtypes = (WNDENUMPROC, ctypes.wintypes.LPARAM)
 user32.EnumWindows.restype = ctypes.wintypes.BOOL
 
-user32.GetWindowTextW.argtypes = (ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int)
+user32.GetWindowTextW.argtypes = (
+    ctypes.wintypes.HWND,
+    ctypes.wintypes.LPWSTR,
+    ctypes.c_int,
+)
 user32.GetWindowTextW.restype = ctypes.c_int
 
-user32.GetWindowThreadProcessId.argtypes = (ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD))
+user32.GetWindowThreadProcessId.argtypes = (
+    ctypes.wintypes.HWND,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+)
 user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
 
 # BOOL IsWow64Process(HANDLE hProcess, PBOOL Wow64Process);
 # True when the target is a 32-bit process running on 64-bit Windows.
-kernel32.IsWow64Process.argtypes = (ctypes.wintypes.HANDLE, ctypes.POINTER(ctypes.wintypes.BOOL))
+kernel32.IsWow64Process.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(ctypes.wintypes.BOOL),
+)
 kernel32.IsWow64Process.restype = ctypes.wintypes.BOOL
 
 
@@ -111,7 +133,9 @@ def mbi_class_for_handle(process_handle: int):
         # — the caller may not need region info at all.
         return MEMORY_BASIC_INFORMATION
 
-    return MEMORY_BASIC_INFORMATION_32 if is_wow64.value else MEMORY_BASIC_INFORMATION_64
+    return (
+        MEMORY_BASIC_INFORMATION_32 if is_wow64.value else MEMORY_BASIC_INFORMATION_64
+    )
 
 
 T = TypeVar("T")
@@ -150,7 +174,10 @@ def GetMemoryRegions(process_handle: int) -> Generator[dict, None, None]:
     while current_address < mem_region_end:
         region = mbi_class()
         result = kernel32.VirtualQueryEx(
-            process_handle, current_address, ctypes.byref(region), ctypes.sizeof(region),
+            process_handle,
+            current_address,
+            ctypes.byref(region),
+            ctypes.sizeof(region),
         )
 
         if result == 0:
@@ -191,7 +218,9 @@ def GetProcessIdByWindowTitle(window_title: str) -> int:
     """
     result = ctypes.wintypes.DWORD(0)
 
-    string_buffer_size = len(window_title) + 2  # (+2) for the next possible character of a title and the NULL char.
+    string_buffer_size = (
+        len(window_title) + 2
+    )  # (+2) for the next possible character of a title and the NULL char.
     string_buffer = ctypes.create_unicode_buffer(string_buffer_size)
 
     def callback(hwnd, _lparam):
@@ -209,10 +238,7 @@ def GetProcessIdByWindowTitle(window_title: str) -> int:
 
 
 def ReadProcessMemory(
-    process_handle: int,
-    address: int,
-    pytype: Type[T],
-    bufflength: int
+    process_handle: int, address: int, pytype: Type[T], bufflength: int
 ) -> T:
     """
     Return a value from a memory address.
@@ -227,8 +253,11 @@ def ReadProcessMemory(
 
     ctypes.set_last_error(0)
     success = kernel32.ReadProcessMemory(
-        process_handle, ctypes.c_void_p(address), ctypes.byref(data),
-        bufflength, ctypes.byref(bytes_read),
+        process_handle,
+        ctypes.c_void_p(address),
+        ctypes.byref(data),
+        bufflength,
+        ctypes.byref(bytes_read),
     )
 
     if not success:
@@ -249,11 +278,17 @@ def _is_region_scannable(region, writeable_only: bool) -> bool:
     info = region["struct"]
     if info.State != MemoryAllocationStatesEnum.MEM_COMMIT.value:
         return False
-    if info.Type not in (MemoryTypesEnum.MEM_PRIVATE.value, MemoryTypesEnum.MEM_IMAGE.value):
+    if info.Type not in (
+        MemoryTypesEnum.MEM_PRIVATE.value,
+        MemoryTypesEnum.MEM_IMAGE.value,
+    ):
         return False
     if info.Protect & MemoryProtectionsEnum.PAGE_READABLE.value == 0:
         return False
-    if writeable_only and info.Protect & MemoryProtectionsEnum.PAGE_READWRITEABLE.value == 0:
+    if (
+        writeable_only
+        and info.Protect & MemoryProtectionsEnum.PAGE_READWRITEABLE.value == 0
+    ):
         return False
     return True
 
@@ -264,8 +299,11 @@ def _read_region(process_handle: int, address: int, size: int):
     bytes_read = ctypes.c_size_t(0)
 
     success = kernel32.ReadProcessMemory(
-        process_handle, ctypes.c_void_p(address), ctypes.byref(region_data),
-        size, ctypes.byref(bytes_read),
+        process_handle,
+        ctypes.c_void_p(address),
+        ctypes.byref(region_data),
+        size,
+        ctypes.byref(bytes_read),
     )
     if not success or bytes_read.value == 0:
         return None
@@ -301,7 +339,11 @@ def SearchAddressesByValue(
     memory_total = 0
     filtered_regions = []
 
-    source_regions = memory_regions if memory_regions is not None else GetMemoryRegions(process_handle)
+    source_regions = (
+        memory_regions
+        if memory_regions is not None
+        else GetMemoryRegions(process_handle)
+    )
     for region in source_regions:
         if not _is_region_scannable(region, writeable_only):
             continue
@@ -328,14 +370,25 @@ def SearchAddressesByValue(
             if chunk_data is None:
                 continue
 
-            for offset in searching_method(chunk_data, chunk_size, target_value_bytes, bufflength, scan_type, pytype is str):
+            for offset in searching_method(
+                chunk_data,
+                chunk_size,
+                target_value_bytes,
+                bufflength,
+                scan_type,
+                pytype is str,
+            ):
                 found_address = chunk_address + offset
 
                 if progress_information:
-                    yield (found_address, {
-                        "memory_total": memory_total,
-                        "progress": (checked_memory_size + chunk_offset + offset) / memory_total,
-                    })
+                    yield (
+                        found_address,
+                        {
+                            "memory_total": memory_total,
+                            "progress": (checked_memory_size + chunk_offset + offset)
+                            / memory_total,
+                        },
+                    )
                 else:
                     yield found_address
 
@@ -406,19 +459,27 @@ def SearchValuesByAddresses(
             chunk_data = _read_region(process_handle, chunk_address, read_size)
 
             if chunk_data is None:
-                while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+                while (
+                    address_index < len(addresses)
+                    and chunk_address <= addresses[address_index] < chunk_end
+                ):
                     yield addresses[address_index], None
                     address_index += 1
                 continue
 
-            while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+            while (
+                address_index < len(addresses)
+                and chunk_address <= addresses[address_index] < chunk_end
+            ):
                 target_address = addresses[address_index]
                 offset_in_chunk = target_address - chunk_address
 
                 try:
-                    data = chunk_data[offset_in_chunk: offset_in_chunk + bufflength]
+                    data = chunk_data[offset_in_chunk : offset_in_chunk + bufflength]
                     data = (ctypes.c_byte * bufflength)(*data)
-                    yield target_address, convert_from_byte_array(data, pytype, bufflength)
+                    yield target_address, convert_from_byte_array(
+                        data, pytype, bufflength
+                    )
 
                 except (ValueError, UnicodeDecodeError, OSError) as error:
                     if raise_error:
@@ -433,7 +494,7 @@ def WriteProcessMemory(
     address: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes]
+    value: Union[bool, int, float, str, bytes],
 ) -> Union[bool, int, float, str, bytes]:
     """
     Write a value to a memory address.
@@ -450,8 +511,11 @@ def WriteProcessMemory(
 
     ctypes.set_last_error(0)
     success = kernel32.WriteProcessMemory(
-        process_handle, ctypes.c_void_p(address), ctypes.byref(data),
-        bufflength, ctypes.byref(bytes_written),
+        process_handle,
+        ctypes.c_void_p(address),
+        ctypes.byref(data),
+        bufflength,
+        ctypes.byref(bytes_written),
     )
 
     if not success:

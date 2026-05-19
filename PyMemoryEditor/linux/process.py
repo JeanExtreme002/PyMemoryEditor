@@ -41,7 +41,9 @@ class LinuxProcess(AbstractProcess):
         :param case_sensitive: when False, process_name matching ignores case.
         """
         if window_title is not None:
-            raise OSError("Opening a process by window title is not supported on Linux.")
+            raise OSError(
+                "Opening a process by window title is not supported on Linux."
+            )
 
         super().__init__(
             window_title=None,
@@ -72,7 +74,9 @@ class LinuxProcess(AbstractProcess):
         bufflength: Optional[int] = None,
     ) -> T:
         self.__require_open()
-        return read_process_memory(self.pid, address, pytype, resolve_bufflength(pytype, bufflength))
+        return read_process_memory(
+            self.pid, address, pytype, resolve_bufflength(pytype, bufflength)
+        )
 
     def search_by_addresses(
         self,
@@ -85,8 +89,12 @@ class LinuxProcess(AbstractProcess):
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
         return search_values_by_addresses(
-            self.pid, pytype, resolve_bufflength(pytype, bufflength), addresses,
-            memory_regions=memory_regions, raise_error=raise_error,
+            self.pid,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            addresses,
+            memory_regions=memory_regions,
+            raise_error=raise_error,
         )
 
     def search_by_value(
@@ -103,11 +111,18 @@ class LinuxProcess(AbstractProcess):
         self.__require_open()
 
         if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
-            raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
+            raise ValueError(
+                "Use the method search_by_value_between(...) to search within a range of values."
+            )
 
         return search_addresses_by_value(
-            self.pid, pytype, resolve_bufflength(pytype, bufflength), value,
-            scan_type, progress_information, writeable_only,
+            self.pid,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            value,
+            scan_type,
+            progress_information,
+            writeable_only,
             memory_regions=memory_regions,
         )
 
@@ -125,10 +140,19 @@ class LinuxProcess(AbstractProcess):
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
-        scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
+        scan_type = (
+            ScanTypesEnum.NOT_VALUE_BETWEEN
+            if not_between
+            else ScanTypesEnum.VALUE_BETWEEN
+        )
         return search_addresses_by_value(
-            self.pid, pytype, resolve_bufflength(pytype, bufflength), (start, end),
-            scan_type, progress_information, writeable_only,
+            self.pid,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            (start, end),
+            scan_type,
+            progress_information,
+            writeable_only,
             memory_regions=memory_regions,
         )
 
@@ -140,4 +164,6 @@ class LinuxProcess(AbstractProcess):
         value: Union[bool, int, float, str, bytes],
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
-        return write_process_memory(self.pid, address, pytype, resolve_bufflength(pytype, bufflength), value)
+        return write_process_memory(
+            self.pid, address, pytype, resolve_bufflength(pytype, bufflength), value
+        )

@@ -30,7 +30,7 @@ _BYTES_PER_LINE = 16
 def _format_hex_dump(base: int, data: bytes) -> str:
     lines = []
     for i in range(0, len(data), _BYTES_PER_LINE):
-        chunk = data[i:i + _BYTES_PER_LINE]
+        chunk = data[i : i + _BYTES_PER_LINE]
         hex_part = " ".join(f"{b:02X}" for b in chunk)
         # Pad so the ASCII column aligns even on short final lines.
         hex_part = hex_part.ljust(_BYTES_PER_LINE * 3 - 1)

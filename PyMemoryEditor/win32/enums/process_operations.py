@@ -6,6 +6,7 @@ class ProcessOperationsEnum(Enum):
     """
     Enum with all permissions and operations you can do to a process.
     """
+
     # All possible access rights for a process object.Windows Server 2003 and Windows XP: The size of
     # the PROCESS_ALL_ACCESS flag increased on Windows Server 2008 and Windows Vista. If an application
     # compiled for Windows Server 2008 and Windows Vista is run on Windows Server 2003 or Windows XP,
@@ -14,7 +15,7 @@ class ProcessOperationsEnum(Enum):
     # the operation. If PROCESS_ALL_ACCESS must be used, set _WIN32_WINNT to the minimum operating
     # system targeted by your application (for example, #define _WIN32_WINNT _WIN32_WINNT_WINXP). For
     # more information, see Using the Windows Headers.
-    PROCESS_ALL_ACCESS = 0x1f0fff
+    PROCESS_ALL_ACCESS = 0x1F0FFF
 
     # Required to create a process.
     PROCESS_CREATE_PROCESS = 0x0080

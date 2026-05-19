@@ -24,7 +24,9 @@ def test_iter_region_chunks_at_boundary():
     target_size = 4
     max_chunk = 256 * 1024 * 1024
 
-    chunks: List = list(iter_region_chunks(region_size, target_size, max_chunk=max_chunk))
+    chunks: List = list(
+        iter_region_chunks(region_size, target_size, max_chunk=max_chunk)
+    )
 
     # Reconstructed region size matches the input.
     assert sum(size for _, size in chunks) == region_size
@@ -43,7 +45,11 @@ def test_iter_region_chunks_at_boundary():
 def test_iter_region_chunks_size_one_target():
     """target_value_size=1 (e.g. bool) must not divide by zero or align oddly."""
     region_size = 600 * 1024 * 1024
-    chunks = list(iter_region_chunks(region_size, target_value_size=1, max_chunk=256 * 1024 * 1024))
+    chunks = list(
+        iter_region_chunks(
+            region_size, target_value_size=1, max_chunk=256 * 1024 * 1024
+        )
+    )
     assert sum(size for _, size in chunks) == region_size
 
 
@@ -80,7 +86,7 @@ def test_scan_memory_across_chunked_region_finds_all_matches():
         buf = bytearray(chunk_size)
         # Plant target at offsets 100, 5000, and 60000 within the chunk.
         for local in (100, 5000, 60000):
-            buf[local: local + 4] = target
+            buf[local : local + 4] = target
             expected_global_offsets.append(chunk_index * chunk_size + local)
         chunks_data.append(bytes(buf))
 
@@ -99,7 +105,10 @@ def test_scan_memory_across_chunked_region_finds_all_matches():
 def test_mbi_class_for_handle_wow64(monkeypatch):
     """When the target is WOW64, the 32-bit MBI layout is selected."""
     from PyMemoryEditor.win32 import functions as wf
-    from PyMemoryEditor.win32.types import MEMORY_BASIC_INFORMATION_32, MEMORY_BASIC_INFORMATION_64
+    from PyMemoryEditor.win32.types import (
+        MEMORY_BASIC_INFORMATION_32,
+        MEMORY_BASIC_INFORMATION_64,
+    )
 
     # Force "host is 64-bit" so the WOW64 branch is taken.
     monkeypatch.setattr(wf, "_HOST_IS_64BIT", True)

@@ -102,7 +102,8 @@ def scan_memory_for_exact_value(
     target_value_size: int,
     comparison: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     is_string: bool = False,
-    *args, **kwargs
+    *args,
+    **kwargs,
 ) -> Generator[int, None, None]:
     """
     Search for an exact (or not-exact) match of the target value in the memory region.
@@ -137,7 +138,10 @@ def scan_memory_for_exact_value(
         # bisect_left lookup turns the inner loop from O(m) into O(log m).
         for offset in range(0, end, step):
             idx = bisect_left(match_positions, offset - target_value_size + 1)
-            if idx < len(match_positions) and match_positions[idx] < offset + target_value_size:
+            if (
+                idx < len(match_positions)
+                and match_positions[idx] < offset + target_value_size
+            ):
                 continue
             yield offset
 
@@ -241,41 +245,57 @@ def scan_memory(
 
     if scan_type is ScanTypesEnum.EXACT_VALUE:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if value == target_value_int:
                 yield offset
     elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if value != target_value_int:
                 yield offset
     elif scan_type is ScanTypesEnum.BIGGER_THAN:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if value > target_value_int:
                 yield offset
     elif scan_type is ScanTypesEnum.SMALLER_THAN:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if value < target_value_int:
                 yield offset
     elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if value >= target_value_int:
                 yield offset
     elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if value <= target_value_int:
                 yield offset
     elif scan_type is ScanTypesEnum.VALUE_BETWEEN:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if start_target_value_int <= value <= end_target_value_int:
                 yield offset
     elif scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN:
         for offset in range(0, end, step):
-            value = int_from_bytes(data[offset: offset + target_value_size], byte_order)
+            value = int_from_bytes(
+                data[offset : offset + target_value_size], byte_order
+            )
             if not (start_target_value_int <= value <= end_target_value_int):
                 yield offset

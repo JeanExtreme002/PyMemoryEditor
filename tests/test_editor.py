@@ -8,8 +8,14 @@ import sys
 
 print("Testing PyMemoryEditor version %s." % __version__)
 
-print("\nOS Information: {} - {} {}".format(platform.platform(), *platform.architecture()[::-1]))
-print("Processor Information: {} | {}\n".format(platform.machine(), platform.processor()))
+print(
+    "\nOS Information: {} - {} {}".format(
+        platform.platform(), *platform.architecture()[::-1]
+    )
+)
+print(
+    "Processor Information: {} | {}\n".format(platform.machine(), platform.processor())
+)
 
 process_id = getpid()
 process: Optional[OpenProcess] = None
@@ -20,6 +26,7 @@ process: Optional[OpenProcess] = None
 # and macOS ignore the `permission` kwarg.
 if sys.platform == "win32":
     from PyMemoryEditor import ProcessOperationsEnum
+
     _PERMISSION = (
         ProcessOperationsEnum.PROCESS_VM_READ.value
         | ProcessOperationsEnum.PROCESS_VM_WRITE.value
@@ -121,8 +128,12 @@ def test_write_bool():
     process.write_process_memory(address_1, bool, data_length, new_value_1)
     process.write_process_memory(address_2, bool, data_length, new_value_2)
 
-    assert target_value_1.value != original_value_1 and target_value_1.value == new_value_1
-    assert target_value_2.value != original_value_2 and target_value_2.value == new_value_2
+    assert (
+        target_value_1.value != original_value_1 and target_value_1.value == new_value_1
+    )
+    assert (
+        target_value_2.value != original_value_2 and target_value_2.value == new_value_2
+    )
 
 
 def test_write_float():
@@ -187,7 +198,10 @@ def test_search_by_float_addresses():
     # Get random values to compare the result.
     test_length = 10
 
-    target_values = [ctypes.c_double(random.randint(0, 10000) / random.randint(0, 10000)) for i in range(test_length)]
+    target_values = [
+        ctypes.c_double(random.randint(0, 10000) / random.randint(0, 10000))
+        for i in range(test_length)
+    ]
     data_length = ctypes.sizeof(target_values[0])
 
     target_values = {ctypes.addressof(v): v for v in target_values}
@@ -233,7 +247,9 @@ def test_search_by_int():
     correct = 0
 
     # Get addresses of values exact or smaller than max_value.
-    for found_address in process.search_by_value_between(int, data_length, min_value, max_value):
+    for found_address in process.search_by_value_between(
+        int, data_length, min_value, max_value
+    ):
 
         # Check if the found address is a target address.
         if found_address in addresses:
@@ -253,14 +269,18 @@ def test_search_by_int():
             pass
 
     assert found / test_length >= 0.7
-    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+    assert (
+        correct / total >= 0.7
+    )  # Some of the addresses are beyond our control and may have their values changed.
 
 
 def test_search_by_float():
     # Get random values to compare the result.
     test_length = 10
 
-    target_values = [ctypes.c_double(random.randint(0, 10000)) for i in range(test_length)]
+    target_values = [
+        ctypes.c_double(random.randint(0, 10000)) for i in range(test_length)
+    ]
     addresses = [ctypes.addressof(v) for v in target_values]
     data_length = ctypes.sizeof(target_values[0])
 
@@ -272,7 +292,9 @@ def test_search_by_float():
     correct = 0
 
     # Get addresses of values exact or smaller than max_value.
-    for found_address in process.search_by_value_between(float, data_length, min_value, max_value):
+    for found_address in process.search_by_value_between(
+        float, data_length, min_value, max_value
+    ):
 
         # Check if the found address is a target address.
         if found_address in addresses:
@@ -290,7 +312,9 @@ def test_search_by_float():
             pass
 
     assert found / test_length >= 0.7
-    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+    assert (
+        correct / total >= 0.7
+    )  # Some of the addresses are beyond our control and may have their values changed.
 
 
 def test_search_by_string():
@@ -312,7 +336,9 @@ def test_search_by_string():
 
     # Get addresses of values exact or smaller than max_value.
     for target_value in target_values:
-        for found_address in process.search_by_value(str, data_length, target_value.value, ScanTypesEnum.EXACT_VALUE):
+        for found_address in process.search_by_value(
+            str, data_length, target_value.value, ScanTypesEnum.EXACT_VALUE
+        ):
 
             # Check if the found address is the target address.
             if found_address == ctypes.addressof(target_value):
@@ -323,14 +349,17 @@ def test_search_by_string():
             # Check if the address really points to a valid value.
             try:
                 value = process.read_process_memory(found_address, str, data_length)
-                if value == target_value.value.decode(): correct += 1
+                if value == target_value.value.decode():
+                    correct += 1
             except (OSError, ValueError, UnicodeDecodeError):
                 # The address may belong to another region by the time we read
                 # it back, or hold non-decodable bytes. Either way, skip it.
                 pass
 
     assert found / test_length >= 0.7
-    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+    assert (
+        correct / total >= 0.7
+    )  # Some of the addresses are beyond our control and may have their values changed.
 
 
 def test_search_by_string_between():
@@ -347,7 +376,10 @@ def test_search_by_string_between():
     values.sort(key=lambda target_value: target_value.value)
 
     # Half of the set of strings is the target and the other half contains string that should be ignored by the scanner.
-    target_values = [target_value for target_value in values[test_length // 4: test_length - test_length // 4]]
+    target_values = [
+        target_value
+        for target_value in values[test_length // 4 : test_length - test_length // 4]
+    ]
 
     addresses = [ctypes.addressof(v) for v in values]
     target_addresses = [ctypes.addressof(v) for v in target_values]
@@ -360,7 +392,9 @@ def test_search_by_string_between():
     found = 0
 
     # Get addresses of values exact or smaller than max_value.
-    for found_address in process.search_by_value_between(str, data_length, min_value, max_value):
+    for found_address in process.search_by_value_between(
+        str, data_length, min_value, max_value
+    ):
 
         # Check if the found address is a target address.
         if found_address in target_addresses:
@@ -368,7 +402,9 @@ def test_search_by_string_between():
             found += 1
 
         elif found_address in addresses:
-            raise ValueError("Scanner returned the address of a clearly invalid string.")
+            raise ValueError(
+                "Scanner returned the address of a clearly invalid string."
+            )
 
     assert found / test_length >= 0.5
 

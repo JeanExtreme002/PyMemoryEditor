@@ -8,7 +8,9 @@ import psutil
 from .errors import AmbiguousProcessNameError
 
 
-def get_process_ids_by_process_name(process_name: str, *, case_sensitive: bool = True) -> List[int]:
+def get_process_ids_by_process_name(
+    process_name: str, *, case_sensitive: bool = True
+) -> List[int]:
     """
     Return a list of all process IDs matching the provided name.
 
@@ -34,14 +36,18 @@ def get_process_ids_by_process_name(process_name: str, *, case_sensitive: bool =
     return matches
 
 
-def get_process_id_by_process_name(process_name: str, *, case_sensitive: bool = True) -> Optional[int]:
+def get_process_id_by_process_name(
+    process_name: str, *, case_sensitive: bool = True
+) -> Optional[int]:
     """
     Return the PID of the process matching the provided name.
 
     Raises AmbiguousProcessNameError when more than one process matches.
     Returns None when no process matches (callers should handle this).
     """
-    matches = get_process_ids_by_process_name(process_name, case_sensitive=case_sensitive)
+    matches = get_process_ids_by_process_name(
+        process_name, case_sensitive=case_sensitive
+    )
 
     if len(matches) > 1:
         raise AmbiguousProcessNameError(process_name, matches)
@@ -62,6 +68,7 @@ def get_process_id_by_window_title(window_title: str) -> int:
     # Late import so mypy on non-Windows hosts doesn't see this name as
     # undefined (the module-level import is guarded by sys.platform).
     from ..win32.functions import GetProcessIdByWindowTitle
+
     return GetProcessIdByWindowTitle(window_title)
 
 

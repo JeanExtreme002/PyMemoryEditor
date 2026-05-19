@@ -29,7 +29,9 @@ def test_scan_memory_exact_value_finds_last_value():
     target = _pack(42)
     data = bytearray(_pack(0)) + bytearray(_pack(1)) + bytearray(target)
 
-    results = list(scan_memory(data, len(data), target, 4, ScanTypesEnum.EXACT_VALUE, False))
+    results = list(
+        scan_memory(data, len(data), target, 4, ScanTypesEnum.EXACT_VALUE, False)
+    )
 
     assert 8 in results
 
@@ -40,7 +42,9 @@ def test_scan_memory_bigger_than_aligned():
         data.extend(_pack(value))
 
     target = _pack(20)
-    results = list(scan_memory(data, len(data), target, 4, ScanTypesEnum.BIGGER_THAN, False))
+    results = list(
+        scan_memory(data, len(data), target, 4, ScanTypesEnum.BIGGER_THAN, False)
+    )
 
     # Offsets 8 (=30) and 12 (=40) should match.
     assert results == [8, 12]
@@ -52,7 +56,9 @@ def test_scan_memory_smaller_than_aligned():
         data.extend(_pack(value))
 
     target = _pack(25)
-    results = list(scan_memory(data, len(data), target, 4, ScanTypesEnum.SMALLER_THAN, False))
+    results = list(
+        scan_memory(data, len(data), target, 4, ScanTypesEnum.SMALLER_THAN, False)
+    )
 
     assert results == [0, 4]
 
@@ -62,11 +68,16 @@ def test_scan_memory_value_between():
     for value in (5, 15, 25, 35, 45):
         data.extend(_pack(value))
 
-    results = list(scan_memory(
-        data, len(data),
-        (_pack(10), _pack(30)), 4,
-        ScanTypesEnum.VALUE_BETWEEN, False,
-    ))
+    results = list(
+        scan_memory(
+            data,
+            len(data),
+            (_pack(10), _pack(30)),
+            4,
+            ScanTypesEnum.VALUE_BETWEEN,
+            False,
+        )
+    )
 
     # 15 (offset 4) and 25 (offset 8) match.
     assert results == [4, 8]
@@ -76,9 +87,15 @@ def test_scan_memory_for_exact_value_finds_all_matches():
     target = _pack(7)
     data = bytearray(_pack(7)) + bytearray(_pack(0)) + bytearray(_pack(7))
 
-    results = list(scan_memory_for_exact_value(
-        data, len(data), target, 4, ScanTypesEnum.EXACT_VALUE,
-    ))
+    results = list(
+        scan_memory_for_exact_value(
+            data,
+            len(data),
+            target,
+            4,
+            ScanTypesEnum.EXACT_VALUE,
+        )
+    )
 
     assert results == [0, 8]
 
@@ -89,11 +106,22 @@ def test_scan_memory_for_exact_value_not_exact_is_aligned():
     It now yields target_value_size-aligned offsets only, skipping match positions.
     """
     target = _pack(7)
-    data = bytearray(_pack(7)) + bytearray(_pack(99)) + bytearray(_pack(7)) + bytearray(_pack(123))
+    data = (
+        bytearray(_pack(7))
+        + bytearray(_pack(99))
+        + bytearray(_pack(7))
+        + bytearray(_pack(123))
+    )
 
-    results = list(scan_memory_for_exact_value(
-        data, len(data), target, 4, ScanTypesEnum.NOT_EXACT_VALUE,
-    ))
+    results = list(
+        scan_memory_for_exact_value(
+            data,
+            len(data),
+            target,
+            4,
+            ScanTypesEnum.NOT_EXACT_VALUE,
+        )
+    )
 
     # Aligned offsets are 0, 4, 8, 12. Offsets 0 and 8 match, so result is [4, 12].
     assert results == [4, 12]
@@ -110,9 +138,16 @@ def test_scan_memory_for_exact_value_not_exact_string_overlap():
     # Two matches: at offset 0 and offset 10.
     data = b"abcd" + b"XXXXXX" + b"abcd" + b"YYYY"  # length 18; valid windows 0..14.
 
-    results = list(scan_memory_for_exact_value(
-        data, len(data), target, 4, ScanTypesEnum.NOT_EXACT_VALUE, is_string=True,
-    ))
+    results = list(
+        scan_memory_for_exact_value(
+            data,
+            len(data),
+            target,
+            4,
+            ScanTypesEnum.NOT_EXACT_VALUE,
+            is_string=True,
+        )
+    )
 
     # An offset O overlaps when there is a match M with |M - O| < 4.
     # Matches at [0, 10]: overlap regions are (-4, 4) and (6, 14) exclusive.
@@ -125,9 +160,15 @@ def test_scan_memory_for_exact_value_not_exact_no_matches():
     target = _pack(999)
     data = bytearray(_pack(1)) + bytearray(_pack(2)) + bytearray(_pack(3))
 
-    results = list(scan_memory_for_exact_value(
-        data, len(data), target, 4, ScanTypesEnum.NOT_EXACT_VALUE,
-    ))
+    results = list(
+        scan_memory_for_exact_value(
+            data,
+            len(data),
+            target,
+            4,
+            ScanTypesEnum.NOT_EXACT_VALUE,
+        )
+    )
 
     assert results == [0, 4, 8]
 
@@ -140,7 +181,9 @@ def test_scan_memory_handles_empty_region():
 
 def test_scan_memory_handles_region_smaller_than_target():
     target = _pack(7)
-    results = list(scan_memory(b"\x00\x00", 2, target, 4, ScanTypesEnum.EXACT_VALUE, False))
+    results = list(
+        scan_memory(b"\x00\x00", 2, target, 4, ScanTypesEnum.EXACT_VALUE, False)
+    )
     assert results == []
 
 
@@ -173,17 +216,22 @@ def test_iter_region_chunks_unaligned_target():
     chunks = list(iter_region_chunks(1000, 3, max_chunk=500))
     # Each chunk size must be a multiple of 3.
     for _, size in chunks:
-        assert size % 3 == 0 or (size + sum(s for _, s in chunks[:chunks.index((_, size))]) == 1000)
+        assert size % 3 == 0 or (
+            size + sum(s for _, s in chunks[: chunks.index((_, size))]) == 1000
+        )
 
 
-@pytest.mark.parametrize("scan_type", [
-    ScanTypesEnum.EXACT_VALUE,
-    ScanTypesEnum.NOT_EXACT_VALUE,
-    ScanTypesEnum.BIGGER_THAN,
-    ScanTypesEnum.SMALLER_THAN,
-    ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE,
-    ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE,
-])
+@pytest.mark.parametrize(
+    "scan_type",
+    [
+        ScanTypesEnum.EXACT_VALUE,
+        ScanTypesEnum.NOT_EXACT_VALUE,
+        ScanTypesEnum.BIGGER_THAN,
+        ScanTypesEnum.SMALLER_THAN,
+        ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE,
+        ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE,
+    ],
+)
 def test_scan_memory_all_scan_types_run(scan_type):
     """Smoke test: every scan_type should produce a generator that runs without error."""
     target = _pack(10)
@@ -192,7 +240,9 @@ def test_scan_memory_all_scan_types_run(scan_type):
         data.extend(_pack(value))
 
     if scan_type in (ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE):
-        results = list(scan_memory_for_exact_value(data, len(data), target, 4, scan_type))
+        results = list(
+            scan_memory_for_exact_value(data, len(data), target, 4, scan_type)
+        )
     else:
         results = list(scan_memory(data, len(data), target, 4, scan_type, False))
 

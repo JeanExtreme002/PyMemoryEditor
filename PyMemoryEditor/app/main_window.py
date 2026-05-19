@@ -497,9 +497,7 @@ class MainWindow(QMainWindow):
         return f"PID {self._process.pid}  ·  {self._proc_name}"
 
     def _window_title(self) -> str:
-        return (
-            f"PyMemoryEditor — Qt App  (PID {self._process.pid} · {self._proc_name})"
-        )
+        return f"PyMemoryEditor — Qt App  (PID {self._process.pid} · {self._proc_name})"
 
     def _read_proc_name(self) -> str:
         try:

@@ -49,7 +49,9 @@ class MacProcess(AbstractProcess):
         :param case_sensitive: when False, process_name matching ignores case.
         """
         if window_title is not None:
-            raise OSError("Opening a process by window title is not supported on macOS.")
+            raise OSError(
+                "Opening a process by window title is not supported on macOS."
+            )
 
         super().__init__(
             window_title=None,
@@ -91,8 +93,12 @@ class MacProcess(AbstractProcess):
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
         return search_values_by_addresses(
-            self.__task, pytype, resolve_bufflength(pytype, bufflength), addresses,
-            memory_regions=memory_regions, raise_error=raise_error,
+            self.__task,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            addresses,
+            memory_regions=memory_regions,
+            raise_error=raise_error,
         )
 
     def search_by_value(
@@ -109,11 +115,18 @@ class MacProcess(AbstractProcess):
         self.__require_open()
 
         if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
-            raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
+            raise ValueError(
+                "Use the method search_by_value_between(...) to search within a range of values."
+            )
 
         return search_addresses_by_value(
-            self.__task, pytype, resolve_bufflength(pytype, bufflength), value,
-            scan_type, progress_information, writeable_only,
+            self.__task,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            value,
+            scan_type,
+            progress_information,
+            writeable_only,
             memory_regions=memory_regions,
         )
 
@@ -131,10 +144,19 @@ class MacProcess(AbstractProcess):
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
-        scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
+        scan_type = (
+            ScanTypesEnum.NOT_VALUE_BETWEEN
+            if not_between
+            else ScanTypesEnum.VALUE_BETWEEN
+        )
         return search_addresses_by_value(
-            self.__task, pytype, resolve_bufflength(pytype, bufflength), (start, end),
-            scan_type, progress_information, writeable_only,
+            self.__task,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            (start, end),
+            scan_type,
+            progress_information,
+            writeable_only,
             memory_regions=memory_regions,
         )
 
@@ -145,7 +167,9 @@ class MacProcess(AbstractProcess):
         bufflength: Optional[int] = None,
     ) -> T:
         self.__require_open()
-        return read_process_memory(self.__task, address, pytype, resolve_bufflength(pytype, bufflength))
+        return read_process_memory(
+            self.__task, address, pytype, resolve_bufflength(pytype, bufflength)
+        )
 
     def write_process_memory(
         self,
@@ -155,4 +179,6 @@ class MacProcess(AbstractProcess):
         value: Union[bool, int, float, str, bytes],
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
-        return write_process_memory(self.__task, address, pytype, resolve_bufflength(pytype, bufflength), value)
+        return write_process_memory(
+            self.__task, address, pytype, resolve_bufflength(pytype, bufflength), value
+        )

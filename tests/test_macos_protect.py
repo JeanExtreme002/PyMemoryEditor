@@ -21,15 +21,23 @@ from PyMemoryEditor import OpenProcess  # noqa: E402
 
 
 # Page size on macOS arm64 is 16 KB; x86_64 is 4 KB. mmap will pick the right one.
-_libsystem = ctypes.CDLL(ctypes.util.find_library("System") if hasattr(ctypes, "util") else "libSystem.dylib")
+_libsystem = ctypes.CDLL(
+    ctypes.util.find_library("System") if hasattr(ctypes, "util") else "libSystem.dylib"
+)
 # Re-import the proper way:
 from ctypes.util import find_library  # noqa: E402
+
 _libsystem = ctypes.CDLL(find_library("System"))
 
 # mmap / munmap signatures
 _libsystem.mmap.restype = ctypes.c_void_p
 _libsystem.mmap.argtypes = (
-    ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_uint64,
 )
 _libsystem.munmap.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
 _libsystem.munmap.restype = ctypes.c_int
@@ -44,12 +52,14 @@ MAP_FAILED = ctypes.c_void_p(-1).value
 def _mmap_readonly(size: int) -> int:
     """Allocate a page-aligned read-only buffer. Returns its address."""
     # Allocate writable first to populate, then re-protect to read-only.
-    addr = _libsystem.mmap(None, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)
+    addr = _libsystem.mmap(
+        None, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0
+    )
     if addr == MAP_FAILED or addr == 0:
         raise OSError("mmap failed")
 
     # Write a sentinel through the writable mapping.
-    ctypes.memmove(addr, b"\xAA" * size, size)
+    ctypes.memmove(addr, b"\xaa" * size, size)
 
     # Drop write permission via mprotect.
     libc_mprotect = _libsystem.mprotect

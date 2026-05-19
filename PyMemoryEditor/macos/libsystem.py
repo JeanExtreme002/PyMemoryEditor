@@ -48,8 +48,11 @@ libsystem.task_for_pid.restype = kern_return_t
 #     mach_vm_address_t   data,        /* local buffer address */
 #     mach_vm_size_t     *outsize);
 libsystem.mach_vm_read_overwrite.argtypes = (
-    task_t, mach_vm_address_t, mach_vm_size_t,
-    mach_vm_address_t, POINTER(mach_vm_size_t),
+    task_t,
+    mach_vm_address_t,
+    mach_vm_size_t,
+    mach_vm_address_t,
+    POINTER(mach_vm_size_t),
 )
 libsystem.mach_vm_read_overwrite.restype = kern_return_t
 
@@ -59,8 +62,10 @@ libsystem.mach_vm_read_overwrite.restype = kern_return_t
 #     pointer_t               data,
 #     mach_msg_type_number_t  data_count);
 libsystem.mach_vm_write.argtypes = (
-    vm_map_t, mach_vm_address_t,
-    mach_vm_address_t, mach_msg_type_number_t,
+    vm_map_t,
+    mach_vm_address_t,
+    mach_vm_address_t,
+    mach_msg_type_number_t,
 )
 libsystem.mach_vm_write.restype = kern_return_t
 
@@ -73,9 +78,13 @@ libsystem.mach_vm_write.restype = kern_return_t
 #     mach_msg_type_number_t *info_count,
 #     mach_port_t            *object_name);
 libsystem.mach_vm_region.argtypes = (
-    vm_map_t, POINTER(mach_vm_address_t), POINTER(mach_vm_size_t),
-    ctypes.c_int, POINTER(vm_region_basic_info_64),
-    POINTER(mach_msg_type_number_t), POINTER(mach_port_t),
+    vm_map_t,
+    POINTER(mach_vm_address_t),
+    POINTER(mach_vm_size_t),
+    ctypes.c_int,
+    POINTER(vm_region_basic_info_64),
+    POINTER(mach_msg_type_number_t),
+    POINTER(mach_port_t),
 )
 libsystem.mach_vm_region.restype = kern_return_t
 
@@ -86,8 +95,11 @@ libsystem.mach_vm_region.restype = kern_return_t
 #     boolean_t           set_maximum,
 #     vm_prot_t           new_protection);
 libsystem.mach_vm_protect.argtypes = (
-    vm_map_t, mach_vm_address_t, mach_vm_size_t,
-    ctypes.c_int, ctypes.c_int,
+    vm_map_t,
+    mach_vm_address_t,
+    mach_vm_size_t,
+    ctypes.c_int,
+    ctypes.c_int,
 )
 libsystem.mach_vm_protect.restype = kern_return_t
 

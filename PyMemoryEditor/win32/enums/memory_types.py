@@ -6,6 +6,7 @@ class MemoryTypesEnum(Enum):
     """
     Enum with all types of a memory page.
     """
+
     # Indicates that the memory pages within the region are mapped into the view of an image section.
     MEM_IMAGE = 0x1000000
 

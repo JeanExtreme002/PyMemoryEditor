@@ -25,7 +25,7 @@ def test_version_exposed():
 def test_open_invalid_pid_raises():
     # 2**31 - 1 is a very large pid unlikely to exist; psutil rejects negative.
     with pytest.raises(ProcessIDNotExistsError):
-        OpenProcess(pid=2 ** 31 - 1)
+        OpenProcess(pid=2**31 - 1)
 
 
 def test_all_errors_inherit_from_base():

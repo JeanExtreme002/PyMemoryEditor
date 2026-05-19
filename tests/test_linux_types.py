@@ -27,18 +27,18 @@ def test_struct_holds_64bit_address():
 
 
 def test_struct_holds_region_larger_than_4gb():
-    huge_size = (5 * 1024 ** 3)  # 5 GB
+    huge_size = 5 * 1024**3  # 5 GB
     region = MEMORY_BASIC_INFORMATION(0, huge_size, b"r--p", 0, 0, 0, 0, b"")
     assert region.RegionSize == huge_size
 
 
 def test_struct_holds_large_inode():
-    big_inode = 2 ** 40
+    big_inode = 2**40
     region = MEMORY_BASIC_INFORMATION(0, 0x1000, b"r--p", 0, 0, 0, big_inode, b"")
     assert region.InodeID == big_inode
 
 
 def test_struct_holds_offset_above_4gb():
-    big_offset = 8 * 1024 ** 3  # 8 GB offset (large mmap'd file)
+    big_offset = 8 * 1024**3  # 8 GB offset (large mmap'd file)
     region = MEMORY_BASIC_INFORMATION(0, 0x1000, b"r--p", big_offset, 0, 0, 0, b"")
     assert region.Offset == big_offset

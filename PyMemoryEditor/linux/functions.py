@@ -34,7 +34,9 @@ T = TypeVar("T")
 _PAGE_GONE_ERRNOS = frozenset((errno_mod.EFAULT, errno_mod.ENOMEM))
 
 
-def _process_vm_readv(pid: int, local_address: int, remote_address: int, length: int) -> int:
+def _process_vm_readv(
+    pid: int, local_address: int, remote_address: int, length: int
+) -> int:
     """
     Wrapper for process_vm_readv that raises OSError on failure.
     Returns the number of bytes read.
@@ -50,7 +52,9 @@ def _process_vm_readv(pid: int, local_address: int, remote_address: int, length:
     return result
 
 
-def _process_vm_writev(pid: int, local_address: int, remote_address: int, length: int) -> int:
+def _process_vm_writev(
+    pid: int, local_address: int, remote_address: int, length: int
+) -> int:
     """
     Wrapper for process_vm_writev that raises OSError on failure.
     Returns the number of bytes written.
@@ -76,10 +80,14 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
         for line in mapping_file:
             region_information = line.split()
 
-            addressing_range, privileges, offset, device, inode = region_information[0: 5]
+            addressing_range, privileges, offset, device, inode = region_information[
+                0:5
+            ]
             path = region_information[5] if len(region_information) >= 6 else ""
 
-            start_address, end_address = [int(addr, 16) for addr in addressing_range.split("-")]
+            start_address, end_address = [
+                int(addr, 16) for addr in addressing_range.split("-")
+            ]
             major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
 
             offset = int(offset, 16)
@@ -88,18 +96,23 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
             size = end_address - start_address
 
             region = MEMORY_BASIC_INFORMATION(
-                start_address, size, privileges.encode(), offset,
-                major_id, minor_id, inode, path.encode(),
+                start_address,
+                size,
+                privileges.encode(),
+                offset,
+                major_id,
+                minor_id,
+                inode,
+                path.encode(),
             )
-            yield {"address": start_address, "size": region.RegionSize, "struct": region}
+            yield {
+                "address": start_address,
+                "size": region.RegionSize,
+                "struct": region,
+            }
 
 
-def read_process_memory(
-    pid: int,
-    address: int,
-    pytype: Type[T],
-    bufflength: int
-) -> T:
+def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int) -> T:
     """
     Return a value from a memory address.
     """
@@ -143,7 +156,9 @@ def search_addresses_by_value(
     memory_total = 0
     filtered_regions = []
 
-    source_regions = memory_regions if memory_regions is not None else get_memory_regions(pid)
+    source_regions = (
+        memory_regions if memory_regions is not None else get_memory_regions(pid)
+    )
     for region in source_regions:
         privileges = region["struct"].Privileges
         if b"r" not in privileges:
@@ -177,20 +192,33 @@ def search_addresses_by_value(
             chunk_data = (ctypes.c_byte * chunk_size)()
 
             try:
-                _process_vm_readv(pid, addressof(chunk_data), chunk_address, sizeof(chunk_data))
+                _process_vm_readv(
+                    pid, addressof(chunk_data), chunk_address, sizeof(chunk_data)
+                )
             except OSError as read_error:
                 if read_error.errno in _PAGE_GONE_ERRNOS:
                     continue
                 raise
 
-            for offset in searching_method(chunk_data, chunk_size, target_value_bytes, bufflength, scan_type, pytype is str):
+            for offset in searching_method(
+                chunk_data,
+                chunk_size,
+                target_value_bytes,
+                bufflength,
+                scan_type,
+                pytype is str,
+            ):
                 found_address = chunk_address + offset
 
                 if progress_information:
-                    yield (found_address, {
-                        "memory_total": memory_total,
-                        "progress": (checked_memory_size + chunk_offset + offset) / memory_total,
-                    })
+                    yield (
+                        found_address,
+                        {
+                            "memory_total": memory_total,
+                            "progress": (checked_memory_size + chunk_offset + offset)
+                            / memory_total,
+                        },
+                    )
                 else:
                     yield found_address
 
@@ -256,24 +284,34 @@ def search_values_by_addresses(
             chunk_data = (ctypes.c_byte * read_size)()
 
             try:
-                _process_vm_readv(pid, addressof(chunk_data), chunk_address, sizeof(chunk_data))
+                _process_vm_readv(
+                    pid, addressof(chunk_data), chunk_address, sizeof(chunk_data)
+                )
             except OSError as read_error:
                 transient = read_error.errno in _PAGE_GONE_ERRNOS
                 if not transient and raise_error:
                     raise
-                while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+                while (
+                    address_index < len(addresses)
+                    and chunk_address <= addresses[address_index] < chunk_end
+                ):
                     yield addresses[address_index], None
                     address_index += 1
                 continue
 
-            while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+            while (
+                address_index < len(addresses)
+                and chunk_address <= addresses[address_index] < chunk_end
+            ):
                 target_address = addresses[address_index]
                 offset_in_chunk = target_address - chunk_address
 
                 try:
-                    data = chunk_data[offset_in_chunk: offset_in_chunk + bufflength]
+                    data = chunk_data[offset_in_chunk : offset_in_chunk + bufflength]
                     data = (ctypes.c_byte * bufflength)(*data)
-                    yield target_address, convert_from_byte_array(data, pytype, bufflength)
+                    yield target_address, convert_from_byte_array(
+                        data, pytype, bufflength
+                    )
 
                 except (ValueError, UnicodeDecodeError, OSError) as error:
                     if raise_error:
@@ -288,7 +326,7 @@ def write_process_memory(
     address: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes]
+    value: Union[bool, int, float, str, bytes],
 ) -> Union[bool, int, float, str, bytes]:
     """
     Write a value to a memory address.

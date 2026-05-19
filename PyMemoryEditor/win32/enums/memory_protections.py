@@ -6,6 +6,7 @@ class MemoryProtectionsEnum(Enum):
     """
     Enum with all protections for a memory page.
     """
+
     # Enables execute access to the committed region of pages. An attempt to write to the committed
     # region results in an access violation. This flag is not supported by the CreateFileMapping function.
     PAGE_EXECUTE = 0x10
@@ -57,7 +58,9 @@ class MemoryProtectionsEnum(Enum):
     PAGE_READWRITE = 0x04
 
     # Indicates memory page is readable. (Custom constant)
-    PAGE_READABLE = PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_READWRITE | PAGE_READONLY
+    PAGE_READABLE = (
+        PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_READWRITE | PAGE_READONLY
+    )
 
     # Indicates memory page is readable and writeable. (Custom constant)
     PAGE_READWRITEABLE = PAGE_EXECUTE_READWRITE | PAGE_READWRITE

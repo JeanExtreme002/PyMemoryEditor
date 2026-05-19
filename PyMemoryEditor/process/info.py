@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 
 from .errors import ProcessIDNotExistsError, ProcessNotFoundError, WindowNotFoundError
-from .util import get_process_id_by_process_name, get_process_id_by_window_title, pid_exists
+from .util import (
+    get_process_id_by_process_name,
+    get_process_id_by_window_title,
+    pid_exists,
+)
 
 
 class ProcessInfo(object):
@@ -39,8 +43,12 @@ class ProcessInfo(object):
     def process_name(self, process_name: str) -> None:
         self.set_process_name(process_name)
 
-    def set_process_name(self, process_name: str, *, case_sensitive: bool = True) -> None:
-        pid = get_process_id_by_process_name(process_name, case_sensitive=case_sensitive)
+    def set_process_name(
+        self, process_name: str, *, case_sensitive: bool = True
+    ) -> None:
+        pid = get_process_id_by_process_name(
+            process_name, case_sensitive=case_sensitive
+        )
         if pid is None:
             raise ProcessNotFoundError(process_name)
 

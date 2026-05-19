@@ -96,7 +96,9 @@ class WindowsProcess(AbstractProcess):
 
         self.__permission_value = _permission_value(permission)
 
-        self.__process_handle = GetProcessHandle(self.__permission_value, False, self.pid)
+        self.__process_handle = GetProcessHandle(
+            self.__permission_value, False, self.pid
+        )
 
     def __require_open(self) -> None:
         if self.__closed:
@@ -140,8 +142,12 @@ class WindowsProcess(AbstractProcess):
         self.__require_open()
         self.__require_read()
         return SearchValuesByAddresses(
-            self.__process_handle, pytype, resolve_bufflength(pytype, bufflength), addresses,
-            memory_regions=memory_regions, raise_error=raise_error,
+            self.__process_handle,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            addresses,
+            memory_regions=memory_regions,
+            raise_error=raise_error,
         )
 
     def search_by_value(
@@ -159,11 +165,18 @@ class WindowsProcess(AbstractProcess):
         self.__require_read()
 
         if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
-            raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
+            raise ValueError(
+                "Use the method search_by_value_between(...) to search within a range of values."
+            )
 
         return SearchAddressesByValue(
-            self.__process_handle, pytype, resolve_bufflength(pytype, bufflength), value,
-            scan_type, progress_information, writeable_only,
+            self.__process_handle,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            value,
+            scan_type,
+            progress_information,
+            writeable_only,
             memory_regions=memory_regions,
         )
 
@@ -182,10 +195,19 @@ class WindowsProcess(AbstractProcess):
         self.__require_open()
         self.__require_read()
 
-        scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
+        scan_type = (
+            ScanTypesEnum.NOT_VALUE_BETWEEN
+            if not_between
+            else ScanTypesEnum.VALUE_BETWEEN
+        )
         return SearchAddressesByValue(
-            self.__process_handle, pytype, resolve_bufflength(pytype, bufflength), (start, end),
-            scan_type, progress_information, writeable_only,
+            self.__process_handle,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            (start, end),
+            scan_type,
+            progress_information,
+            writeable_only,
             memory_regions=memory_regions,
         )
 
@@ -197,7 +219,12 @@ class WindowsProcess(AbstractProcess):
     ) -> T:
         self.__require_open()
         self.__require_read()
-        return ReadProcessMemory(self.__process_handle, address, pytype, resolve_bufflength(pytype, bufflength))
+        return ReadProcessMemory(
+            self.__process_handle,
+            address,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+        )
 
     def write_process_memory(
         self,
@@ -208,4 +235,10 @@ class WindowsProcess(AbstractProcess):
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
         self.__require_write()
-        return WriteProcessMemory(self.__process_handle, address, pytype, resolve_bufflength(pytype, bufflength), value)
+        return WriteProcessMemory(
+            self.__process_handle,
+            address,
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            value,
+        )

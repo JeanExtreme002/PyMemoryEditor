@@ -1,6 +1,16 @@
 # -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
-from typing import Dict, Generator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import (
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 
 from ..enums import ScanTypesEnum
 from ..process.info import ProcessInfo
@@ -40,10 +50,14 @@ class AbstractProcess(ABC):
             self._process_info.window_title = window_title
 
         elif process_name:
-            self._process_info.set_process_name(process_name, case_sensitive=case_sensitive)
+            self._process_info.set_process_name(
+                process_name, case_sensitive=case_sensitive
+            )
 
         else:
-            raise TypeError("You must pass an argument to one of these parameters (window_title, process_name, pid).")
+            raise TypeError(
+                "You must pass an argument to one of these parameters (window_title, process_name, pid)."
+            )
 
     def __enter__(self):
         return self

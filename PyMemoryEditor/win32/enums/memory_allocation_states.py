@@ -6,6 +6,7 @@ class MemoryAllocationStatesEnum(Enum):
     """
     Enum with all states of a memory page allocation.
     """
+
     # Indicates committed pages for which physical storage has been allocated,
     # either in memory or in the paging file on disk.
     MEM_COMMIT = 0x1000

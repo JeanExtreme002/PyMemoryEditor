@@ -70,7 +70,8 @@ def get_task_for_pid(pid: int) -> int:
             "task_for_pid(%d) failed with kern_return_t=%d (%s). "
             "On macOS, opening other processes requires the Python binary "
             "to be signed with the com.apple.security.cs.debugger entitlement, "
-            "or to run with SIP disabled and as root." % (pid, kr, mach_error_message(kr))
+            "or to run with SIP disabled and as root."
+            % (pid, kr, mach_error_message(kr))
         )
 
     return task.value
@@ -96,9 +97,13 @@ def get_memory_regions(task: int) -> Generator[dict, None, None]:
         object_name = mach_port_t(0)
 
         kr = libsystem.mach_vm_region(
-            task, ctypes.byref(address), ctypes.byref(size),
-            VM_REGION_BASIC_INFO_64, ctypes.byref(info),
-            ctypes.byref(info_count), ctypes.byref(object_name),
+            task,
+            ctypes.byref(address),
+            ctypes.byref(size),
+            VM_REGION_BASIC_INFO_64,
+            ctypes.byref(info),
+            ctypes.byref(info_count),
+            ctypes.byref(object_name),
         )
 
         if kr != KERN_SUCCESS:
@@ -109,9 +114,12 @@ def get_memory_regions(task: int) -> Generator[dict, None, None]:
             libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
 
         region_struct = MEMORY_BASIC_INFORMATION(
-            address.value, size.value,
-            info.protection, info.max_protection,
-            info.shared, info.reserved,
+            address.value,
+            size.value,
+            info.protection,
+            info.max_protection,
+            info.shared,
+            info.reserved,
         )
 
         yield {
@@ -142,10 +150,17 @@ def _mach_read(task: int, address: int, local_buffer_address: int, size: int) ->
     """Read `size` bytes from `address` into `local_buffer_address`. Raises on failure."""
     out_size = mach_vm_size_t(0)
     kr = libsystem.mach_vm_read_overwrite(
-        task, address, size, local_buffer_address, ctypes.byref(out_size),
+        task,
+        address,
+        size,
+        local_buffer_address,
+        ctypes.byref(out_size),
     )
     if kr != KERN_SUCCESS:
-        raise MachReadError(kr, "mach_vm_read_overwrite failed: %s (kr=%d)" % (mach_error_message(kr), kr))
+        raise MachReadError(
+            kr,
+            "mach_vm_read_overwrite failed: %s (kr=%d)" % (mach_error_message(kr), kr),
+        )
     return out_size.value
 
 
@@ -179,13 +194,17 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
     if protect_kr != KERN_SUCCESS:
         raise OSError(
             "mach_vm_write failed (kr=%d) and mach_vm_protect could not elevate "
-            "the protection (kr=%d, %s)." % (kr, protect_kr, mach_error_message(protect_kr))
+            "the protection (kr=%d, %s)."
+            % (kr, protect_kr, mach_error_message(protect_kr))
         )
 
     try:
         kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
         if kr != KERN_SUCCESS:
-            raise OSError("mach_vm_write failed after protect: %s (kr=%d)" % (mach_error_message(kr), kr))
+            raise OSError(
+                "mach_vm_write failed after protect: %s (kr=%d)"
+                % (mach_error_message(kr), kr)
+            )
     finally:
         # Best-effort restore. Ignore failures — we already succeeded with the write.
         libsystem.mach_vm_protect(task, address, size, 0, original_protection)
@@ -200,9 +219,13 @@ def _query_region(task: int, address: int):
     object_name = mach_port_t(0)
 
     kr = libsystem.mach_vm_region(
-        task, ctypes.byref(addr), ctypes.byref(size),
-        VM_REGION_BASIC_INFO_64, ctypes.byref(info),
-        ctypes.byref(info_count), ctypes.byref(object_name),
+        task,
+        ctypes.byref(addr),
+        ctypes.byref(size),
+        VM_REGION_BASIC_INFO_64,
+        ctypes.byref(info),
+        ctypes.byref(info_count),
+        ctypes.byref(object_name),
     )
 
     if kr != KERN_SUCCESS:
@@ -220,9 +243,12 @@ def _query_region(task: int, address: int):
         "address": addr.value,
         "size": size.value,
         "struct": MEMORY_BASIC_INFORMATION(
-            addr.value, size.value,
-            info.protection, info.max_protection,
-            info.shared, info.reserved,
+            addr.value,
+            size.value,
+            info.protection,
+            info.max_protection,
+            info.shared,
+            info.reserved,
         ),
     }
 
@@ -292,7 +318,9 @@ def search_addresses_by_value(
     filtered_regions = []
     memory_total = 0
 
-    source_regions = memory_regions if memory_regions is not None else get_memory_regions(task)
+    source_regions = (
+        memory_regions if memory_regions is not None else get_memory_regions(task)
+    )
     for region in source_regions:
         protection = region["struct"].Protection
         if protection & VM_PROT_READ == 0:
@@ -322,20 +350,33 @@ def search_addresses_by_value(
             chunk_data = (ctypes.c_byte * chunk_size)()
 
             try:
-                _mach_read(task, chunk_address, ctypes.addressof(chunk_data), chunk_size)
+                _mach_read(
+                    task, chunk_address, ctypes.addressof(chunk_data), chunk_size
+                )
             except MachReadError as read_error:
                 if read_error.kr in _PAGE_GONE_KRS:
                     continue
                 raise
 
-            for offset in searching_method(chunk_data, chunk_size, target_value_bytes, bufflength, scan_type, pytype is str):
+            for offset in searching_method(
+                chunk_data,
+                chunk_size,
+                target_value_bytes,
+                bufflength,
+                scan_type,
+                pytype is str,
+            ):
                 found_address = chunk_address + offset
 
                 if progress_information:
-                    yield (found_address, {
-                        "memory_total": memory_total,
-                        "progress": (checked_memory_size + chunk_offset + offset) / memory_total,
-                    })
+                    yield (
+                        found_address,
+                        {
+                            "memory_total": memory_total,
+                            "progress": (checked_memory_size + chunk_offset + offset)
+                            / memory_total,
+                        },
+                    )
                 else:
                     yield found_address
 
@@ -406,19 +447,27 @@ def search_values_by_addresses(
                 transient = read_error.kr in _PAGE_GONE_KRS
                 if not transient and raise_error:
                     raise
-                while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+                while (
+                    address_index < len(addresses)
+                    and chunk_address <= addresses[address_index] < chunk_end
+                ):
                     yield addresses[address_index], None
                     address_index += 1
                 continue
 
-            while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+            while (
+                address_index < len(addresses)
+                and chunk_address <= addresses[address_index] < chunk_end
+            ):
                 target_address = addresses[address_index]
                 offset_in_chunk = target_address - chunk_address
 
                 try:
-                    data = chunk_data[offset_in_chunk: offset_in_chunk + bufflength]
+                    data = chunk_data[offset_in_chunk : offset_in_chunk + bufflength]
                     data = (ctypes.c_byte * bufflength)(*data)
-                    yield target_address, convert_from_byte_array(data, pytype, bufflength)
+                    yield target_address, convert_from_byte_array(
+                        data, pytype, bufflength
+                    )
 
                 except (ValueError, UnicodeDecodeError, OSError) as error:
                     if raise_error:

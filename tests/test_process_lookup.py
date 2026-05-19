@@ -29,6 +29,7 @@ def fake_process_iter(monkeypatch):
             "process_iter",
             lambda fields=None: iter(processes),
         )
+
     return install
 
 
@@ -43,11 +44,13 @@ def test_returns_pid_on_single_match(fake_process_iter):
 
 
 def test_raises_ambiguous_on_multiple_matches(fake_process_iter):
-    fake_process_iter([
-        _FakeProcess("python", 100),
-        _FakeProcess("python", 200),
-        _FakeProcess("bash", 300),
-    ])
+    fake_process_iter(
+        [
+            _FakeProcess("python", 100),
+            _FakeProcess("python", 200),
+            _FakeProcess("bash", 300),
+        ]
+    )
     with pytest.raises(AmbiguousProcessNameError) as exc:
         lookup.get_process_id_by_process_name("python")
 
@@ -63,15 +66,21 @@ def test_case_sensitive_default_distinguishes(fake_process_iter):
 
 def test_case_insensitive_matches(fake_process_iter):
     fake_process_iter([_FakeProcess("Notepad.exe", 42)])
-    assert lookup.get_process_id_by_process_name("notepad.exe", case_sensitive=False) == 42
-    assert lookup.get_process_id_by_process_name("NOTEPAD.EXE", case_sensitive=False) == 42
+    assert (
+        lookup.get_process_id_by_process_name("notepad.exe", case_sensitive=False) == 42
+    )
+    assert (
+        lookup.get_process_id_by_process_name("NOTEPAD.EXE", case_sensitive=False) == 42
+    )
 
 
 def test_get_process_ids_returns_full_list(fake_process_iter):
-    fake_process_iter([
-        _FakeProcess("python", 100),
-        _FakeProcess("python", 200),
-    ])
+    fake_process_iter(
+        [
+            _FakeProcess("python", 100),
+            _FakeProcess("python", 200),
+        ]
+    )
     pids = lookup.get_process_ids_by_process_name("python")
     assert pids == [100, 200]
 

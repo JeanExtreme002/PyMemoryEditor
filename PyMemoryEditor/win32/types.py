@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 
-from ctypes import Structure, WINFUNCTYPE, c_bool, c_ulonglong, c_void_p, sizeof, wintypes
+from ctypes import (
+    Structure,
+    WINFUNCTYPE,
+    c_bool,
+    c_ulonglong,
+    c_void_p,
+    sizeof,
+    wintypes,
+)
 
 
 class MEMORY_BASIC_INFORMATION_32(Structure):
@@ -50,7 +58,11 @@ class SYSTEM_INFO(Structure):
 # 32-bit target — common with legacy games), prefer
 # `mbi_class_for_handle(handle)` from PyMemoryEditor.win32.functions, which
 # dispatches based on IsWow64Process.
-MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION_64 if sizeof(c_void_p) == 8 else MEMORY_BASIC_INFORMATION_32
+MEMORY_BASIC_INFORMATION = (
+    MEMORY_BASIC_INFORMATION_64
+    if sizeof(c_void_p) == 8
+    else MEMORY_BASIC_INFORMATION_32
+)
 
 # For EnumWindows and EnumDesktopWindows functions.
 WNDENUMPROC = WINFUNCTYPE(c_bool, wintypes.HWND, wintypes.LPARAM)
