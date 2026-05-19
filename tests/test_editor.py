@@ -292,7 +292,10 @@ def test_search_by_string():
             try:
                 value = process.read_process_memory(found_address, str, data_length)
                 if value == target_value.value.decode(): correct += 1
-            except: pass
+            except (OSError, ValueError, UnicodeDecodeError):
+                # The address may belong to another region by the time we read
+                # it back, or hold non-decodable bytes. Either way, skip it.
+                pass
 
     assert found / test_length >= 0.7
     assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.

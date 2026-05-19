@@ -9,9 +9,10 @@ class ProcessInfo(object):
     Class to save information of a process.
     """
 
-    __pid = 0
-    __process_name = ""
-    __window_title = ""
+    def __init__(self) -> None:
+        self.__pid: int = -1
+        self.__process_name: str = ""
+        self.__window_title: str = ""
 
     @property
     def pid(self) -> int:
@@ -19,14 +20,16 @@ class ProcessInfo(object):
 
     @pid.setter
     def pid(self, pid: int) -> None:
-
-        # Check if the value is an integer.
         if not isinstance(pid, int):
             raise ValueError("The process ID must be an integer.")
 
-        # Check if the PID exists and instantiate it.
-        if pid_exists(pid): self.__pid = pid
-        else: raise ProcessIDNotExistsError(pid)
+        if pid < 0:
+            raise ValueError("The process ID must be non-negative.")
+
+        if not pid_exists(pid):
+            raise ProcessIDNotExistsError(pid)
+
+        self.__pid = pid
 
     @property
     def process_name(self) -> str:
@@ -34,12 +37,13 @@ class ProcessInfo(object):
 
     @process_name.setter
     def process_name(self, process_name: str) -> None:
+        self.set_process_name(process_name)
 
-        # Get the process ID.
-        pid = get_process_id_by_process_name(process_name)
-        if not pid: raise ProcessNotFoundError(process_name)
+    def set_process_name(self, process_name: str, *, case_sensitive: bool = True) -> None:
+        pid = get_process_id_by_process_name(process_name, case_sensitive=case_sensitive)
+        if pid is None:
+            raise ProcessNotFoundError(process_name)
 
-        # Set the PID and process name.
         self.__pid = pid
         self.__process_name = process_name
 
@@ -49,11 +53,9 @@ class ProcessInfo(object):
 
     @window_title.setter
     def window_title(self, window_title: str) -> None:
-
-        # Get the process ID.
         pid = get_process_id_by_window_title(window_title)
-        if not pid: raise WindowNotFoundError(window_title)
+        if not pid:
+            raise WindowNotFoundError(window_title)
 
-        # Set the PID and the window title.
         self.__pid = pid
         self.__window_title = window_title

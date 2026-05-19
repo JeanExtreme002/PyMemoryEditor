@@ -1,0 +1,428 @@
+# -*- coding: utf-8 -*-
+
+"""
+macOS (Mach) implementation of read/write/search primitives. Parallels
+linux/functions.py and win32/functions.py.
+"""
+
+import ctypes
+import os
+from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+
+from ..enums import ScanTypesEnum
+from ..util import (
+    convert_from_byte_array,
+    get_c_type_of,
+    iter_region_chunks,
+    scan_memory,
+    scan_memory_for_exact_value,
+    values_to_bytes,
+)
+
+from .libsystem import libsystem, mach_error_message, mach_task_self_
+from .types import (
+    KERN_INVALID_ADDRESS,
+    KERN_PROTECTION_FAILURE,
+    KERN_SUCCESS,
+    MEMORY_BASIC_INFORMATION,
+    VM_PROT_COPY,
+    VM_PROT_READ,
+    VM_PROT_WRITE,
+    VM_REGION_BASIC_INFO_64,
+    VM_REGION_BASIC_INFO_COUNT_64,
+    mach_msg_type_number_t,
+    mach_port_t,
+    mach_vm_address_t,
+    mach_vm_size_t,
+    vm_region_basic_info_64,
+)
+
+
+# kern_return_t codes that may signal a read-only / protection issue we can fix
+# by elevating the protection. KERN_INVALID_ADDRESS is included because newer
+# macOS returns it (instead of KERN_PROTECTION_FAILURE) when mach_vm_write
+# refuses a write to a non-writable page even though the address is valid.
+_WRITE_RETRY_CODES = (KERN_PROTECTION_FAILURE, KERN_INVALID_ADDRESS)
+
+
+T = TypeVar("T")
+
+
+def get_task_for_pid(pid: int) -> int:
+    """
+    Return a Mach task port for the given pid.
+
+    For the current process, returns mach_task_self_ directly (no entitlement
+    needed). For other processes, calls task_for_pid(), which requires either:
+      - root + the same uid as the target, on older macOS, or
+      - the calling binary to be signed with the
+        `com.apple.security.cs.debugger` entitlement on modern macOS.
+    Without those, task_for_pid returns KERN_FAILURE (5).
+    """
+    if pid == os.getpid():
+        return mach_task_self_.value
+
+    task = mach_port_t(0)
+    kr = libsystem.task_for_pid(mach_task_self_.value, pid, ctypes.byref(task))
+
+    if kr != KERN_SUCCESS:
+        raise PermissionError(
+            "task_for_pid(%d) failed with kern_return_t=%d (%s). "
+            "On macOS, opening other processes requires the Python binary "
+            "to be signed with the com.apple.security.cs.debugger entitlement, "
+            "or to run with SIP disabled and as root." % (pid, kr, mach_error_message(kr))
+        )
+
+    return task.value
+
+
+def release_task(task: int) -> None:
+    """Release a task port. No-op for mach_task_self_."""
+    if task and task != mach_task_self_.value:
+        libsystem.mach_port_deallocate(mach_task_self_.value, task)
+
+
+def get_memory_regions(task: int) -> Generator[dict, None, None]:
+    """
+    Yield {address, size, struct} dicts describing each memory region of the task.
+    Stops when mach_vm_region returns a non-success code (typical end of address space).
+    """
+    address = mach_vm_address_t(0)
+
+    while True:
+        size = mach_vm_size_t(0)
+        info = vm_region_basic_info_64()
+        info_count = mach_msg_type_number_t(VM_REGION_BASIC_INFO_COUNT_64)
+        object_name = mach_port_t(0)
+
+        kr = libsystem.mach_vm_region(
+            task, ctypes.byref(address), ctypes.byref(size),
+            VM_REGION_BASIC_INFO_64, ctypes.byref(info),
+            ctypes.byref(info_count), ctypes.byref(object_name),
+        )
+
+        if kr != KERN_SUCCESS:
+            break
+
+        # mach_vm_region returns a port name for the backing object; release it.
+        if object_name.value:
+            libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
+
+        region_struct = MEMORY_BASIC_INFORMATION(
+            address.value, size.value,
+            info.protection, info.max_protection,
+            info.shared, info.reserved,
+        )
+
+        yield {
+            "address": address.value,
+            "size": size.value,
+            "struct": region_struct,
+        }
+
+        if size.value == 0:
+            break
+        address.value += size.value
+
+
+# kern_return_t codes that indicate a page is unmapped/unreadable but not a
+# genuine permission/configuration error — safe to skip during region scans.
+_PAGE_GONE_KRS = (KERN_INVALID_ADDRESS,)
+
+
+class MachReadError(OSError):
+    """OSError subclass that carries the underlying kern_return_t."""
+
+    def __init__(self, kr: int, message: str):
+        super().__init__(message)
+        self.kr = kr
+
+
+def _mach_read(task: int, address: int, local_buffer_address: int, size: int) -> int:
+    """Read `size` bytes from `address` into `local_buffer_address`. Raises on failure."""
+    out_size = mach_vm_size_t(0)
+    kr = libsystem.mach_vm_read_overwrite(
+        task, address, size, local_buffer_address, ctypes.byref(out_size),
+    )
+    if kr != KERN_SUCCESS:
+        raise MachReadError(kr, "mach_vm_read_overwrite failed: %s (kr=%d)" % (mach_error_message(kr), kr))
+    return out_size.value
+
+
+def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -> None:
+    """
+    Write `size` bytes from `local_buffer_address` to `address`.
+
+    On read-only pages, mach_vm_write returns KERN_PROTECTION_FAILURE. This
+    helper transparently elevates the page protection to RW (using VM_PROT_COPY
+    so the change is private to the target task), performs the write, and
+    restores the original protection. This mirrors the practical behavior of
+    WriteProcessMemory on Windows.
+    """
+    kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
+    if kr == KERN_SUCCESS:
+        return
+
+    if kr not in _WRITE_RETRY_CODES:
+        raise OSError("mach_vm_write failed: %s (kr=%d)" % (mach_error_message(kr), kr))
+
+    # Try to discover the page's original protection so we can restore it.
+    region = _query_region(task, address)
+    if region is None:
+        # The address really is invalid — surface the original error.
+        raise OSError("mach_vm_write failed: %s (kr=%d)" % (mach_error_message(kr), kr))
+
+    original_protection = region["struct"].Protection
+
+    new_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY
+    protect_kr = libsystem.mach_vm_protect(task, address, size, 0, new_protection)
+    if protect_kr != KERN_SUCCESS:
+        raise OSError(
+            "mach_vm_write failed (kr=%d) and mach_vm_protect could not elevate "
+            "the protection (kr=%d, %s)." % (kr, protect_kr, mach_error_message(protect_kr))
+        )
+
+    try:
+        kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
+        if kr != KERN_SUCCESS:
+            raise OSError("mach_vm_write failed after protect: %s (kr=%d)" % (mach_error_message(kr), kr))
+    finally:
+        # Best-effort restore. Ignore failures — we already succeeded with the write.
+        libsystem.mach_vm_protect(task, address, size, 0, original_protection)
+
+
+def _query_region(task: int, address: int):
+    """Return the region containing `address`, or None when the query fails."""
+    addr = mach_vm_address_t(address)
+    size = mach_vm_size_t(0)
+    info = vm_region_basic_info_64()
+    info_count = mach_msg_type_number_t(VM_REGION_BASIC_INFO_COUNT_64)
+    object_name = mach_port_t(0)
+
+    kr = libsystem.mach_vm_region(
+        task, ctypes.byref(addr), ctypes.byref(size),
+        VM_REGION_BASIC_INFO_64, ctypes.byref(info),
+        ctypes.byref(info_count), ctypes.byref(object_name),
+    )
+
+    if kr != KERN_SUCCESS:
+        return None
+
+    if object_name.value:
+        libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
+
+    # mach_vm_region advances `addr` to the start of the containing region;
+    # only return it when the caller's address actually lies inside.
+    if not (addr.value <= address < addr.value + size.value):
+        return None
+
+    return {
+        "address": addr.value,
+        "size": size.value,
+        "struct": MEMORY_BASIC_INFORMATION(
+            addr.value, size.value,
+            info.protection, info.max_protection,
+            info.shared, info.reserved,
+        ),
+    }
+
+
+def read_process_memory(
+    task: int,
+    address: int,
+    pytype: Type[T],
+    bufflength: int,
+) -> T:
+    """Return a value from a memory address."""
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    data = get_c_type_of(pytype, bufflength)
+    _mach_read(task, address, ctypes.addressof(data), bufflength)
+
+    if pytype is str:
+        return bytes(data).decode("utf-8", errors="replace")
+    elif pytype is bytes:
+        return bytes(data)
+    else:
+        return data.value
+
+
+def write_process_memory(
+    task: int,
+    address: int,
+    pytype: Type[T],
+    bufflength: int,
+    value: Union[bool, int, float, str, bytes],
+) -> Union[bool, int, float, str, bytes]:
+    """Write a value to a memory address."""
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    data = get_c_type_of(pytype, bufflength)
+    data.value = value.encode() if isinstance(value, str) else value
+
+    _mach_write(task, address, ctypes.addressof(data), bufflength)
+    return value
+
+
+def search_addresses_by_value(
+    task: int,
+    pytype: Type[T],
+    bufflength: int,
+    value: Union[bool, int, float, str, bytes, tuple],
+    scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
+    progress_information: bool = False,
+    writeable_only: bool = False,
+    *,
+    memory_regions: Optional[Sequence[Dict]] = None,
+) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+    """
+    Walk every readable region of the task and yield addresses whose value
+    matches the scan criteria.
+
+    Passing a `memory_regions` snapshot skips region enumeration.
+    """
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    target_value_bytes = values_to_bytes(pytype, bufflength, value)
+
+    # Filter scannable regions and compute total size for progress reporting.
+    filtered_regions = []
+    memory_total = 0
+
+    source_regions = memory_regions if memory_regions is not None else get_memory_regions(task)
+    for region in source_regions:
+        protection = region["struct"].Protection
+        if protection & VM_PROT_READ == 0:
+            continue
+        if writeable_only and protection & VM_PROT_WRITE == 0:
+            continue
+        filtered_regions.append(region)
+        memory_total += region["size"]
+
+    memory_regions = filtered_regions
+    memory_regions.sort(key=lambda region: region["address"])
+
+    if memory_total == 0:
+        return
+
+    checked_memory_size = 0
+
+    searching_method = scan_memory
+    if scan_type in [ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE]:
+        searching_method = scan_memory_for_exact_value
+
+    for region in memory_regions:
+        address, size = region["address"], region["size"]
+
+        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
+            chunk_address = address + chunk_offset
+            chunk_data = (ctypes.c_byte * chunk_size)()
+
+            try:
+                _mach_read(task, chunk_address, ctypes.addressof(chunk_data), chunk_size)
+            except MachReadError as read_error:
+                if read_error.kr in _PAGE_GONE_KRS:
+                    continue
+                raise
+
+            for offset in searching_method(chunk_data, chunk_size, target_value_bytes, bufflength, scan_type, pytype is str):
+                found_address = chunk_address + offset
+
+                if progress_information:
+                    yield (found_address, {
+                        "memory_total": memory_total,
+                        "progress": (checked_memory_size + chunk_offset + offset) / memory_total,
+                    })
+                else:
+                    yield found_address
+
+        checked_memory_size += size
+
+
+def search_values_by_addresses(
+    task: int,
+    pytype: Type[T],
+    bufflength: int,
+    addresses: Sequence[int],
+    *,
+    memory_regions: Optional[Sequence[Dict]] = None,
+    raise_error: bool = False,
+) -> Generator[Tuple[int, Optional[T]], None, None]:
+    """
+    Read values at the provided addresses, grouped by region for syscall efficiency.
+
+    Memory is read in chunks (see iter_region_chunks) to bound allocation.
+    Chunks reading addresses near a boundary include `bufflength - 1` extra
+    bytes so values straddling the boundary are still decoded correctly.
+    """
+    if pytype not in [bool, int, float, str, bytes]:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    # `None` means "no snapshot provided, enumerate now". An empty list passed
+    # explicitly is honored verbatim — scanning nothing is a valid choice when
+    # the caller pre-filtered to zero regions.
+    if memory_regions is None:
+        memory_regions = []
+        for region in get_memory_regions(task):
+            if region["struct"].Protection & VM_PROT_READ == 0:
+                continue
+            memory_regions.append(region)
+    else:
+        memory_regions = list(memory_regions)
+
+    addresses = sorted(addresses)
+    memory_regions.sort(key=lambda region: region["address"])
+    address_index = 0
+
+    for region in memory_regions:
+        if address_index >= len(addresses):
+            break
+
+        base_address, size = region["address"], region["size"]
+
+        if not (base_address <= addresses[address_index] < base_address + size):
+            continue
+
+        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
+            if address_index >= len(addresses):
+                break
+
+            chunk_address = base_address + chunk_offset
+            chunk_end = chunk_address + chunk_size
+
+            if addresses[address_index] >= chunk_end:
+                continue
+
+            extra = bufflength - 1 if chunk_offset + chunk_size < size else 0
+            read_size = chunk_size + extra
+            chunk_data = (ctypes.c_byte * read_size)()
+
+            try:
+                _mach_read(task, chunk_address, ctypes.addressof(chunk_data), read_size)
+            except MachReadError as read_error:
+                transient = read_error.kr in _PAGE_GONE_KRS
+                if not transient and raise_error:
+                    raise
+                while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+                    yield addresses[address_index], None
+                    address_index += 1
+                continue
+
+            while address_index < len(addresses) and chunk_address <= addresses[address_index] < chunk_end:
+                target_address = addresses[address_index]
+                offset_in_chunk = target_address - chunk_address
+
+                try:
+                    data = chunk_data[offset_in_chunk: offset_in_chunk + bufflength]
+                    data = (ctypes.c_byte * bufflength)(*data)
+                    yield target_address, convert_from_byte_array(data, pytype, bufflength)
+
+                except (ValueError, UnicodeDecodeError, OSError) as error:
+                    if raise_error:
+                        raise error
+                    yield target_address, None
+
+                address_index += 1

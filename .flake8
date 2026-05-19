@@ -1,11 +1,11 @@
 [flake8]
 
 max-line-length = 130
-ignore = E701, E722
+# E701: multiple statements on one line (colon) — used pervasively as a style choice.
+# E722: do not use bare 'except'.
+# W503: line break before binary operator (black-compatible).
+ignore = E701, E722, W503
 
 per-file-ignores =
-    # __init__.py files are allowed to have unused imports and lines-too-long
-    */__init__.py:F401
-
-    # Unused imports are allowed in the tests/package.py module and they must come after setting the current working directory.
-    tests/package.py:F401, E402
+    # __init__.py files are allowed to have unused imports and lines-too-long.
+    */__init__.py:F401, E501

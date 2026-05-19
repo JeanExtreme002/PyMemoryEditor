@@ -62,24 +62,24 @@ venv-activate:
 	@echo "$(YELLOW)To activate virtual environment run:$(NC)"
 	@echo "source $(VENV_DIR)/bin/activate"
 
-# Install dependencies
+# Install dependencies (uses pyproject.toml — requirements.txt was removed in v2.0)
 .PHONY: install-deps
 install-deps:
-	@echo "$(GREEN)Installing dependencies...$(NC)"
-	$(PIP) install -r requirements.txt
+	@echo "$(GREEN)Installing runtime dependencies...$(NC)"
+	$(PIP) install -e .
 	@echo "$(GREEN)Dependencies installed successfully!$(NC)"
 
 # Install development dependencies
 .PHONY: install-dev
 install-dev:
 	@echo "$(GREEN)Installing development dependencies...$(NC)"
-	$(PIP) install -r requirements.txt
-	$(PIP) install pytest pytest-cov flake8 black mypy twine build hatch
+	$(PIP) install -e ".[dev]"
+	$(PIP) install pytest-cov mypy
 	@echo "$(GREEN)Development dependencies installed successfully!$(NC)"
 
 # Install package in development mode
 .PHONY: install
-install: install-deps
+install:
 	@echo "$(GREEN)Installing package in development mode...$(NC)"
 	$(PIP) install -e .
 	@echo "$(GREEN)Package installed successfully!$(NC)"
@@ -204,7 +204,7 @@ check-deps:
 .PHONY: update-deps
 update-deps:
 	@echo "$(GREEN)Updating dependencies...$(NC)"
-	$(PIP) install --upgrade -r requirements.txt
+	$(PIP) install --upgrade -e ".[dev]"
 	@echo "$(GREEN)Dependencies updated!$(NC)"
 
 # Security audit

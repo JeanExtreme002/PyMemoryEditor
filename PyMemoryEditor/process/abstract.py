@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
-from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Dict, Generator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.info import ProcessInfo
@@ -15,23 +15,32 @@ class AbstractProcess(ABC):
     """
 
     @abstractmethod
-    def __init__(self, *, window_title: Optional[str] = None, process_name: Optional[str] = None, pid: Optional[int] = None):
+    def __init__(
+        self,
+        *,
+        window_title: Optional[str] = None,
+        process_name: Optional[str] = None,
+        pid: Optional[int] = None,
+        case_sensitive: bool = True,
+    ):
         """
-        :param window_title: window title of the target program.
+        :param window_title: window title of the target program (Windows only).
         :param process_name: name of the target process.
         :param pid: process ID.
+        :param case_sensitive: when False, process_name matching ignores case
+            (recommended on Windows where process names are case-insensitive).
         """
         self._process_info = ProcessInfo()
 
         # Set the attributes to the process.
-        if pid:
+        if pid is not None:
             self._process_info.pid = pid
 
         elif window_title:
             self._process_info.window_title = window_title
 
         elif process_name:
-            self._process_info.process_name = process_name
+            self._process_info.set_process_name(process_name, case_sensitive=case_sensitive)
 
         else:
             raise TypeError("You must pass an argument to one of these parameters (window_title, process_name, pid).")
@@ -61,18 +70,33 @@ class AbstractProcess(ABC):
         """
         raise NotImplementedError()
 
+    def snapshot_memory_regions(self) -> List[Dict]:
+        """
+        Return a materialized snapshot of the process memory regions.
+
+        Pass the result as the `memory_regions` keyword to subsequent calls of
+        `search_by_value`, `search_by_value_between` or `search_by_addresses`
+        to skip the region enumeration. Useful for "scan → refine → refine"
+        workflows where the region map doesn't change between calls.
+        """
+        return list(self.get_memory_regions())
+
     @abstractmethod
     def search_by_addresses(
         self,
         pytype: Type[T],
-        bufflength: int,
+        bufflength: Optional[int],
         addresses: Sequence[int],
         *,
         raise_error: bool = False,
+        memory_regions: Optional[Sequence[Dict]] = None,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         """
         Search the whole memory space, accessible to the process,
         for the provided list of addresses, returning their values.
+
+        :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
+            Pass it to skip the region enumeration on hot iterative workflows.
         """
         raise NotImplementedError()
 
@@ -80,48 +104,49 @@ class AbstractProcess(ABC):
     def search_by_value(
         self,
         pytype: Type[T],
-        bufflength: int,
+        bufflength: Optional[int],
         value: Union[bool, int, float, str, bytes],
         scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
         progress_information: bool = False,
         writeable_only: bool = False,
+        memory_regions: Optional[Sequence[Dict]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
         for the provided value, returning the found addresses.
 
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
+        :param bufflength: value size in bytes (1, 2, 4, 8). For numeric types
+            (int, float, bool) you may pass None to use the default
+            (int→4, float→8, bool→1). str and bytes require an explicit value.
         :param value: value to be queried (bool, int, float, str or bytes).
         :param scan_type: the way to compare the values.
-        :param progress_information: if True, a dictionary with the progress information will be return.
+        :param progress_information: if True, a dictionary with the progress information will be returned.
         :param writeable_only: if True, search only at writeable memory regions.
+        :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
+            Pass it to skip the region enumeration on hot iterative workflows.
         """
         raise NotImplementedError()
 
+    @abstractmethod
     def search_by_value_between(
         self,
         pytype: Type[T],
-        bufflength: int,
+        bufflength: Optional[int],
         start: Union[bool, int, float, str, bytes],
         end: Union[bool, int, float, str, bytes],
         *,
         not_between: bool = False,
         progress_information: bool = False,
         writeable_only: bool = False,
+        memory_regions: Optional[Sequence[Dict]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
         for a value within the provided range, returning the found addresses.
 
-        :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
-        :param start: minimum inclusive value to be queried (bool, int, float, str or bytes).
-        :param end: maximum inclusive value to be queried (bool, int, float, str or bytes).
-        :param not_between: if True, return only addresses of values that are NOT within the range.
-        :param progress_information: if True, a dictionary with the progress information will be return.
-        :param writeable_only: if True, search only at writeable memory regions.
+        See `search_by_value` for parameter semantics.
         """
         raise NotImplementedError()
 
@@ -130,14 +155,16 @@ class AbstractProcess(ABC):
         self,
         address: int,
         pytype: Type[T],
-        bufflength: int
+        bufflength: Optional[int] = None,
     ) -> T:
         """
         Return a value from a memory address.
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
+        :param bufflength: value size in bytes (1, 2, 4, 8). For numeric types
+            (int, float, bool) you may omit this; defaults are int→4, float→8,
+            bool→1. str and bytes require an explicit size.
         """
         raise NotImplementedError()
 
@@ -146,15 +173,17 @@ class AbstractProcess(ABC):
         self,
         address: int,
         pytype: Type[T],
-        bufflength: int,
-        value: Union[bool, int, float, str, bytes]
-    ) -> T:
+        bufflength: Optional[int],
+        value: Union[bool, int, float, str, bytes],
+    ) -> Union[bool, int, float, str, bytes]:
         """
         Write a value to a memory address.
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of value to be written into memory (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8).
-        :param value: value to be written (bool, int, float, str or bytes).
+        :param bufflength: value size in bytes. For numeric types (int, float,
+            bool) you may pass None to use the default — int→4, float→8, bool→1.
+            str and bytes require an explicit size.
+        :param value: value to be written.
         """
         raise NotImplementedError()

@@ -1,32 +1,42 @@
 # -*- coding: utf-8 -*-
 
-class ClosedProcess(Exception):
-    def __str__(self):
-        return "Operation not allowed on a closed process."
+from typing import Iterable, List
 
 
-class ProcessIDNotExistsError(Exception):
+class PyMemoryEditorError(Exception):
+    """Base class for all PyMemoryEditor exceptions."""
 
+
+class ClosedProcess(PyMemoryEditorError):
+    def __init__(self) -> None:
+        super().__init__("Operation not allowed on a closed process.")
+
+
+class ProcessIDNotExistsError(PyMemoryEditorError):
     def __init__(self, pid: int):
-        self.__pid = pid
-
-    def __str__(self) -> str:
-        return "The process ID \"%i\" does not exist." % self.__pid
+        super().__init__("The process ID \"%i\" does not exist." % pid)
+        self.pid = pid
 
 
-class ProcessNotFoundError(Exception):
-
+class ProcessNotFoundError(PyMemoryEditorError):
     def __init__(self, process_name: str):
-        self.__process_name = process_name
-
-    def __str__(self) -> str:
-        return "Could not find the process \"%s\"." % self.__process_name
+        super().__init__("Could not find the process \"%s\"." % process_name)
+        self.process_name = process_name
 
 
-class WindowNotFoundError(Exception):
-
+class WindowNotFoundError(PyMemoryEditorError):
     def __init__(self, window_title: str):
-        self.__window_title = window_title
+        super().__init__("Could not find the window \"%s\"." % window_title)
+        self.window_title = window_title
 
-    def __str__(self) -> str:
-        return "Could not find the window \"%s\"." % self.__window_title
+
+class AmbiguousProcessNameError(PyMemoryEditorError):
+    """Raised when more than one process matches the provided name."""
+
+    def __init__(self, process_name: str, pids: Iterable[int]):
+        pid_list: List[int] = list(pids)
+        super().__init__(
+            "More than one process matches the name \"%s\": %s." % (process_name, pid_list)
+        )
+        self.process_name = process_name
+        self.pids = pid_list

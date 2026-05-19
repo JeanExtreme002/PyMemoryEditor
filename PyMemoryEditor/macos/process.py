@@ -6,9 +6,12 @@ from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
 from ..util import resolve_bufflength
+
 from .functions import (
     get_memory_regions,
+    get_task_for_pid,
     read_process_memory,
+    release_task,
     search_addresses_by_value,
     search_values_by_addresses,
     write_process_memory,
@@ -18,9 +21,14 @@ from .functions import (
 T = TypeVar("T")
 
 
-class LinuxProcess(AbstractProcess):
+class MacProcess(AbstractProcess):
     """
-    Class to open a Linux process for reading, writing and searching at its memory.
+    Class to open a macOS process for reading, writing and searching at its memory.
+
+    Note on entitlements: opening a process other than the current one requires
+    the Python binary to be signed with the `com.apple.security.cs.debugger`
+    entitlement (or SIP disabled and root). The current process always works
+    because we use `mach_task_self_` directly. See README for details.
     """
 
     def __init__(
@@ -33,15 +41,15 @@ class LinuxProcess(AbstractProcess):
         case_sensitive: bool = True,
     ):
         """
-        :param window_title: not supported on Linux (raises OSError).
+        :param window_title: not supported on macOS (raises OSError).
         :param process_name: name of the target process.
         :param pid: process ID.
         :param permission: accepted for cross-platform API parity; ignored on
-            Linux (access is governed by ptrace_scope and process ownership).
+            macOS (access is governed by entitlements / mach_task_self_).
         :param case_sensitive: when False, process_name matching ignores case.
         """
         if window_title is not None:
-            raise OSError("Opening a process by window title is not supported on Linux.")
+            raise OSError("Opening a process by window title is not supported on macOS.")
 
         super().__init__(
             window_title=None,
@@ -49,30 +57,28 @@ class LinuxProcess(AbstractProcess):
             pid=pid,
             case_sensitive=case_sensitive,
         )
-        self.__closed = False
         # `permission` is accepted but not used; kept for cross-platform parity.
         del permission
+
+        self.__closed = False
+        self.__task = get_task_for_pid(self.pid)
 
     def __require_open(self) -> None:
         if self.__closed:
             raise ClosedProcess()
 
     def close(self) -> bool:
+        if self.__closed:
+            return True
+
+        release_task(self.__task)
+        self.__task = 0
         self.__closed = True
         return True
 
     def get_memory_regions(self) -> Generator[dict, None, None]:
         self.__require_open()
-        return get_memory_regions(self.pid)
-
-    def read_process_memory(
-        self,
-        address: int,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-    ) -> T:
-        self.__require_open()
-        return read_process_memory(self.pid, address, pytype, resolve_bufflength(pytype, bufflength))
+        return get_memory_regions(self.__task)
 
     def search_by_addresses(
         self,
@@ -85,7 +91,7 @@ class LinuxProcess(AbstractProcess):
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
         return search_values_by_addresses(
-            self.pid, pytype, resolve_bufflength(pytype, bufflength), addresses,
+            self.__task, pytype, resolve_bufflength(pytype, bufflength), addresses,
             memory_regions=memory_regions, raise_error=raise_error,
         )
 
@@ -106,7 +112,7 @@ class LinuxProcess(AbstractProcess):
             raise ValueError("Use the method search_by_value_between(...) to search within a range of values.")
 
         return search_addresses_by_value(
-            self.pid, pytype, resolve_bufflength(pytype, bufflength), value,
+            self.__task, pytype, resolve_bufflength(pytype, bufflength), value,
             scan_type, progress_information, writeable_only,
             memory_regions=memory_regions,
         )
@@ -127,10 +133,19 @@ class LinuxProcess(AbstractProcess):
 
         scan_type = ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
         return search_addresses_by_value(
-            self.pid, pytype, resolve_bufflength(pytype, bufflength), (start, end),
+            self.__task, pytype, resolve_bufflength(pytype, bufflength), (start, end),
             scan_type, progress_information, writeable_only,
             memory_regions=memory_regions,
         )
+
+    def read_process_memory(
+        self,
+        address: int,
+        pytype: Type[T],
+        bufflength: Optional[int] = None,
+    ) -> T:
+        self.__require_open()
+        return read_process_memory(self.__task, address, pytype, resolve_bufflength(pytype, bufflength))
 
     def write_process_memory(
         self,
@@ -140,4 +155,4 @@ class LinuxProcess(AbstractProcess):
         value: Union[bool, int, float, str, bytes],
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
-        return write_process_memory(self.pid, address, pytype, resolve_bufflength(pytype, bufflength), value)
+        return write_process_memory(self.__task, address, pytype, resolve_bufflength(pytype, bufflength), value)

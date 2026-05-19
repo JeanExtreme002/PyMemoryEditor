@@ -17,7 +17,7 @@ keywords = [
     "reader",
     "editor",
     "override",
-    "win32", "api", "ctypes", "linux", "ptrace",
+    "win32", "api", "ctypes", "linux", "macos", "mach",
     "cheat", "scanner", "debug", "track",
     "readprocessmemory", "writeprocessmemory"
 ]
@@ -29,9 +29,8 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -42,19 +41,43 @@ classifiers = [
     "Topic :: System :: Monitoring"
 ]
 exclude = ["tests", ".flake8"]
-requires-python = ">=3.6"
-dependencies = ["psutil"]
+requires-python = ">=3.8"
+dependencies = ["psutil>=5.9,<7"]
 
 [project.optional-dependencies]
 tests = [
   "pytest",
 ]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "flake8",
+  "mypy",
+  "build",
+  "twine",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/JeanExtreme002/PyMemoryEditor"
 
+[tool.mypy]
+# The sample Tk app uses dynamic types that aren't worth annotating strictly.
+# Library code under PyMemoryEditor/ (excluding sample/) is the surface that
+# ships with `py.typed` and should aim for clean mypy output over time.
+exclude = ["PyMemoryEditor/sample/"]
+ignore_missing_imports = true
+# Initial pass: surface issues without immediately blocking CI. Tighten this
+# over time as the pre-existing type debt gets paid down.
+warn_unused_ignores = true
+
 [tool.hatch.version]
 path = "PyMemoryEditor/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["PyMemoryEditor"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"PyMemoryEditor/py.typed" = "PyMemoryEditor/py.typed"
 
 [build-system]
 requires = ["hatchling"]

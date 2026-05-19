@@ -4,10 +4,25 @@ from tkinter import Frame, Label, Listbox, Scrollbar, Tk
 from tkinter.ttk import Button, Entry, Style
 from typing import Optional
 
+import sys
+
+import psutil
+
 from PyMemoryEditor import OpenProcess, ProcessIDNotExistsError, ProcessNotFoundError
 from PyMemoryEditor.process import AbstractProcess
 
-import psutil
+# The sample app reads and writes process memory, so it requests the minimum
+# set of permissions required for both. The library default is read-only.
+if sys.platform == "win32":
+    from PyMemoryEditor import ProcessOperationsEnum
+    _SAMPLE_PERMISSION = (
+        ProcessOperationsEnum.PROCESS_VM_READ.value
+        | ProcessOperationsEnum.PROCESS_VM_WRITE.value
+        | ProcessOperationsEnum.PROCESS_VM_OPERATION.value
+    )
+else:
+    # Linux and macOS don't use the `permission` parameter.
+    _SAMPLE_PERMISSION = None
 
 
 class OpenProcessWindow(Tk):
@@ -16,6 +31,8 @@ class OpenProcessWindow(Tk):
     """
     def __init__(self):
         super().__init__()
+        from .application import _apply_native_theme
+        _apply_native_theme(self)
         self.__process = None
 
         self["bg"] = "white"
@@ -24,7 +41,10 @@ class OpenProcessWindow(Tk):
         self.geometry("450x350")
         self.resizable(False, False)
 
-        Label(self, text="Select a process or insert the PID or the process name", bg="white", font=("Arial", 10)).pack(padx=20, pady=5)
+        Label(
+            self, text="Select a process or insert the PID or the process name",
+            bg="white", font=("Arial", 10),
+        ).pack(padx=20, pady=5)
 
         self.__list_frame = Frame(self)
         self.__list_frame["bg"] = "white"
@@ -71,14 +91,15 @@ class OpenProcessWindow(Tk):
         Open the process by the user input.
         """
         entry = self.__entry.get().strip()
+        kwargs = {"permission": _SAMPLE_PERMISSION} if _SAMPLE_PERMISSION is not None else {}
 
         try:
-            self.__process = OpenProcess(pid=int(entry))
+            self.__process = OpenProcess(pid=int(entry), **kwargs)
             return self.destroy()
 
         except ValueError:
             try:
-                self.__process = OpenProcess(process_name=entry)
+                self.__process = OpenProcess(process_name=entry, **kwargs)
                 return self.destroy()
             except (ProcessIDNotExistsError, ProcessNotFoundError): pass
         except (ProcessIDNotExistsError, ProcessNotFoundError): pass

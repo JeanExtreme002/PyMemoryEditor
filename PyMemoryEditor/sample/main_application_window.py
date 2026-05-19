@@ -30,6 +30,8 @@ class ApplicationWindow(Tk):
 
     def __init__(self, process: AbstractProcess):
         super().__init__()
+        from .application import _apply_native_theme
+        _apply_native_theme(self)
         self.__process = process
 
         self.__scan_type = ScanTypesEnum.EXACT_VALUE
@@ -433,14 +435,26 @@ class ApplicationWindow(Tk):
             address_finder = self.__process.search_by_value(pytype, length, value, scan_type, progress_information=True)
 
         # Search for the addresses and add the results to the listbox.
+        # Throttle UI updates: refresh at most every _ui_refresh_step results
+        # so 100k+ matches don't make the window unresponsive.
+        ui_refresh_step = 500
+        found_count = 0
+
         for address, info in address_finder:
             if self.__close: break
 
-            self.__progress_var.set(info["progress"] * 100)
             self.__addresses[address] = "loading..."
-            self.update()
+            found_count += 1
 
-            self.__count_label.config(text=f"Found {len(self.__addresses)} addresses.")
+            if found_count % ui_refresh_step == 0:
+                self.__progress_var.set(info["progress"] * 100)
+                self.__count_label.config(text=f"Found {found_count} addresses.")
+                self.update()
+
+        # Final refresh so the user sees the actual total.
+        self.__progress_var.set(100)
+        self.__count_label.config(text=f"Found {found_count} addresses.")
+        self.update()
 
         # Get the value of each address and update the listbox.
         self.__finding_addresses = False

@@ -46,7 +46,7 @@ class ProcessOperationsEnum(Enum):
     PROCESS_SUSPEND_RESUME = 0x0800
 
     # Required to terminate a process using TerminateProcess.
-    PROCESS_TERMINATE = 0x0800
+    PROCESS_TERMINATE = 0x0001
 
     # Required to perform an operation on the address space of a process (see VirtualProtectEx and WriteProcessMemory).
     PROCESS_VM_OPERATION = 0x0008

@@ -1,7 +1,80 @@
-__pycache__
-dist
-*.pytest_cache
-*.egg-info
-.idea/
+# Byte-compiled / cached
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging
+build/
 .build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+*.whl
+*.tar.gz
+pip-log.txt
+pip-delete-this-directory.txt
+MANIFEST
+
+# Virtual environments
 venv/
+.venv/
+env/
+ENV/
+
+# Testing & coverage
+.pytest_cache/
+*.pytest_cache
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.tox/
+.nox/
+.hypothesis/
+
+# Type checkers & linters
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# IDEs / editors
+.idea/
+.vscode/
+*.code-workspace
+*.sublime-*
+.spyderproject
+.spyproject
+
+# Editor swap / backup files
+*.swp
+*.swo
+*~
+.\#*
+\#*\#
+
+# OS-specific cruft
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+.directory
+
+# Toolchain / version pinning state
+.tool-versions
+.python-version
+
+# Local environment files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Logs / temporary
+*.log
+*.tmp
+
+# Project-local
+.claude/

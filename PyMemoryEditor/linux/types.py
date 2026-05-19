@@ -6,18 +6,20 @@
 # Read more about iovec here:
 # https://man7.org/linux/man-pages/man3/iovec.3type.html
 
-from ctypes import Structure, c_char_p, c_size_t, c_uint, c_void_p
+from ctypes import Structure, c_char_p, c_size_t, c_uint, c_uint64, c_void_p
 
 
 class MEMORY_BASIC_INFORMATION(Structure):
+    # Address/size/offset fields are 64-bit so that mappings beyond 4 GB
+    # (huge pages, large file mmaps) are not silently truncated on x86_64.
     _fields_ = [
-        ("BaseAddress", c_uint),
-        ("RegionSize", c_uint),
+        ("BaseAddress", c_uint64),
+        ("RegionSize", c_uint64),
         ("Privileges", c_char_p),
-        ("Offset", c_uint),
+        ("Offset", c_uint64),
         ("MajorID", c_uint),
         ("MinorID", c_uint),
-        ("InodeID", c_uint),
+        ("InodeID", c_uint64),
         ("Path", c_char_p),
     ]
 
