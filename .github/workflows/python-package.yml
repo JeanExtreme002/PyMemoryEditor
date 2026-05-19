@@ -65,7 +65,13 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-          - macos-latest
+        # macOS validates the Mach backend; the Python version doesn't change
+        # that surface. The GitHub-hosted macOS runner pool is much smaller
+        # than ubuntu/windows, so we cap macOS at a single (stable) Python
+        # to avoid 6-way queueing that can stall the PR for hours.
+        include:
+          - python-version: '3.12'
+            os: macos-latest
 
     steps:
     - uses: actions/checkout@v4
