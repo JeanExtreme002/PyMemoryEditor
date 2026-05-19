@@ -70,6 +70,18 @@ ignore_missing_imports = true
 # over time as the pre-existing type debt gets paid down.
 warn_unused_ignores = true
 
+# Platform-specific backends use symbols that only exist on their target OS
+# (`ctypes.windll`, `WINFUNCTYPE`, `WinError`, `set_last_error`, etc. on
+# Windows; Mach types on macOS). mypy running on a single OS sees the others
+# as undefined. The shared layer (process/, util/) is still type-checked.
+[[tool.mypy.overrides]]
+module = [
+    "PyMemoryEditor.win32.*",
+    "PyMemoryEditor.linux.*",
+    "PyMemoryEditor.macos.*",
+]
+ignore_errors = true
+
 [tool.hatch.version]
 path = "PyMemoryEditor/__init__.py"
 

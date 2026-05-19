@@ -7,9 +7,6 @@ import psutil
 
 from .errors import AmbiguousProcessNameError
 
-if sys.platform == "win32":
-    from ..win32.functions import GetProcessIdByWindowTitle
-
 
 def get_process_ids_by_process_name(process_name: str, *, case_sensitive: bool = True) -> List[int]:
     """
@@ -62,6 +59,9 @@ def get_process_id_by_window_title(window_title: str) -> int:
     if sys.platform != "win32":
         raise OSError("This function is compatible only with Windows OS.")
 
+    # Late import so mypy on non-Windows hosts doesn't see this name as
+    # undefined (the module-level import is guarded by sys.platform).
+    from ..win32.functions import GetProcessIdByWindowTitle
     return GetProcessIdByWindowTitle(window_title)
 
 

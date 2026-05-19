@@ -99,7 +99,7 @@ for address in process.search_by_value(int, 4, target_value):
 ```
 
 ## Choosing the comparison method used for scanning:
-There are many options to scan the memory. Check all available options in [`ScanTypesEnum`](https://github.com/JeanExtreme002/PyMemoryEditor/blob/master/PyMemoryEditor/enums.py).
+There are many options to scan the memory. Check all available options in [`ScanTypesEnum`](https://github.com/JeanExtreme002/PyMemoryEditor/blob/main/PyMemoryEditor/enums.py).
 
 The default option is `EXACT_VALUE`, but you can change it at `scan_type` parameter:
 ```py

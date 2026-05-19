@@ -16,7 +16,7 @@ def _as_bytes(memory_region_data: Sequence) -> bytes:
     exposes the buffer protocol but bytes.find on it raises TypeError. We pay
     one materialization here to keep the find path correct.
     """
-    if isinstance(memory_region_data, (bytes, bytearray)):
+    if isinstance(memory_region_data, bytes):
         return memory_region_data
     return bytes(memory_region_data)
 
@@ -31,7 +31,8 @@ def _as_buffer(memory_region_data: Sequence):
     """
     if isinstance(memory_region_data, (bytes, bytearray, memoryview)):
         return memory_region_data
-    return memoryview(memory_region_data).cast("B")
+    # ctypes.Array exposes the buffer protocol but isn't typed as `Buffer`.
+    return memoryview(memory_region_data).cast("B")  # type: ignore[arg-type]
 
 
 # Cap of bytes we allocate at once for a memory region. Regions larger than

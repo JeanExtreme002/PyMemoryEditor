@@ -5,12 +5,17 @@ name: Python Package
 
 on:
   push:
+    branches: [main]
   pull_request:
-  # Allow re-running the workflow without an empty push (handy after the
-  # workflow gets `disabled_inactivity` after 60 days idle).
   workflow_dispatch:
   schedule:
     - cron:  '0 0 */7 * *'
+
+# Cancel an in-flight run when a newer commit lands on the same ref. Keeps the
+# queue lean and stops stale runs from blocking the merge button.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:

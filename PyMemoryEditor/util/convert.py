@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from typing import Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Optional, Tuple, Type, TypeVar, Union, cast
 import ctypes
 
 
@@ -39,8 +39,11 @@ def convert_from_byte_array(byte_array: ctypes.Array, pytype: Type[T], length: i
     raw memory) do not raise UnicodeDecodeError — they become U+FFFD instead.
     Callers that need raw bytes should pass pytype=bytes.
     """
-    if pytype is bytes: return bytes(byte_array)
-    if pytype is str: return bytes(byte_array).decode("utf-8", errors="replace")
+    # cast() reassures mypy that the runtime check above narrows T; without it
+    # the generic-return-vs-concrete-bytes/str pair triggers "Incompatible
+    # return value type [return-value]" errors.
+    if pytype is bytes: return cast(T, bytes(byte_array))
+    if pytype is str: return cast(T, bytes(byte_array).decode("utf-8", errors="replace"))
 
     c_value = get_c_type_of(pytype, length)
 
@@ -79,9 +82,14 @@ def values_to_bytes(
     return value_to_bytes(pytype, bufflength, value)
 
 
-def get_c_type_of(pytype: Type, length) -> ctypes._SimpleCData:
+def get_c_type_of(pytype: Type, length: int) -> Any:
     """
     Return a C type of a primitive type of the Python language.
+
+    Return type is `Any` because the function legitimately returns either a
+    `ctypes._SimpleCData` subclass instance (for numeric types) or a
+    `ctypes.Array[c_char]` (for str/bytes), which don't share a common base
+    that mypy can reason about.
     """
     if pytype is str or pytype is bytes: return ctypes.create_string_buffer(length)
 
