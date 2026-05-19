@@ -24,6 +24,10 @@ if sys.platform == "win32":
         ProcessOperationsEnum.PROCESS_VM_READ.value
         | ProcessOperationsEnum.PROCESS_VM_WRITE.value
         | ProcessOperationsEnum.PROCESS_VM_OPERATION.value
+        # PROCESS_QUERY_INFORMATION is required by VirtualQueryEx, which the
+        # search_by_value* / search_by_addresses code paths use to enumerate
+        # the target's memory regions. Without it the scan returns nothing.
+        | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value
     )
 else:
     _PERMISSION = None

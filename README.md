@@ -15,8 +15,11 @@ pip install PyMemoryEditor
 ```
 
 > **Upgrading from 1.x?** See `CHANGELOG.md` — version 2.0 changes the default
-> permission from `PROCESS_ALL_ACCESS` to `PROCESS_VM_READ`. Callers that need to
-> write must request `PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION`.
+> permission from `PROCESS_ALL_ACCESS` to
+> `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION` (the minimal read-only set,
+> covering both `ReadProcessMemory` and `VirtualQueryEx`). Callers that need
+> to write must request
+> `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_WRITE | PROCESS_VM_OPERATION`.
 
 ### Tkinter application sample:
 Type `pymemoryeditor` at the CLI to run a tkinter app — similar to the [Cheat Engine](https://en.wikipedia.org/wiki/Cheat_Engine) — to scan a process.
@@ -54,6 +57,7 @@ address = 0x0005000C
 # By default OpenProcess only requests read permission. To write, opt in explicitly:
 permission = (
     ProcessOperationsEnum.PROCESS_VM_READ.value
+    | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value
     | ProcessOperationsEnum.PROCESS_VM_WRITE.value
     | ProcessOperationsEnum.PROCESS_VM_OPERATION.value
 )

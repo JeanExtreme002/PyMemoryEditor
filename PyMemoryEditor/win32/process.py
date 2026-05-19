@@ -26,6 +26,14 @@ _PROCESS_ALL_ACCESS = ProcessOperationsEnum.PROCESS_ALL_ACCESS.value
 _PROCESS_VM_READ = ProcessOperationsEnum.PROCESS_VM_READ.value
 _PROCESS_VM_WRITE = ProcessOperationsEnum.PROCESS_VM_WRITE.value
 _PROCESS_VM_OPERATION = ProcessOperationsEnum.PROCESS_VM_OPERATION.value
+_PROCESS_QUERY_INFORMATION = ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value
+
+# Default permission for a read-only workflow. VirtualQueryEx (used by
+# get_memory_regions, snapshot_memory_regions, search_by_value*, and
+# search_by_addresses) requires PROCESS_QUERY_INFORMATION in addition to
+# PROCESS_VM_READ — without it the kernel returns 0 from VirtualQueryEx and
+# every region scan comes back empty.
+DEFAULT_PERMISSION = _PROCESS_VM_READ | _PROCESS_QUERY_INFORMATION
 
 
 def _permission_value(permission) -> int:
@@ -62,16 +70,19 @@ class WindowsProcess(AbstractProcess):
         window_title: Optional[str] = None,
         process_name: Optional[str] = None,
         pid: Optional[int] = None,
-        permission: Union[ProcessOperationsEnum, int] = ProcessOperationsEnum.PROCESS_VM_READ,
+        permission: Union[ProcessOperationsEnum, int] = DEFAULT_PERMISSION,
         case_sensitive: bool = False,
     ):
         """
         :param window_title: window title of the target program.
         :param process_name: name of the target process.
         :param pid: process ID.
-        :param permission: access mode to the process. Defaults to PROCESS_VM_READ
-            (read-only). Combine flags with bitwise OR for additional access, e.g.
-            PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION.
+        :param permission: access mode to the process. Defaults to the minimal
+            read-only set: PROCESS_VM_READ | PROCESS_QUERY_INFORMATION (the
+            latter is required by VirtualQueryEx, used internally for region
+            enumeration). Combine flags with bitwise OR for write access, e.g.
+            PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION |
+            PROCESS_QUERY_INFORMATION.
         :param case_sensitive: when False (default on Windows), process_name
             matching ignores case to align with the OS convention.
         """

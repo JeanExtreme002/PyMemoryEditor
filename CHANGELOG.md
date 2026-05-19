@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] - 2026-05-19
 
+### Changed
+- `WindowsProcess` default `permission` now bundles
+  `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION` instead of `PROCESS_VM_READ`
+  alone. Without `PROCESS_QUERY_INFORMATION`, `VirtualQueryEx` returns 0 and
+  every `get_memory_regions`/`search_by_value*`/`snapshot_memory_regions`
+  call comes back empty — so the minimal usable read-only set is both bits.
+
 ### Added
 - `process.snapshot_memory_regions()` materializes the region list so callers
   can reuse it across multiple scans without paying the enumeration cost each
