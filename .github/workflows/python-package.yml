@@ -6,6 +6,9 @@ name: Python Package
 on:
   push:
   pull_request:
+  # Allow re-running the workflow without an empty push (handy after the
+  # workflow gets `disabled_inactivity` after 60 days idle).
+  workflow_dispatch:
   schedule:
     - cron:  '0 0 */7 * *'
 
