@@ -4,9 +4,15 @@
 name: Python Package
 
 on:
+  # `push` restricted to `main` so feature branches only run via `pull_request`.
+  # Otherwise every push to a branch with an open PR would trigger the workflow
+  # twice (once for `push`, once for `pull_request`) — doubling CI cost and
+  # latency for no benefit.
   push:
     branches: [main]
   pull_request:
+  # Allow re-running the workflow without an empty push (handy after the
+  # workflow gets `disabled_inactivity` after 60 days idle).
   workflow_dispatch:
   schedule:
     - cron:  '0 0 */7 * *'
@@ -58,13 +64,6 @@ jobs:
   build:
     needs: lint
     runs-on: ${{ matrix.os }}
-    # macOS jobs are non-blocking: GitHub-hosted macOS runner pools are often
-    # congested and a job can sit in queue for 30+ minutes without acquiring a
-    # runner. ubuntu and windows still gate the merge; macOS is best-effort.
-    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
-    # 25 min cap — if no runner picks up the job by then, skip rather than
-    # stalling the PR forever. Real test runs finish well under this.
-    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -72,27 +71,38 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-        # macOS validates the Mach backend; the Python version doesn't change
-        # that surface. The GitHub-hosted macOS runner pool is much smaller
-        # than ubuntu/windows, so we cap macOS at a single (stable) Python
-        # to avoid multi-way queueing that can stall the PR for hours.
-        #
-        # Why macos-13 (Intel) instead of macos-latest (Apple Silicon):
-        # the free-tier pool for arm64 runners is heavily congested, while
-        # macos-13 has a larger queue and equivalent test coverage — Mach VM
-        # structs are fixed-size by design (mach_port_t = uint32,
-        # mach_vm_address_t = uint64, etc.), so x86_64 and arm64 exercise
-        # the same code paths.
-        include:
-          - python-version: '3.12'
-            os: macos-13
-
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+    - name: Test with pytest
+      run: |
+        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term
+
+  # macOS is split out and only runs on push-to-main / weekly cron / manual
+  # dispatch — NEVER on `pull_request`. GitHub-hosted macOS runner pools are
+  # frequently congested (jobs sit in queue for 30+ minutes without acquiring
+  # a runner), which would stall every PR for hours waiting on macOS to
+  # validate something that's already covered by the Mach API surface tests.
+  # Local self-process tests run as part of dev validation; this CI job is
+  # the safety net for that.
+  build-macos:
+    needs: lint
+    if: github.event_name != 'pull_request'
+    runs-on: macos-13
+    timeout-minutes: 25
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
