@@ -13,16 +13,14 @@ from ctypes import addressof, sizeof
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.region import enrich_region
+from ..process.scanning import iter_search_results, iter_values_for_addresses
 from ..util import (
-    convert_from_byte_array,
     get_c_type_of,
-    iter_region_chunks,
-    scan_memory,
-    scan_memory_for_exact_value,
     values_to_bytes,
 )
 from .libc import libc
-from .types import MEMORY_BASIC_INFORMATION, iovec
+from .types import MEMORY_BASIC_INFORMATION, PATH_SIZE, PRIVILEGES_SIZE, iovec
 
 
 T = TypeVar("T")
@@ -95,21 +93,28 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
 
             size = end_address - start_address
 
+            # Truncate to fit the fixed-size inline byte arrays in the struct.
+            # Leave room for a null so attribute reads always terminate cleanly.
+            privileges_bytes = privileges.encode()[: PRIVILEGES_SIZE - 1]
+            path_bytes = path.encode()[: PATH_SIZE - 1]
+
             region = MEMORY_BASIC_INFORMATION(
                 start_address,
                 size,
-                privileges.encode(),
+                privileges_bytes,
                 offset,
                 major_id,
                 minor_id,
                 inode,
-                path.encode(),
+                path_bytes,
             )
-            yield {
-                "address": start_address,
-                "size": region.RegionSize,
-                "struct": region,
-            }
+            yield enrich_region(
+                {
+                    "address": start_address,
+                    "size": region.RegionSize,
+                    "struct": region,
+                }
+            )
 
 
 def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int) -> T:
@@ -152,77 +157,44 @@ def search_addresses_by_value(
 
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
-    checked_memory_size = 0
-    memory_total = 0
-    filtered_regions = []
-
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(pid)
     )
-    for region in source_regions:
+
+    def is_scannable(region) -> bool:
         privileges = region["struct"].Privileges
         if b"r" not in privileges:
-            continue
+            return False
         if writeable_only and b"w" not in privileges:
-            continue
+            return False
         # Skip shared mappings — they typically hold libc and other code that
         # the caller is not interested in, and scanning them adds noise and
         # CPU cost. Mirrors the Win32 backend filtering on MEM_PRIVATE.
         if b"s" in privileges:
-            continue
+            return False
+        return True
 
-        memory_total += region["size"]
-        filtered_regions.append(region)
+    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions.sort(key=lambda region: region["address"])
 
-    memory_regions = filtered_regions
-    memory_regions.sort(key=lambda region: region["address"])
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
+        return buffer
 
-    if memory_total == 0:
-        return
+    def is_transient(exc: BaseException) -> bool:
+        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
-    searching_method = scan_memory
-    if scan_type in [ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE]:
-        searching_method = scan_memory_for_exact_value
-
-    for region in memory_regions:
-        address, size = region["address"], region["size"]
-
-        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
-            chunk_address = address + chunk_offset
-            chunk_data = (ctypes.c_byte * chunk_size)()
-
-            try:
-                _process_vm_readv(
-                    pid, addressof(chunk_data), chunk_address, sizeof(chunk_data)
-                )
-            except OSError as read_error:
-                if read_error.errno in _PAGE_GONE_ERRNOS:
-                    continue
-                raise
-
-            for offset in searching_method(
-                chunk_data,
-                chunk_size,
-                target_value_bytes,
-                bufflength,
-                scan_type,
-                pytype is str,
-            ):
-                found_address = chunk_address + offset
-
-                if progress_information:
-                    yield (
-                        found_address,
-                        {
-                            "memory_total": memory_total,
-                            "progress": (checked_memory_size + chunk_offset + offset)
-                            / memory_total,
-                        },
-                    )
-                else:
-                    yield found_address
-
-        checked_memory_size += size
+    yield from iter_search_results(
+        filtered_regions,
+        pytype,
+        bufflength,
+        target_value_bytes,
+        scan_type,
+        read_chunk,
+        progress_information=progress_information,
+        transient_error_check=is_transient,
+    )
 
 
 def search_values_by_addresses(
@@ -241,6 +213,8 @@ def search_values_by_addresses(
     Memory is read in chunks (see iter_region_chunks) to bound the per-call
     allocation. Chunks near an address boundary read `bufflength - 1` extra
     bytes so values straddling the boundary are still decoded correctly.
+    Addresses that fall in gaps between regions or extend past a region's end
+    yield `(address, None)`.
     """
     if pytype not in [bool, int, float, str, bytes]:
         raise ValueError("The type must be bool, int, float, str or bytes.")
@@ -249,76 +223,29 @@ def search_values_by_addresses(
     # explicitly is honored verbatim — scanning nothing is a valid choice when
     # the caller pre-filtered to zero regions.
     if memory_regions is None:
-        memory_regions = []
-        for region in get_memory_regions(pid):
-            if b"r" not in region["struct"].Privileges:
-                continue
-            memory_regions.append(region)
+        memory_regions = [
+            region for region in get_memory_regions(pid) if region["is_readable"]
+        ]
     else:
         memory_regions = list(memory_regions)
 
-    addresses = sorted(addresses)
-    memory_regions.sort(key=lambda region: region["address"])
-    address_index = 0
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
+        return buffer
 
-    for region in memory_regions:
-        if address_index >= len(addresses):
-            break
+    def is_transient(exc: BaseException) -> bool:
+        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
-        base_address, size = region["address"], region["size"]
-        if not (base_address <= addresses[address_index] < base_address + size):
-            continue
-
-        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
-            if address_index >= len(addresses):
-                break
-
-            chunk_address = base_address + chunk_offset
-            chunk_end = chunk_address + chunk_size
-
-            if addresses[address_index] >= chunk_end:
-                continue
-
-            extra = bufflength - 1 if chunk_offset + chunk_size < size else 0
-            read_size = chunk_size + extra
-            chunk_data = (ctypes.c_byte * read_size)()
-
-            try:
-                _process_vm_readv(
-                    pid, addressof(chunk_data), chunk_address, sizeof(chunk_data)
-                )
-            except OSError as read_error:
-                transient = read_error.errno in _PAGE_GONE_ERRNOS
-                if not transient and raise_error:
-                    raise
-                while (
-                    address_index < len(addresses)
-                    and chunk_address <= addresses[address_index] < chunk_end
-                ):
-                    yield addresses[address_index], None
-                    address_index += 1
-                continue
-
-            while (
-                address_index < len(addresses)
-                and chunk_address <= addresses[address_index] < chunk_end
-            ):
-                target_address = addresses[address_index]
-                offset_in_chunk = target_address - chunk_address
-
-                try:
-                    data = chunk_data[offset_in_chunk : offset_in_chunk + bufflength]
-                    data = (ctypes.c_byte * bufflength)(*data)
-                    yield target_address, convert_from_byte_array(
-                        data, pytype, bufflength
-                    )
-
-                except (ValueError, UnicodeDecodeError, OSError) as error:
-                    if raise_error:
-                        raise error
-                    yield target_address, None
-
-                address_index += 1
+    yield from iter_values_for_addresses(
+        addresses,
+        memory_regions,
+        pytype,
+        bufflength,
+        read_chunk,
+        raise_error=raise_error,
+        transient_error_check=is_transient,
+    )
 
 
 def write_process_memory(

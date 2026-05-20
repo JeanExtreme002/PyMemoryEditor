@@ -37,6 +37,20 @@ def test_suspend_resume_alone_does_not_grant_read():
     assert not _can_read(ProcessOperationsEnum.PROCESS_SUSPEND_RESUME.value)
 
 
+def test_query_information_alone_does_not_grant_read():
+    # PROCESS_QUERY_INFORMATION is required by VirtualQueryEx (region
+    # enumeration) but must NOT by itself authorize ReadProcessMemory — the
+    # gate has to keep them independent so the default read-only permission
+    # bundle (VM_READ | QUERY_INFORMATION) remains the minimum.
+    assert not _can_read(ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value)
+
+
+def test_query_limited_information_alone_does_not_grant_read():
+    assert not _can_read(
+        ProcessOperationsEnum.PROCESS_QUERY_LIMITED_INFORMATION.value
+    )
+
+
 def test_terminate_and_suspend_resume_have_distinct_values():
     # Regression: PROCESS_TERMINATE used to be defined as 0x0800, which is the
     # same value as PROCESS_SUSPEND_RESUME — making it a silent alias under
@@ -80,3 +94,21 @@ def test_read_plus_write_combo():
     )
     assert _can_read(perm)
     assert _can_write(perm)
+
+
+def test_process_all_access_uses_modern_value():
+    """PROCESS_ALL_ACCESS bumped from the pre-Vista 0x1F0FFF to 0x1FFFFF.
+    The library targets Python 3.8+, which already requires Vista or later.
+    """
+    assert ProcessOperationsEnum.PROCESS_ALL_ACCESS.value == 0x1FFFFF
+
+
+def test_intflag_bitwise_composition_without_value_unwrap():
+    """Regression: ProcessOperationsEnum is an IntFlag, so callers can compose
+    members with ``|`` directly without reaching for ``.value`` everywhere."""
+    perm = (
+        ProcessOperationsEnum.PROCESS_VM_READ
+        | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION
+    )
+    # The composed value should equal the int sum of the bits.
+    assert int(perm) == 0x0010 | 0x0400

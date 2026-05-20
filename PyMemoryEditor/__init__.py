@@ -11,6 +11,7 @@ __author__ = "Jean Loui Bernard Silva de Jesus"
 __version__ = "2.0.0"
 
 import sys
+from typing import TYPE_CHECKING
 
 from .enums import ScanTypesEnum
 from .process.errors import (
@@ -47,6 +48,22 @@ else:
         "PyMemoryEditor supports Windows, Linux and macOS. "
         "Current platform: %r is not supported." % sys.platform
     )
+
+
+# At runtime `OpenProcess` is the single concrete backend chosen for the host
+# platform above — that's all Python needs. For type-checkers (pyright/mypy)
+# running on a Linux dev box but analyzing code that targets Windows (or vice
+# versa), expose the union of every backend so the Windows-only `permission=`
+# kwarg is visible regardless of where the checker runs. This block is never
+# evaluated at runtime.
+if TYPE_CHECKING:
+    from typing import Union
+
+    from .linux.process import LinuxProcess as _LinuxProcess
+    from .macos.process import MacProcess as _MacProcess
+    from .win32.process import WindowsProcess as _WindowsProcess
+
+    AnyProcess = Union[_WindowsProcess, _LinuxProcess, _MacProcess]
 
 
 __all__ = (

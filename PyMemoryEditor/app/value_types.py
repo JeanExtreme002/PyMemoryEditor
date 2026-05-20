@@ -79,16 +79,13 @@ def _fmt_bytes(value: bytes) -> str:
     return " ".join(f"{b:02X}" for b in value)
 
 
-def _fmt_int_signed(byte_len: int):
-    def fmt(value):
-        if value is None:
-            return ""
-        try:
-            return str(int(value))
-        except (TypeError, ValueError):
-            return str(value)
-
-    return fmt
+def _fmt_int(value):
+    if value is None:
+        return ""
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return str(value)
 
 
 # Order matters — first item is the default selection.
@@ -98,7 +95,7 @@ VALUE_TYPES = (
         int,
         4,
         _parse_int_factory(True, 4),
-        _fmt_int_signed(4),
+        _fmt_int,
         hex_capable=True,
     ),
     ValueTypeSpec(
@@ -106,7 +103,7 @@ VALUE_TYPES = (
         int,
         2,
         _parse_int_factory(True, 2),
-        _fmt_int_signed(2),
+        _fmt_int,
         hex_capable=True,
     ),
     ValueTypeSpec(
@@ -114,7 +111,7 @@ VALUE_TYPES = (
         int,
         1,
         _parse_int_factory(True, 1),
-        _fmt_int_signed(1),
+        _fmt_int,
         hex_capable=True,
     ),
     ValueTypeSpec(
@@ -122,7 +119,7 @@ VALUE_TYPES = (
         int,
         8,
         _parse_int_factory(True, 8),
-        _fmt_int_signed(8),
+        _fmt_int,
         hex_capable=True,
     ),
     ValueTypeSpec(
@@ -187,6 +184,8 @@ def parse_value(
         # Default to the value's natural length.
         length = max(1, len(value))
     if spec.pytype is str and length_override is None:
-        # str length is character count, not byte count — keep symmetric.
-        length = max(1, len(value))
+        # Use the UTF-8 byte length, not the character count — multi-byte
+        # characters (accents, CJK, emoji) need more bytes than chars and
+        # under-allocating would silently truncate the value the user typed.
+        length = max(1, len(value.encode("utf-8")))
     return value, length

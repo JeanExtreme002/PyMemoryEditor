@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import ctypes
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..util import resolve_bufflength
@@ -123,8 +124,24 @@ class WindowsProcess(AbstractProcess):
         if self.__closed:
             return True
 
-        self.__closed = CloseProcessHandle(self.__process_handle) != 0
-        return self.__closed
+        result = CloseProcessHandle(self.__process_handle)
+        # Mark closed regardless of CloseHandle's return value — leaving
+        # `__closed=False` after a failed close means the *next* `close()`
+        # would retry against a handle the kernel has already considered
+        # released, which historically masked real bugs (double-close) and
+        # made the object's state ambiguous.
+        self.__closed = True
+        if result == 0:
+            # Surface the underlying Win32 error code via OSError so the
+            # caller knows something went wrong, instead of the previous
+            # silent `return False`. Callers using the `with` context manager
+            # will see the exception; callers checking the return value of
+            # close() now get a strict pass/fail (True only on success).
+            last_error = ctypes.get_last_error()
+            if last_error:
+                raise ctypes.WinError(last_error, "CloseHandle failed.")
+            raise OSError("CloseHandle failed.")
+        return True
 
     def get_memory_regions(self) -> Generator[dict, None, None]:
         self.__require_open()

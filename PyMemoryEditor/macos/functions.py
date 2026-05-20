@@ -7,21 +7,22 @@ linux/functions.py and win32/functions.py.
 
 import ctypes
 import os
+import warnings
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.region import enrich_region
+from ..process.scanning import iter_search_results, iter_values_for_addresses
 from ..util import (
-    convert_from_byte_array,
     get_c_type_of,
-    iter_region_chunks,
-    scan_memory,
-    scan_memory_for_exact_value,
     values_to_bytes,
 )
 
 from .libsystem import libsystem, mach_error_message, mach_task_self_
 from .types import (
     KERN_INVALID_ADDRESS,
+    KERN_INVALID_ARGUMENT,
+    KERN_NO_ACCESS,
     KERN_PROTECTION_FAILURE,
     KERN_SUCCESS,
     MEMORY_BASIC_INFORMATION,
@@ -122,11 +123,13 @@ def get_memory_regions(task: int) -> Generator[dict, None, None]:
             info.reserved,
         )
 
-        yield {
-            "address": address.value,
-            "size": size.value,
-            "struct": region_struct,
-        }
+        yield enrich_region(
+            {
+                "address": address.value,
+                "size": size.value,
+                "struct": region_struct,
+            }
+        )
 
         if size.value == 0:
             break
@@ -135,7 +138,14 @@ def get_memory_regions(task: int) -> Generator[dict, None, None]:
 
 # kern_return_t codes that indicate a page is unmapped/unreadable but not a
 # genuine permission/configuration error — safe to skip during region scans.
-_PAGE_GONE_KRS = (KERN_INVALID_ADDRESS,)
+# KERN_NO_ACCESS / KERN_INVALID_ARGUMENT can also surface for guard pages and
+# freshly-unmapped pages on modern macOS; treating them as fatal aborts a scan
+# that should just skip the page.
+_PAGE_GONE_KRS = (
+    KERN_INVALID_ADDRESS,
+    KERN_NO_ACCESS,
+    KERN_INVALID_ARGUMENT,
+)
 
 
 class MachReadError(OSError):
@@ -206,8 +216,27 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
                 % (mach_error_message(kr), kr)
             )
     finally:
-        # Best-effort restore. Ignore failures — we already succeeded with the write.
-        libsystem.mach_vm_protect(task, address, size, 0, original_protection)
+        # Best-effort restore. The write itself already succeeded, so raising
+        # here would discard the user's intended outcome; but a silent failure
+        # leaves the target page more permissive than it started, which is an
+        # invisible side-effect the caller should know about.
+        restore_kr = libsystem.mach_vm_protect(
+            task, address, size, 0, original_protection
+        )
+        if restore_kr != KERN_SUCCESS:
+            warnings.warn(
+                "mach_vm_protect could not restore the original protection "
+                "(0x%x) on the target page at 0x%x after a write-via-protect-flip; "
+                "the page is left more permissive than before (kr=%d, %s)."
+                % (
+                    original_protection,
+                    address,
+                    restore_kr,
+                    mach_error_message(restore_kr),
+                ),
+                ResourceWarning,
+                stacklevel=2,
+            )
 
 
 def _query_region(task: int, address: int):
@@ -314,73 +343,39 @@ def search_addresses_by_value(
 
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
-    # Filter scannable regions and compute total size for progress reporting.
-    filtered_regions = []
-    memory_total = 0
-
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(task)
     )
-    for region in source_regions:
+
+    def is_scannable(region) -> bool:
         protection = region["struct"].Protection
         if protection & VM_PROT_READ == 0:
-            continue
+            return False
         if writeable_only and protection & VM_PROT_WRITE == 0:
-            continue
-        filtered_regions.append(region)
-        memory_total += region["size"]
+            return False
+        return True
 
-    memory_regions = filtered_regions
-    memory_regions.sort(key=lambda region: region["address"])
+    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions.sort(key=lambda region: region["address"])
 
-    if memory_total == 0:
-        return
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _mach_read(task, address, ctypes.addressof(buffer), size)
+        return buffer
 
-    checked_memory_size = 0
+    def is_transient(exc: BaseException) -> bool:
+        return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
 
-    searching_method = scan_memory
-    if scan_type in [ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE]:
-        searching_method = scan_memory_for_exact_value
-
-    for region in memory_regions:
-        address, size = region["address"], region["size"]
-
-        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
-            chunk_address = address + chunk_offset
-            chunk_data = (ctypes.c_byte * chunk_size)()
-
-            try:
-                _mach_read(
-                    task, chunk_address, ctypes.addressof(chunk_data), chunk_size
-                )
-            except MachReadError as read_error:
-                if read_error.kr in _PAGE_GONE_KRS:
-                    continue
-                raise
-
-            for offset in searching_method(
-                chunk_data,
-                chunk_size,
-                target_value_bytes,
-                bufflength,
-                scan_type,
-                pytype is str,
-            ):
-                found_address = chunk_address + offset
-
-                if progress_information:
-                    yield (
-                        found_address,
-                        {
-                            "memory_total": memory_total,
-                            "progress": (checked_memory_size + chunk_offset + offset)
-                            / memory_total,
-                        },
-                    )
-                else:
-                    yield found_address
-
-        checked_memory_size += size
+    yield from iter_search_results(
+        filtered_regions,
+        pytype,
+        bufflength,
+        target_value_bytes,
+        scan_type,
+        read_chunk,
+        progress_information=progress_information,
+        transient_error_check=is_transient,
+    )
 
 
 def search_values_by_addresses(
@@ -398,6 +393,8 @@ def search_values_by_addresses(
     Memory is read in chunks (see iter_region_chunks) to bound allocation.
     Chunks reading addresses near a boundary include `bufflength - 1` extra
     bytes so values straddling the boundary are still decoded correctly.
+    Addresses that fall in gaps between regions or extend past a region's end
+    yield `(address, None)`.
     """
     if pytype not in [bool, int, float, str, bytes]:
         raise ValueError("The type must be bool, int, float, str or bytes.")
@@ -406,72 +403,26 @@ def search_values_by_addresses(
     # explicitly is honored verbatim — scanning nothing is a valid choice when
     # the caller pre-filtered to zero regions.
     if memory_regions is None:
-        memory_regions = []
-        for region in get_memory_regions(task):
-            if region["struct"].Protection & VM_PROT_READ == 0:
-                continue
-            memory_regions.append(region)
+        memory_regions = [
+            region for region in get_memory_regions(task) if region["is_readable"]
+        ]
     else:
         memory_regions = list(memory_regions)
 
-    addresses = sorted(addresses)
-    memory_regions.sort(key=lambda region: region["address"])
-    address_index = 0
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _mach_read(task, address, ctypes.addressof(buffer), size)
+        return buffer
 
-    for region in memory_regions:
-        if address_index >= len(addresses):
-            break
+    def is_transient(exc: BaseException) -> bool:
+        return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
 
-        base_address, size = region["address"], region["size"]
-
-        if not (base_address <= addresses[address_index] < base_address + size):
-            continue
-
-        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
-            if address_index >= len(addresses):
-                break
-
-            chunk_address = base_address + chunk_offset
-            chunk_end = chunk_address + chunk_size
-
-            if addresses[address_index] >= chunk_end:
-                continue
-
-            extra = bufflength - 1 if chunk_offset + chunk_size < size else 0
-            read_size = chunk_size + extra
-            chunk_data = (ctypes.c_byte * read_size)()
-
-            try:
-                _mach_read(task, chunk_address, ctypes.addressof(chunk_data), read_size)
-            except MachReadError as read_error:
-                transient = read_error.kr in _PAGE_GONE_KRS
-                if not transient and raise_error:
-                    raise
-                while (
-                    address_index < len(addresses)
-                    and chunk_address <= addresses[address_index] < chunk_end
-                ):
-                    yield addresses[address_index], None
-                    address_index += 1
-                continue
-
-            while (
-                address_index < len(addresses)
-                and chunk_address <= addresses[address_index] < chunk_end
-            ):
-                target_address = addresses[address_index]
-                offset_in_chunk = target_address - chunk_address
-
-                try:
-                    data = chunk_data[offset_in_chunk : offset_in_chunk + bufflength]
-                    data = (ctypes.c_byte * bufflength)(*data)
-                    yield target_address, convert_from_byte_array(
-                        data, pytype, bufflength
-                    )
-
-                except (ValueError, UnicodeDecodeError, OSError) as error:
-                    if raise_error:
-                        raise error
-                    yield target_address, None
-
-                address_index += 1
+    yield from iter_values_for_addresses(
+        addresses,
+        memory_regions,
+        pytype,
+        bufflength,
+        read_chunk,
+        raise_error=raise_error,
+        transient_error_check=is_transient,
+    )

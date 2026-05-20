@@ -16,7 +16,7 @@ as the ``memory_regions`` kwarg to subsequent scans.
 import sys
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -31,6 +31,27 @@ from PySide6.QtWidgets import (
 )
 
 from PyMemoryEditor.process import AbstractProcess
+
+from ._widgets import NumericItem
+
+
+class _SnapshotWorker(QThread):
+    """Background thread that runs ``snapshot_memory_regions()`` off the UI."""
+
+    snapshot_ready = Signal(object)  # List[Dict]
+    snapshot_failed = Signal(str)
+
+    def __init__(self, process: AbstractProcess, parent=None):
+        super().__init__(parent)
+        self._process = process
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            snapshot = self._process.snapshot_memory_regions()
+        except Exception as exc:  # noqa: BLE001
+            self.snapshot_failed.emit(str(exc))
+            return
+        self.snapshot_ready.emit(snapshot)
 
 
 def _format_size(size: int) -> str:
@@ -117,39 +138,13 @@ def _decode_protection(region: Dict) -> str:
 
 def _region_path(region: Dict) -> str:
     """On Linux, surface the backing file path (so the user sees [stack], [heap] etc)."""
-    struct = region.get("struct")
-    try:
-        path = getattr(struct, "Path", None)
-    except Exception:
-        return ""
-    if not path:
-        return ""
-    if isinstance(path, bytes):
-        path = path.decode("utf-8", "replace")
-    return path
+    return region.get("path") or ""
 
 
 def _region_shared(region: Dict) -> str:
-    struct = region.get("struct")
-    try:
-        if sys.platform == "darwin":
-            return "Shared" if int(getattr(struct, "Shared", 0)) else "Private"
-        if sys.platform == "linux":
-            privileges = getattr(struct, "Privileges", b"") or b""
-            if isinstance(privileges, bytes):
-                privileges = privileges.decode("latin-1", "replace")
-            return "Shared" if "s" in privileges else "Private"
-    except Exception:
-        pass
-    return "—"
-
-
-class _Numeric(QStandardItem):
-    def __lt__(self, other):
-        try:
-            return int(self.data(Qt.UserRole)) < int(other.data(Qt.UserRole))
-        except (TypeError, ValueError):
-            return super().__lt__(other)
+    if "is_shared" not in region:
+        return "—"
+    return "Shared" if region["is_shared"] else "Private"
 
 
 class MemoryMapDialog(QDialog):
@@ -161,6 +156,7 @@ class MemoryMapDialog(QDialog):
         super().__init__(parent)
         self._process = process
         self._snapshot: List[Dict] = []
+        self._worker: Optional[_SnapshotWorker] = None
 
         self.setWindowTitle(f"Memory Map — PID {process.pid}")
         self.resize(900, 580)
@@ -190,9 +186,9 @@ class MemoryMapDialog(QDialog):
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.refresh)
-        bar.addWidget(refresh_btn)
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.clicked.connect(self.refresh)
+        bar.addWidget(self._refresh_btn)
 
         self._copy_btn = QPushButton("Copy Address")
         self._copy_btn.clicked.connect(self._copy_selected_address)
@@ -246,14 +242,30 @@ class MemoryMapDialog(QDialog):
         return list(self._snapshot)
 
     def refresh(self) -> None:
-        try:
-            self._snapshot = self._process.snapshot_memory_regions()
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(
-                self, "Memory Map", f"Failed to read memory regions:\n\n{exc}"
-            )
+        # Don't stack workers — if a previous refresh is in flight, ignore the
+        # click. The UI is already disabled, so this is just a safety net.
+        if self._worker is not None and self._worker.isRunning():
             return
 
+        self._count_label.setText("Loading memory regions…")
+        self._set_busy(True)
+
+        worker = _SnapshotWorker(self._process, self)
+        worker.snapshot_ready.connect(self._on_snapshot_ready)
+        worker.snapshot_failed.connect(self._on_snapshot_failed)
+        worker.finished.connect(self._on_worker_finished)
+        self._worker = worker
+        worker.start()
+
+    def _set_busy(self, busy: bool) -> None:
+        self._copy_btn.setEnabled(not busy)
+        self._hex_btn.setEnabled(not busy)
+        # The Refresh button is the first widget added to the toolbar — keep a
+        # named reference instead of fishing through the layout.
+        self._refresh_btn.setEnabled(not busy)
+
+    def _on_snapshot_ready(self, snapshot) -> None:
+        self._snapshot = list(snapshot)
         self._model.setRowCount(0)
         total_bytes = 0
         for region in self._snapshot:
@@ -261,10 +273,10 @@ class MemoryMapDialog(QDialog):
             size = int(region["size"])
             total_bytes += size
 
-            addr_item = _Numeric(f"0x{addr:016X}")
+            addr_item = NumericItem(f"0x{addr:016X}")
             addr_item.setData(addr, Qt.UserRole)
 
-            size_item = _Numeric(_format_size(size))
+            size_item = NumericItem(_format_size(size))
             size_item.setData(size, Qt.UserRole)
             size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -274,7 +286,7 @@ class MemoryMapDialog(QDialog):
             path = _region_path(region) or ""
             path_item = QStandardItem(path)
 
-            raw_size_item = _Numeric(str(size))
+            raw_size_item = NumericItem(str(size))
             raw_size_item.setData(size, Qt.UserRole)
 
             self._model.appendRow(
@@ -284,6 +296,33 @@ class MemoryMapDialog(QDialog):
         self._count_label.setText(
             f"{len(self._snapshot):,} regions · {_format_size(total_bytes)} of virtual address space mapped"
         )
+
+    def _on_snapshot_failed(self, message: str) -> None:
+        self._count_label.setText("Failed to read memory regions.")
+        QMessageBox.critical(
+            self, "Memory Map", f"Failed to read memory regions:\n\n{message}"
+        )
+
+    def _on_worker_finished(self) -> None:
+        self._set_busy(False)
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def closeEvent(self, event):  # noqa: N802 — Qt naming
+        # If the snapshot is still in flight, let it finish without holding
+        # the UI hostage but unhook our slots so a late emit doesn't touch
+        # a destroyed dialog.
+        if self._worker is not None and self._worker.isRunning():
+            try:
+                self._worker.snapshot_ready.disconnect()
+                self._worker.snapshot_failed.disconnect()
+                self._worker.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._worker.wait(1000)
+        super().closeEvent(event)
 
     def _selected_region(self) -> Optional[Dict]:
         rows = self._table.selectionModel().selectedRows()

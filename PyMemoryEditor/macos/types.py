@@ -12,6 +12,11 @@ References:
 
 from ctypes import Structure, c_int, c_uint, c_uint64, c_ushort, sizeof
 
+
+# `info_count` in mach_vm_region is measured in mach_msg_type_number_t units
+# (4 bytes each), so the conversion below divides struct size by this.
+_NATURAL_T_SIZE = sizeof(c_uint)
+
 # Basic Mach types
 mach_port_t = c_uint  # 32-bit port name
 task_t = mach_port_t  # Same as mach_port_t for task ports
@@ -60,9 +65,9 @@ class vm_region_basic_info_64(Structure):
     ]
 
 
-# Number of mach_msg_type_number_t (4-byte) units in vm_region_basic_info_64.
+# Number of mach_msg_type_number_t units in vm_region_basic_info_64.
 # Used as the in/out `info_count` parameter to mach_vm_region.
-VM_REGION_BASIC_INFO_COUNT_64 = sizeof(vm_region_basic_info_64) // 4
+VM_REGION_BASIC_INFO_COUNT_64 = sizeof(vm_region_basic_info_64) // _NATURAL_T_SIZE
 
 
 class MEMORY_BASIC_INFORMATION(Structure):

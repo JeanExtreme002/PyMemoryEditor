@@ -7,11 +7,11 @@ clicking a row, typing a PID, or typing a process name (with an optional
 case-insensitive toggle, surfacing the library's ``case_sensitive`` flag).
 """
 import sys
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import psutil
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt, QTimer
+from PySide6.QtCore import QSortFilterProxyModel, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -35,6 +35,8 @@ from PyMemoryEditor import (
     __version__,
 )
 from PyMemoryEditor.process import AbstractProcess
+
+from ._widgets import NumericItem
 
 
 if sys.platform == "win32":
@@ -67,14 +69,39 @@ def _human_kb(size_bytes: int) -> str:
     return f"{n:,.1f} PB"
 
 
-class _NumericItem(QStandardItem):
-    """Item whose sort key is its int data — keeps PID/memory ordering numeric."""
+# How long the auto-refresh waits between process-list re-enumerations.
+_REFRESH_INTERVAL_MS = 3000
 
-    def __lt__(self, other):
-        try:
-            return int(self.data(Qt.UserRole)) < int(other.data(Qt.UserRole))
-        except (TypeError, ValueError):
-            return super().__lt__(other)
+
+class _ProcessListWorker(QThread):
+    """Enumerate processes via psutil on a background thread.
+
+    psutil.process_iter walks /proc (Linux), uses Win32 toolhelp APIs
+    (Windows) or proc_listallpids (macOS). On systems with many processes
+    that scan is noticeable, and doing it on a UI tick blocks input until
+    it finishes.
+    """
+
+    rows_ready = Signal(object)  # List[Tuple[int, str, int, str]]
+
+    def run(self) -> None:  # type: ignore[override]
+        rows: List[Tuple[int, str, int, str]] = []
+        transient = (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess)
+        for proc in psutil.process_iter(["pid", "name", "username"]):
+            try:
+                info = proc.info
+                name = (info.get("name") or "").strip() or f"<pid {info['pid']}>"
+                user = info.get("username") or ""
+                try:
+                    mem = proc.memory_info().vms
+                except transient:
+                    mem = 0
+                rows.append((int(info["pid"]), name, mem, user))
+            except transient:
+                continue
+
+        rows.sort(key=lambda r: r[1].lower())
+        self.rows_ready.emit(rows)
 
 
 class OpenProcessDialog(QDialog):
@@ -88,6 +115,7 @@ class OpenProcessDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.process: Optional[AbstractProcess] = None
+        self._scan_worker: Optional[_ProcessListWorker] = None
 
         self.setWindowTitle("PyMemoryEditor — Select a Process")
         self.setMinimumSize(720, 520)
@@ -95,10 +123,10 @@ class OpenProcessDialog(QDialog):
         self._build_ui()
         self._populate_processes()
 
-        # Refresh every 3 s so newly-launched processes appear without the
-        # user having to hit "Refresh".
+        # Refresh every few seconds so newly-launched processes appear without
+        # the user having to hit "Refresh".
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.setInterval(3000)
+        self._refresh_timer.setInterval(_REFRESH_INTERVAL_MS)
         self._refresh_timer.timeout.connect(self._populate_processes)
         self._refresh_timer.start()
 
@@ -200,37 +228,33 @@ class OpenProcessDialog(QDialog):
     # ----------------------------------------------------------- behaviour
 
     def _populate_processes(self) -> None:
-        selected_pid = self._selected_pid()
-        rows = []
-        # process_iter() yields processes that may exit, become zombies, or
-        # deny information access between iteration and our reads. Treat all
-        # of those as "skip this row" instead of aborting the refresh.
-        transient = (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess)
-        for proc in psutil.process_iter(["pid", "name", "username"]):
-            try:
-                info = proc.info
-                name = (info.get("name") or "").strip() or f"<pid {info['pid']}>"
-                user = info.get("username") or ""
-                try:
-                    mem = proc.memory_info().vms
-                except transient:
-                    mem = 0
-                rows.append((int(info["pid"]), name, mem, user))
-            except transient:
-                continue
+        """Start a background scan; skip if one is already in flight.
 
-        rows.sort(key=lambda r: r[1].lower())
+        The previous (auto) tick may still be running when the user hits
+        Refresh — let the in-flight scan finish instead of stacking workers.
+        """
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return
+
+        worker = _ProcessListWorker(self)
+        worker.rows_ready.connect(self._on_rows_ready)
+        worker.finished.connect(self._on_scan_finished)
+        self._scan_worker = worker
+        worker.start()
+
+    def _on_rows_ready(self, rows) -> None:
+        selected_pid = self._selected_pid()
 
         self._model.setRowCount(0)
         for pid, name, mem, user in rows:
-            pid_item = _NumericItem(str(pid))
+            pid_item = NumericItem(str(pid))
             pid_item.setData(pid, Qt.UserRole)
             pid_item.setTextAlignment(Qt.AlignCenter)
 
             name_item = QStandardItem(name)
             name_item.setData(pid, Qt.UserRole)
 
-            mem_item = _NumericItem(_human_kb(mem) if mem else "—")
+            mem_item = NumericItem(_human_kb(mem) if mem else "—")
             mem_item.setData(mem, Qt.UserRole)
             mem_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -245,6 +269,23 @@ class OpenProcessDialog(QDialog):
                 if self._proxy.data(idx, Qt.UserRole) == selected_pid:
                     self._table.selectRow(row)
                     break
+
+    def _on_scan_finished(self) -> None:
+        worker = self._scan_worker
+        self._scan_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def closeEvent(self, event):  # noqa: N802 — Qt naming
+        self._refresh_timer.stop()
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            try:
+                self._scan_worker.rows_ready.disconnect()
+                self._scan_worker.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._scan_worker.wait(1000)
+        super().closeEvent(event)
 
     def _on_filter_changed(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)

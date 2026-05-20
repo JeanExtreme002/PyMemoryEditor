@@ -8,11 +8,12 @@ re-writing its frozen value with ``process.write_process_memory`` so the
 target can't change it back. Non-frozen rows are merely read on the same
 tick so the displayed value stays fresh.
 """
+import copy
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QMutex, QMutexLocker, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -31,7 +32,18 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor.process import AbstractProcess
 
+from ._widgets import parse_hex_address
 from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec, parse_value
+
+
+# Threshold above which the per-tick refresh collapses N read_process_memory
+# calls into one search_by_addresses batch. Below this the per-entry path is
+# simpler and roughly equivalent in syscalls (search_by_addresses still has
+# to enumerate the target's memory regions internally on every call).
+_BATCH_THRESHOLD = 8
+
+# Tick interval for the background read/freeze loop in the cheat table.
+_TICK_INTERVAL_MS = 100
 
 
 @dataclass
@@ -73,7 +85,10 @@ class CheatEntry:
         spec = find_spec(spec_label) or VALUE_TYPES[0]
         addr_raw = raw["address"]
         if isinstance(addr_raw, str):
-            address = int(addr_raw, 16)
+            parsed = parse_hex_address(addr_raw)
+            if parsed is None:
+                raise ValueError(f"Invalid hex address in cheat-table row: {addr_raw!r}")
+            address = parsed
         else:
             address = int(addr_raw)
         frozen = raw.get("frozen_value")
@@ -90,6 +105,113 @@ class CheatEntry:
             frozen=bool(raw.get("frozen", False)),
             frozen_value=frozen,
         )
+
+
+class _CheatPollWorker(QThread):
+    """
+    Background thread that polls the target process for every active entry's
+    current value and re-writes frozen entries.
+
+    Lives on its own thread so the UI doesn't stall when the target is slow
+    (especially noticeable on macOS Mach-VM reads). Communication is single-
+    direction: the UI publishes the current entry snapshot via
+    ``update_snapshot()``; the worker emits ``values_ready`` with
+    ``(address, pytype, length, value)`` tuples for the UI to render. The
+    worker also handles the freeze write itself, so the syscall never
+    crosses thread boundaries. Identifying entries by (address, pytype,
+    length) instead of by row index means deletes/reorders between snapshot
+    and signal don't apply a value to the wrong row.
+    """
+
+    values_ready = Signal(object)  # list[tuple[int, type, int, Any]]
+
+    def __init__(self, process: AbstractProcess, parent=None):
+        super().__init__(parent)
+        self._process = process
+        self._mutex = QMutex()
+        self._snapshot: List[Tuple[int, type, int, Any, bool]] = []
+        self._stop = False
+
+    def update_snapshot(
+        self, snapshot: List[Tuple[int, type, int, Any, bool]]
+    ) -> None:
+        """Replace the entry list the worker iterates each tick.
+
+        The tuple is ``(address, pytype, length, frozen_value, is_frozen)``.
+        Defensive copy: the snapshot is small (one tuple per row) and
+        decoupling the worker's view from the UI's avoids races on edits.
+        """
+        with QMutexLocker(self._mutex):
+            self._snapshot = list(snapshot)
+
+    def stop(self) -> None:
+        with QMutexLocker(self._mutex):
+            self._stop = True
+
+    def run(self) -> None:  # type: ignore[override]
+        while True:
+            with QMutexLocker(self._mutex):
+                if self._stop:
+                    return
+                snapshot = list(self._snapshot)
+
+            if snapshot:
+                results = self._poll_once(snapshot)
+                if results:
+                    self.values_ready.emit(results)
+
+            QThread.msleep(_TICK_INTERVAL_MS)
+
+    def _poll_once(
+        self, snapshot: List[Tuple[int, type, int, Any, bool]]
+    ) -> List[Tuple[int, type, int, Any]]:
+        """Read every entry and (re-)write frozen values. Returns key→value."""
+        # Group by (pytype, length) so search_by_addresses can amortize the
+        # per-region enumeration when groups are large enough.
+        groups: Dict[Tuple[type, int], List[int]] = {}
+        freeze_by_addr: Dict[Tuple[type, int, int], Tuple[Any, bool]] = {}
+        for address, pytype, length, frozen_value, is_frozen in snapshot:
+            key = (pytype, length)
+            groups.setdefault(key, []).append(address)
+            freeze_by_addr[(*key, address)] = (frozen_value, is_frozen)
+
+        results: List[Tuple[int, type, int, Any]] = []
+        for (pytype, length), addresses in groups.items():
+            values_by_address: Optional[Dict[int, Any]] = None
+            if len(addresses) >= _BATCH_THRESHOLD:
+                try:
+                    values_by_address = dict(
+                        self._process.search_by_addresses(pytype, length, addresses)
+                    )
+                except Exception:  # noqa: BLE001
+                    # Batched read failed (target died mid-tick?). Fall through
+                    # to the per-entry path so we still surface what we can.
+                    values_by_address = None
+
+            for address in addresses:
+                frozen_value, is_frozen = freeze_by_addr[(pytype, length, address)]
+                if values_by_address is not None:
+                    current = values_by_address.get(address)
+                else:
+                    try:
+                        current = self._process.read_process_memory(
+                            address, pytype, length
+                        )
+                    except Exception:  # noqa: BLE001
+                        current = None
+
+                if is_frozen and frozen_value is not None:
+                    try:
+                        self._process.write_process_memory(
+                            address, pytype, length, frozen_value
+                        )
+                        current = frozen_value
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                results.append((address, pytype, length, current))
+
+        return results
 
 
 class CheatTable(QWidget):
@@ -109,12 +231,24 @@ class CheatTable(QWidget):
 
         self._build_ui()
 
-        # Re-read every entry's current value at 10 Hz so the user sees live
-        # values, and re-write frozen entries on the same tick.
-        self._tick = QTimer(self)
-        self._tick.setInterval(100)
-        self._tick.timeout.connect(self._tick_values)
-        self._tick.start()
+        # Spin up the background poller that owns the read/freeze syscalls so
+        # the UI thread isn't blocked when the target is slow.
+        self._poller = _CheatPollWorker(process, self)
+        self._poller.values_ready.connect(self._on_values_ready)
+        self._poller.start()
+
+        # A short cadence to push fresh entry snapshots into the worker. This
+        # is far cheaper than the previous QTimer that did real syscalls — it
+        # only copies a small list of tuples.
+        self._publish_timer = QTimer(self)
+        self._publish_timer.setInterval(_TICK_INTERVAL_MS)
+        self._publish_timer.timeout.connect(self._publish_snapshot_to_worker)
+        self._publish_timer.start()
+
+    def closeEvent(self, event):  # noqa: N802 — Qt naming
+        self._poller.stop()
+        self._poller.wait(1000)
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------ UI
 
@@ -325,51 +459,60 @@ class CheatTable(QWidget):
 
     # ----------------------------------------------------------- ticking
 
-    def _tick_values(self) -> None:
-        if not self._entries:
+    def _publish_snapshot_to_worker(self) -> None:
+        """Hand the worker a fresh immutable snapshot of every entry."""
+        snapshot = [
+            (
+                entry.address,
+                entry.spec.pytype,
+                entry.length,
+                copy.copy(entry.frozen_value),
+                bool(entry.frozen),
+            )
+            for entry in self._entries
+        ]
+        self._poller.update_snapshot(snapshot)
+
+    def _on_values_ready(self, results) -> None:
+        """Apply worker-produced values to the UI table (UI thread).
+
+        Entries are matched by (address, pytype, length) instead of row index
+        because rows can be reordered or deleted between the worker's snapshot
+        and this signal being delivered.
+        """
+        if not results:
             return
 
-        # Don't clobber the cell the user is currently typing into.
-        editing_index = (
-            self._table.currentIndex()
-            if self._table.state() == QAbstractItemView.EditingState
-            else None
-        )
-        editing_row = (
-            editing_index.row()
-            if editing_index is not None and editing_index.isValid()
-            else -1
-        )
+        editing_row = self._editing_row()
+
+        # Index entries by their identity tuple to apply values in O(N+M).
+        entries_by_key: Dict[Tuple[int, type, int], int] = {}
+        for row, entry in enumerate(self._entries):
+            entries_by_key[(entry.address, entry.spec.pytype, entry.length)] = row
 
         self._suspend_signals = True
         try:
-            for row, entry in enumerate(self._entries):
-                if row == editing_row:
+            for address, pytype, length, value in results:
+                row = entries_by_key.get((address, pytype, length))
+                if row is None:
+                    # Entry was deleted (or its spec/length changed) between
+                    # snapshot and signal — skip silently.
                     continue
-
-                try:
-                    current = self._process.read_process_memory(
-                        entry.address, entry.spec.pytype, entry.length
-                    )
-                except Exception:
-                    current = None
-
-                if entry.frozen and entry.frozen_value is not None:
-                    try:
-                        self._process.write_process_memory(
-                            entry.address,
-                            entry.spec.pytype,
-                            entry.length,
-                            entry.frozen_value,
-                        )
-                        current = entry.frozen_value
-                    except Exception:
-                        pass
-
-                entry.last_value = current
+                if row == editing_row:
+                    # Don't clobber whatever the user is typing.
+                    continue
+                entry = self._entries[row]
+                entry.last_value = value
                 self._update_value_cell(row, entry)
         finally:
             self._suspend_signals = False
+
+    def _editing_row(self) -> int:
+        """Return the row currently being edited, or -1 if none."""
+        if self._table.state() != QAbstractItemView.EditingState:
+            return -1
+        index = self._table.currentIndex()
+        return index.row() if index.isValid() else -1
 
     # ----------------------------------------------------------- toolbar
 
@@ -525,12 +668,8 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
     if not ok or not addr_text.strip():
         return None
 
-    addr_text = addr_text.strip()
-    if addr_text.lower().startswith("0x"):
-        addr_text = addr_text[2:]
-    try:
-        address = int(addr_text, 16)
-    except ValueError:
+    address = parse_hex_address(addr_text)
+    if address is None:
         QMessageBox.warning(parent, "Add address", "Invalid hex address.")
         return None
 

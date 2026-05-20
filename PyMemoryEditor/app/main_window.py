@@ -49,6 +49,15 @@ from .scan_worker import FirstScanWorker, RefineScanWorker, ScanRequest
 from .scanner_panel import ScannerPanel
 
 
+# Cadence at which we poll psutil to check the target process is still alive.
+# 2 s is brisk enough that a dead target's cleanup happens before the user
+# tries to refine a scan, but slow enough to keep the cost negligible.
+_HEARTBEAT_INTERVAL_MS = 2000
+
+# Maximum time we'll wait for a running worker thread to finish on shutdown.
+_WORKER_SHUTDOWN_WAIT_MS = 2000
+
+
 class MainWindow(QMainWindow):
 
     closing = Signal()
@@ -71,7 +80,7 @@ class MainWindow(QMainWindow):
         # disappears we tear down the freeze timer + lock the scanner so the
         # user gets a clean message instead of cryptic OSErrors.
         self._heartbeat = QTimer(self)
-        self._heartbeat.setInterval(2000)
+        self._heartbeat.setInterval(_HEARTBEAT_INTERVAL_MS)
         self._heartbeat.timeout.connect(self._check_process_alive)
         self._heartbeat.start()
 
@@ -560,7 +569,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._worker is not None:
             self._worker.cancel()
-            self._worker.wait(2000)
+            self._worker.wait(_WORKER_SHUTDOWN_WAIT_MS)
         self._heartbeat.stop()
         self.closing.emit()
         super().closeEvent(event)

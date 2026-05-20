@@ -3,7 +3,7 @@ name = "PyMemoryEditor"
 dynamic = ["version"]
 description = "Multi-platform library developed with ctypes for reading, writing and searching at process memory, in a simple and friendly way with Python 3."
 authors = [
-    { name = "Jean Loui Bernard Silva de Jesus", email = "jeanextreme002@gmail.com" },
+    { name = "Jean Loui Bernard Silva de Jesus", email = "contact@jeanloui.dev" },
 ]
 license = "MIT"
 readme = "README.md"
@@ -36,6 +36,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
     "Topic :: Security",
     "Topic :: System :: Monitoring"
@@ -54,10 +55,17 @@ app = [
 dev = [
   "pytest",
   "pytest-cov",
+  "pytest-qt",
+  "hypothesis",
   "flake8",
   "mypy",
   "build",
   "twine",
+  "PySide6>=6.5",
+]
+docs = [
+  "sphinx>=7,<9",
+  "sphinx-rtd-theme",
 ]
 
 [project.urls]
@@ -101,3 +109,14 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 pymemoryeditor = "PyMemoryEditor.app.application:main"
+
+# Coverage scope: the Qt app is excluded — it's exercised manually, not by
+# the automated test suite. The library code (everything else) is what we
+# track regressions against.
+[tool.coverage.run]
+source = ["PyMemoryEditor"]
+omit = ["PyMemoryEditor/app/*", "PyMemoryEditor/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

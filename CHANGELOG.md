@@ -7,14 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.0.0] - 2026-05-19
+### Changed
+- New `PyMemoryEditor.process.scanning.iter_search_results` helper owns the
+  per-region / per-chunk scanning loop (filter regions → walk chunks → run
+  the comparator → emit `(address[, progress])`). Win32, Linux and macOS
+  `search_addresses_by_value` now delegate to it — removing ~150 LOC of
+  duplication. The promise in `process/scanning.py`'s module docstring is
+  finally implemented.
+- `iter_search_results` reads `bufflength - 1` overlap bytes from the next
+  chunk when scanning strings, so a match that straddles a chunk boundary
+  on multi-GB regions is decoded correctly. Numeric scans are unaffected
+  (their alignment already guarantees no straddle).
+- Linux `process_vm_readv` / `process_vm_writev` bindings now declare
+  `argtypes` explicitly. Previously only `restype` was set; on builds where
+  the default C-int width is narrower than the pointer representation,
+  ctypes could silently truncate iovec pointers before the kernel saw them
+  — the same class of bug fixed in the Win32 backend during v2.
+
+### Added
+- `tests/test_scan_properties.py`: hypothesis-driven property tests that
+  cross-validate the fast `struct.iter_unpack` path against a reference
+  slow path for every ordered scan_type, over both signed integers and
+  IEEE-754 floats. Catches inlining typos in the eight per-scan-type
+  branches that the example-based suite can miss.
+- `tests/test_str_boundary.py`: regression tests for the chunk-overlap fix
+  above (straddling match found, in-chunk match not duplicated).
+- `tests/test_app_smoke.py`: smoke tests for the Qt app — version flag,
+  module imports, and (when `pytest-qt` is available) constructing the
+  full `MainWindow` and `CheatTable` against a self-PID process.
+- `docs/` Sphinx scaffold (`conf.py`, `index.rst`, `getting_started.rst`,
+  `api.rst`, `platform_notes.rst`) plus `.readthedocs.yaml`. Publishable
+  by wiring the repo to readthedocs.org; builds locally with
+  `pip install -e ".[docs]" && sphinx-build -b html docs docs/_build/html`.
+- `.github/workflows/release.yml`: tag-driven release pipeline that builds
+  sdist + wheel, validates with `twine check --strict`, and uploads to
+  PyPI via OIDC trusted-publishing (no long-lived secret).
+- CI: `security-audit` job (continue-on-error during ramp-up) runs
+  `pip-audit --strict` on every PR. Promote to a required check once the
+  workflow has been quiet for a release cycle.
+- `dev` extra now includes `pytest-qt`, `hypothesis`, and `PySide6` so a
+  single `pip install -e ".[dev]"` provisions everything tests need.
+- `docs` extra (`sphinx`, `sphinx-rtd-theme`) for the documentation build.
+
+### Fixed
+- Critical: `scan_memory` ordering comparisons (`BIGGER_THAN`, `SMALLER_THAN`,
+  `VALUE_BETWEEN`, ...) on signed `int` values used to compare against the
+  unsigned reinterpretation of the encoded bytes (e.g. `-1` was treated as
+  `0xFFFFFFFF`), so "bigger than `-1`" never matched. Same problem affected
+  `float` scans, which were ordered by their integer bit-pattern (so `-1.0f`
+  appeared greater than `1.0f`). The scan now dispatches per `pytype` to use
+  signed `struct b/h/i/q` for ints and IEEE-754 `struct f/d` for floats.
+  Tests in `tests/test_scan.py` cover negative integers and floats.
+- Win32: `kernel32`/`user32` are now loaded with
+  `ctypes.WinDLL(..., use_last_error=True)`. The previous
+  `ctypes.windll.LoadLibrary(...)` left `ctypes.get_last_error()` at zero, so
+  every failure surfaced as `OSError: <api> failed.` without the underlying
+  Win32 error code — the `WinError(code, ...)` branch in `_raise_last_error`
+  was effectively dead.
+- Linux: `MEMORY_BASIC_INFORMATION.Privileges` / `.Path` were `c_char_p`
+  pointers tied to the lifetime of the originating Python `bytes` objects.
+  Reading the struct after those bytes were GC'd was undefined behavior.
+  Both fields are now fixed-size inline `c_char * N` arrays so the struct
+  owns the storage.
+- `search_by_addresses` now yields `(address, None)` for addresses that fall
+  in gaps between memory regions, and for values whose
+  `[address, address+bufflength)` would extend past the containing region.
+  The previous per-backend code silently dropped gap-addresses and
+  zero-padded reads that overflowed the last chunk.
+- macOS: `_PAGE_GONE_KRS` now includes `KERN_NO_ACCESS` and
+  `KERN_INVALID_ARGUMENT` so guard-page and freshly-unmapped-page reads
+  during a scan are skipped rather than aborting the scan.
+- App: `value_types.parse_value(str, ...)` used character count as the byte
+  length; multi-byte UTF-8 strings (accents, CJK) were truncated. It now
+  uses `len(value.encode("utf-8"))`.
+- Win32: `ReadProcessMemory` now raises `OSError` when the kernel reports a
+  partial read (`bytes_read < bufflength`). Previously a truncated read on
+  a boundary-crossing region populated a buffer of mixed real-bytes-and-zeros
+  that downstream decoding would silently treat as valid. Mirrors the
+  existing partial-write check in `WriteProcessMemory`.
+- Win32: `WindowsProcess.close()` no longer silently returns `False` when
+  `CloseHandle` fails. It now raises `WinError`/`OSError` (with the actual
+  Win32 code, courtesy of the `use_last_error=True` fix above) and the
+  object is marked closed so subsequent `close()` calls don't retry against
+  a handle the kernel already released.
 
 ### Changed
-- `WindowsProcess` default `permission` now bundles
-  `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION` instead of `PROCESS_VM_READ`
-  alone. Without `PROCESS_QUERY_INFORMATION`, `VirtualQueryEx` returns 0 and
-  every `get_memory_regions`/`search_by_value*`/`snapshot_memory_regions`
-  call comes back empty — so the minimal usable read-only set is both bits.
+- New `PyMemoryEditor.process.region` module owns cross-platform region
+  introspection. `get_memory_regions()` now enriches each yielded dict with
+  `is_readable`, `is_writable`, `is_executable`, `is_shared` and `path`
+  keys, so portable client code no longer has to introspect the
+  per-platform `struct` field. The Qt app's `memory_map_dialog` uses these
+  directly.
+- New `PyMemoryEditor.process.scanning.iter_values_for_addresses` helper
+  owns the chunking / boundary / gap-handling logic shared by all three
+  backends. `search_by_addresses` on Win32, Linux and macOS now delegates
+  to it — removing ~200 LOC of copy-paste and fixing the gap/truncation
+  bugs in one place.
+- Win32 enums (`ProcessOperationsEnum`, `MemoryProtectionsEnum`,
+  `MemoryTypesEnum`, `MemoryAllocationStatesEnum`,
+  `StandardAccessRightsEnum`) migrated from `Enum` to `IntFlag` so members
+  compose with `|` and bitmask comparisons work without `.value`
+  unwrapping. `PROCESS_ALL_ACCESS` bumped from the pre-Vista value
+  `0x1F0FFF` to the modern `0x1FFFFF` (PyMemoryEditor targets Python 3.8+,
+  which already required Vista or later).
+- App `CheatTable` now runs its 10 Hz read/freeze loop on a background
+  `QThread` (`_CheatPollWorker`); the UI receives values via a queued
+  signal and never blocks on `read_process_memory`/`write_process_memory`.
+- App `MemoryMapDialog` now runs `snapshot_memory_regions()` on a
+  `_SnapshotWorker` thread — previously a refresh on a heavy target
+  (browser, JVM with 100k regions) could freeze the dialog for seconds.
+- App `OpenProcessDialog` enumerates processes via `_ProcessListWorker`
+  off the UI thread on every 3 s auto-refresh.
+- macOS: `MacProcess.__del__` calls `close()` best-effort so a leaked
+  reference doesn't hold the target's task port forever. Context-manager
+  usage is still preferred.
+- App `application.main(argv=None)` accepts an explicit argv list — the
+  previous signature collected positional args but ignored them.
+- CI: mypy is now a required gate (`continue-on-error` removed). pytest
+  enforces `--cov-fail-under=60` (the library code currently sits ~73%
+  on a single platform — only one backend per matrix job is exercised, so
+  the bar starts conservative). `-s -x` removed from pytest so the matrix
+  reports clusters of failures instead of stopping on the first one.
+- Makefile `security` target replaced `safety` (now paid/registered) with
+  `pip-audit`. `install-dev` no longer redundantly re-installs `pytest-cov`
+  and `mypy` (already in the `[dev]` extra).
 
 ### Added
 - `process.snapshot_memory_regions()` materializes the region list so callers
@@ -32,7 +148,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_bufflength_inference.py`, `tests/test_region_snapshot.py` and
   `tests/test_str_decode_consistency.py` cover the new behavior cross-platform.
 - CI now runs `mypy` on the package and reports coverage via `pytest-cov`.
-  Python 3.13 added to the test matrix.
+- `SECURITY.md` on the repo root surfaces the private advisory channel for
+  GitHub UI.
+- Type-checker-friendly `OpenProcess` alias: the cross-platform `Union` is
+  exposed under `TYPE_CHECKING` so IDEs/pyright see every backend's signature
+  (including Windows-only `permission=`) regardless of the host OS.
+
+### Changed
+- `WindowsProcess` default `permission` now bundles
+  `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION` instead of `PROCESS_VM_READ`
+  alone. Without `PROCESS_QUERY_INFORMATION`, `VirtualQueryEx` returns 0 and
+  every `get_memory_regions`/`search_by_value*`/`snapshot_memory_regions`
+  call comes back empty — so the minimal usable read-only set is both bits.
+- `scan_memory` numeric fast path uses a `memoryview` instead of materializing
+  a `bytes` copy of the chunk, avoiding an extra 256 MB copy per chunk in the
+  hot path.
+- `tests/conftest.py` no longer manipulates `sys.path`. The package must be
+  installed in editable mode (`pip install -e ".[dev]"`).
+- Cheat-table UI (Qt app) batches the 10 Hz refresh through
+  `search_by_addresses` when entries share the same `(pytype, length)` —
+  collapses N syscalls into chunked reads at the page level.
 
 ### Fixed
 - Critical: `ProcessOperationsEnum.PROCESS_TERMINATE` was `0x0800`, the same
@@ -51,13 +186,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "scan nothing", matching `search_by_value*`. Previously the truthy check
   silently re-enumerated the full address space when the caller passed an
   empty pre-filtered list.
-
-### Changed
-- `scan_memory` numeric fast path uses a `memoryview` instead of materializing
-  a `bytes` copy of the chunk, avoiding an extra 256 MB copy per chunk in the
-  hot path.
-- `tests/conftest.py` no longer manipulates `sys.path`. The package must be
-  installed in editable mode (`pip install -e ".[dev]"`).
+- Win32 `WriteProcessMemory` now raises `OSError` when the kernel reports a
+  partial write (`bytes_written < bufflength`). Previously a truncated write
+  to a boundary-crossing region returned silently as success.
+- macOS write-via-protect-flip path now emits a `ResourceWarning` when the
+  `mach_vm_protect` restore step fails — the page in the target task is left
+  more permissive than it started. The write itself still succeeds; this
+  surfaces an otherwise invisible side-effect.
+- `tests/test_chunking_integration.py::test_iter_region_chunks_unaligned_target`
+  rewrote vacuous assertion (the previous expression accidentally compared
+  the loop variables to themselves and always evaluated true).
 
 ### Docs
 - `README.md`: fixed broken link to `ScanTypesEnum` (was pointing to a
@@ -67,6 +205,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Makefile`: replaced references to the removed `requirements.txt` with
   `pip install -e ".[dev]"`. `install-deps`, `install-dev` and `update-deps`
   now work out-of-the-box.
+
+### CI
+- Test matrix now also includes Python 3.13.
 
 ## [2.0.0] - 2026-05-18
 

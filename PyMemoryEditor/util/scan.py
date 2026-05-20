@@ -3,9 +3,13 @@
 import struct
 import sys
 from bisect import bisect_left
-from typing import Generator, Iterable, Sequence, Tuple, Union
+from typing import Generator, Iterable, Literal, Optional, Sequence, Tuple, Type, Union, cast
 
 from ..enums import ScanTypesEnum
+
+
+# Static alias mypy can narrow to int.from_bytes's expected byte-order parameter.
+_ByteOrder = Literal["little", "big"]
 
 
 def _as_bytes(memory_region_data: Sequence) -> bytes:
@@ -80,19 +84,64 @@ def _iter_large_region_chunks(
         offset += size
 
 
-# struct format characters for unsigned integers by byte width — the natural
-# representation we use when comparing typed numeric values via int.from_bytes
-# (which returns unsigned values when signed=False).
-_UNSIGNED_FORMATS = {1: "B", 2: "H", 4: "I", 8: "Q"}
+# struct format characters by byte width for each interpretation.
+# Signed ints match the c_int8/16/32/64 encoding used by `value_to_bytes`.
+# Floats use IEEE-754 f/d. Unsigned forms are kept for completeness but are
+# only used for bytes/str/bool, where ordering against arbitrary signed ints
+# doesn't apply.
+_SIGNED_INT_FORMATS = {1: "b", 2: "h", 4: "i", 8: "q"}
+_FLOAT_FORMATS = {4: "f", 8: "d"}
+_UNSIGNED_INT_FORMATS = {1: "B", 2: "H", 4: "I", 8: "Q"}
 
 
-def _struct_format(byte_order: str, size: int):
-    """Return a struct format like '<I' for fast iter_unpack, or None when unsupported."""
-    char = _UNSIGNED_FORMATS.get(size)
+def _struct_format(
+    byte_order: _ByteOrder, size: int, pytype: Optional[Type]
+) -> Optional[str]:
+    """
+    Return a struct format like '<i' or '<f' for fast iter_unpack, or None
+    when the (size, pytype) combination has no struct shortcut.
+
+    pytype dispatch:
+      - int   → signed (b/h/i/q) so BIGGER_THAN/SMALLER_THAN of negative
+                values orders correctly.
+      - float → IEEE-754 (f/d) so 1.5 > -1.0 actually holds — comparing the
+                bit-pattern as an integer gives the wrong ordering for negatives.
+      - bool  → unsigned 1-byte (B). Only EXACT/NOT_EXACT is meaningful.
+      - None  → caller is doing a bytewise scan (str/bytes/unusual size).
+    """
+    if pytype is float:
+        char = _FLOAT_FORMATS.get(size)
+    elif pytype is int:
+        char = _SIGNED_INT_FORMATS.get(size)
+    elif pytype is bool:
+        char = _UNSIGNED_INT_FORMATS.get(size)
+    else:
+        return None
     if char is None:
         return None
     prefix = "<" if byte_order == "little" else ">"
     return prefix + char
+
+
+def _decode_target(
+    target_value: bytes, byte_order: _ByteOrder, pytype: Optional[Type]
+) -> Union[int, float]:
+    """
+    Decode a bytes-encoded target value into the Python value scan_memory
+    compares against, using the same interpretation as the per-value decoder.
+
+    For ints we honor signed=True; for floats we struct-unpack; otherwise the
+    bytewise (unsigned) view is fine since bytes/str scans only compare
+    equality and the slow path uses int.from_bytes consistently on both sides.
+    """
+    if pytype is int:
+        return int.from_bytes(target_value, byte_order, signed=True)
+    if pytype is float:
+        fmt = _FLOAT_FORMATS.get(len(target_value))
+        if fmt is not None:
+            prefix = "<" if byte_order == "little" else ">"
+            return struct.unpack(prefix + fmt, target_value)[0]
+    return int.from_bytes(target_value, byte_order)
 
 
 def scan_memory_for_exact_value(
@@ -101,7 +150,7 @@ def scan_memory_for_exact_value(
     target_value: bytes,
     target_value_size: int,
     comparison: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
-    is_string: bool = False,
+    is_string: Union[bool, Type, None] = False,
     *args,
     **kwargs,
 ) -> Generator[int, None, None]:
@@ -112,7 +161,17 @@ def scan_memory_for_exact_value(
     For NOT_EXACT_VALUE it returns each candidate offset whose value differs
     from target_value. Numeric scans step by `target_value_size` (natural
     alignment); string scans step byte-by-byte since strings can begin anywhere.
+
+    The 6th argument accepts either a `pytype` (the value type — `str` means
+    "treat as string") or a plain `is_string` boolean for backward
+    compatibility with the previous API.
     """
+    if is_string is str:
+        is_string = True
+    elif not isinstance(is_string, bool):
+        # A non-str type (int/float/bool/bytes) collapses to non-string.
+        is_string = False
+
     data = _as_bytes(memory_region_data)
 
     if comparison is ScanTypesEnum.EXACT_VALUE:
@@ -152,29 +211,40 @@ def scan_memory(
     target_value: Union[bytes, Tuple[bytes, bytes]],
     target_value_size: int,
     scan_type: ScanTypesEnum,
-    is_string: bool,
+    pytype: Optional[Type] = None,
 ) -> Generator[int, None, None]:
     """
     Search the memory region for values matching scan_type relative to target_value.
 
-    Tight loops are inlined per scan_type to eliminate generator and tuple-
-    unpacking overhead — for a multi-million-iteration scan this is the
-    difference between minutes and seconds. Numeric scans are decoded in bulk
-    via struct.iter_unpack when the size is 1/2/4/8 bytes; strings and unusual
-    sizes fall back to int.from_bytes.
+    `pytype` selects how the bytes are interpreted for ordering comparisons:
+      - int   → signed integer (struct b/h/i/q)
+      - float → IEEE-754 (struct f/d)
+      - bool  → unsigned 1-byte
+      - str   → bytewise comparison, step=1 (str matches can start at any byte)
+      - bytes / None → bytewise comparison aligned to `target_value_size`
+
+    Without this dispatch, BIGGER_THAN on signed ints (e.g. "> -1") would
+    compare against the reinterpreted unsigned (e.g. 0xFFFFFFFF) and produce
+    no matches; floats would order by their integer bit-pattern, which is
+    wrong for negatives. Tight loops are inlined per scan_type to eliminate
+    generator and tuple-unpacking overhead — for a multi-million-iteration
+    scan this is the difference between minutes and seconds.
     """
-    byte_order = sys.byteorder if not is_string else "big"
+    is_string = pytype is str
+    # sys.byteorder is typed as Literal["little", "big"] — preserve that
+    # narrowing for the downstream int.from_bytes / struct.unpack calls.
+    byte_order: _ByteOrder = cast(_ByteOrder, "big" if is_string else sys.byteorder)
 
     if isinstance(target_value, tuple):
-        start_target_value_int = int.from_bytes(target_value[0], byte_order)
-        end_target_value_int = int.from_bytes(target_value[1], byte_order)
-        target_value_int = 0
+        start_target_value = _decode_target(target_value[0], byte_order, pytype)
+        end_target_value = _decode_target(target_value[1], byte_order, pytype)
+        target_value_decoded: Union[int, float] = 0
     else:
-        target_value_int = int.from_bytes(target_value, byte_order)
-        start_target_value_int = 0
-        end_target_value_int = 0
+        target_value_decoded = _decode_target(target_value, byte_order, pytype)
+        start_target_value = 0
+        end_target_value = 0
 
-    fmt = None if is_string else _struct_format(byte_order, target_value_size)
+    fmt = None if is_string else _struct_format(byte_order, target_value_size, pytype)
 
     # ──────────────────────────────────────────────────────────────────────
     # Fast path: numeric scan with a struct-supported size (1/2/4/8 bytes).
@@ -195,107 +265,110 @@ def scan_memory(
 
         if scan_type is ScanTypesEnum.EXACT_VALUE:
             for (value,) in unpacker:
-                if value == target_value_int:
+                if value == target_value_decoded:
                     yield offset
                 offset += step
         elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
             for (value,) in unpacker:
-                if value != target_value_int:
+                if value != target_value_decoded:
                     yield offset
                 offset += step
         elif scan_type is ScanTypesEnum.BIGGER_THAN:
             for (value,) in unpacker:
-                if value > target_value_int:
+                if value > target_value_decoded:
                     yield offset
                 offset += step
         elif scan_type is ScanTypesEnum.SMALLER_THAN:
             for (value,) in unpacker:
-                if value < target_value_int:
+                if value < target_value_decoded:
                     yield offset
                 offset += step
         elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
             for (value,) in unpacker:
-                if value >= target_value_int:
+                if value >= target_value_decoded:
                     yield offset
                 offset += step
         elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
             for (value,) in unpacker:
-                if value <= target_value_int:
+                if value <= target_value_decoded:
                     yield offset
                 offset += step
         elif scan_type is ScanTypesEnum.VALUE_BETWEEN:
             for (value,) in unpacker:
-                if start_target_value_int <= value <= end_target_value_int:
+                if start_target_value <= value <= end_target_value:
                     yield offset
                 offset += step
         elif scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN:
             for (value,) in unpacker:
-                if not (start_target_value_int <= value <= end_target_value_int):
+                if not (start_target_value <= value <= end_target_value):
                     yield offset
                 offset += step
         return
 
     # ──────────────────────────────────────────────────────────────────────
     # Fallback: strings (byte-by-byte) or numeric with unusual sizes (3/6/7).
+    # Numerics here decode through int.from_bytes; the target was already
+    # decoded above with the matching signedness via _decode_target.
     # ──────────────────────────────────────────────────────────────────────
     data = _as_bytes(memory_region_data)
     step = 1 if is_string else target_value_size
     end = memory_region_data_size - target_value_size + 1
     int_from_bytes = int.from_bytes
+    signed = pytype is int
 
     if scan_type is ScanTypesEnum.EXACT_VALUE:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if value == target_value_int:
+            if value == target_value_decoded:
                 yield offset
     elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if value != target_value_int:
+            if value != target_value_decoded:
                 yield offset
     elif scan_type is ScanTypesEnum.BIGGER_THAN:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if value > target_value_int:
+            if value > target_value_decoded:
                 yield offset
     elif scan_type is ScanTypesEnum.SMALLER_THAN:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if value < target_value_int:
+            if value < target_value_decoded:
                 yield offset
     elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if value >= target_value_int:
+            if value >= target_value_decoded:
                 yield offset
     elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if value <= target_value_int:
+            if value <= target_value_decoded:
                 yield offset
     elif scan_type is ScanTypesEnum.VALUE_BETWEEN:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if start_target_value_int <= value <= end_target_value_int:
+            if start_target_value <= value <= end_target_value:
                 yield offset
     elif scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN:
         for offset in range(0, end, step):
             value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order
+                data[offset : offset + target_value_size], byte_order, signed=signed
             )
-            if not (start_target_value_int <= value <= end_target_value_int):
+            if not (start_target_value <= value <= end_target_value):
                 yield offset

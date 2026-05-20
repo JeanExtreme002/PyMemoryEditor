@@ -6,7 +6,7 @@ reading, writing and searching values in the process memory.
 [![Pypi](https://img.shields.io/pypi/v/PyMemoryEditor)](https://pypi.org/project/PyMemoryEditor/)
 [![License](https://img.shields.io/pypi/l/PyMemoryEditor)](https://pypi.org/project/PyMemoryEditor/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-8A2BE2)](https://pypi.org/project/PyMemoryEditor/)
-[![Python Version](https://img.shields.io/badge/python-3.8%20%7C...%7C%203.11%20%7C%203.12-blue)](https://pypi.org/project/PyMemoryEditor/)
+[![Python Version](https://img.shields.io/badge/python-3.8%20%7C...%7C%203.12%20%7C%203.13-blue)](https://pypi.org/project/PyMemoryEditor/)
 [![Downloads](https://static.pepy.tech/personalized-badge/pymemoryeditor?period=total&units=international_system&left_color=grey&right_color=orange&left_text=Downloads)](https://pypi.org/project/PyMemoryEditor/)
 
 # Installing PyMemoryEditor:
@@ -43,7 +43,31 @@ with OpenProcess(process_name = "example.exe") as process:
     # Do something...
 ```
 
-After that, use the methods `read_process_memory` and `write_process_memory` to manipulate the process <br>
+## Refine-scan workflow (recommended)
+For the common "scan → restrict → restrict" pattern (Cheat Engine's classic
+loop), enumerate the regions **once** and reuse the snapshot across every
+subsequent call. On heavy targets (browsers, JVMs with 100k regions) this is
+a massive win — the per-call region enumeration is the dominant cost
+otherwise:
+```py
+with OpenProcess(pid=1234) as process:
+    regions = process.snapshot_memory_regions()
+
+    # First pass: every address holding the value 100.
+    candidates = list(process.search_by_value(int, None, 100, memory_regions=regions))
+
+    # Refine: keep only those that now hold 95.
+    refined = [
+        addr for addr, value in process.search_by_addresses(int, None, candidates, memory_regions=regions)
+        if value == 95
+    ]
+```
+`snapshot_memory_regions()`, `search_by_value`, `search_by_value_between` and
+`search_by_addresses` all accept the same `memory_regions=` keyword. Pass an
+empty list (`[]`) to explicitly scan nothing.
+
+## Reading and writing
+Use the methods `read_process_memory` and `write_process_memory` to manipulate the process <br>
 memory. Numeric types (`int`, `float`, `bool`) infer the buffer length automatically; pass an
 explicit length only for `str`/`bytes` or when overriding the default width:
 ```py
@@ -145,19 +169,4 @@ for memory_region in process.get_memory_regions():
     information = memory_region["struct"]
 ```
 
-## Reusing a region snapshot across refine scans:
-For "scan → restrict → restrict" workflows (the typical Cheat Engine pattern), enumerate
-the regions once and pass the snapshot to subsequent scans to skip per-call enumeration:
-```py
-regions = process.snapshot_memory_regions()
-
-# First scan: find every address with value 100.
-candidates = list(process.search_by_value(int, None, 100, memory_regions=regions))
-
-# Refine: keep only those that now hold 95.
-refined = [
-    addr for addr, value in process.search_by_addresses(int, None, candidates, memory_regions=regions)
-    if value == 95
-]
-```
 

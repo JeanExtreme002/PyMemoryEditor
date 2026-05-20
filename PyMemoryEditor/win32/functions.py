@@ -11,12 +11,10 @@ import ctypes.wintypes
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.region import enrich_region
+from ..process.scanning import iter_search_results, iter_values_for_addresses
 from ..util import (
-    convert_from_byte_array,
     get_c_type_of,
-    iter_region_chunks,
-    scan_memory,
-    scan_memory_for_exact_value,
     values_to_bytes,
 )
 
@@ -30,9 +28,13 @@ from .types import (
 )
 
 
-# Load the libraries.
-kernel32 = ctypes.windll.LoadLibrary("kernel32.dll")
-user32 = ctypes.windll.LoadLibrary("user32.dll")
+# Load the libraries with `use_last_error=True` so that `ctypes.get_last_error()`
+# returns the per-call `GetLastError` set by the Win32 API. The default
+# `ctypes.windll.kernel32` accessor uses the shared `WinError` state and
+# `ctypes.get_last_error()` would always return 0, making the WinError path
+# in `_raise_last_error` effectively dead.
+kernel32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+user32 = ctypes.WinDLL("user32.dll", use_last_error=True)
 
 # Configure argtypes/restype for each Windows API used.
 # Skipping argtypes silently truncates 64-bit handles to 32-bit on x64 Python builds
@@ -183,7 +185,9 @@ def GetMemoryRegions(process_handle: int) -> Generator[dict, None, None]:
         if result == 0:
             break
 
-        yield {"address": current_address, "size": region.RegionSize, "struct": region}
+        yield enrich_region(
+            {"address": current_address, "size": region.RegionSize, "struct": region}
+        )
 
         if region.RegionSize == 0:
             break
@@ -263,6 +267,17 @@ def ReadProcessMemory(
     if not success:
         _raise_last_error("ReadProcessMemory")
 
+    # ReadProcessMemory can return TRUE with bytes_read < bufflength when the
+    # target range crosses a freed/guarded page; the populated buffer then
+    # contains a mix of real bytes and zeros. Surface that as OSError instead
+    # of letting the caller decode garbage — mirrors the partial-write check
+    # in WriteProcessMemory below.
+    if bytes_read.value != bufflength:
+        raise OSError(
+            "ReadProcessMemory partial read at 0x%X: %d of %d bytes read."
+            % (address, bytes_read.value, bufflength)
+        )
+
     if pytype is str:
         # Match convert_from_byte_array: tolerate non-UTF-8 bytes in raw memory
         # (callers needing the raw bytes should pass pytype=bytes).
@@ -331,68 +346,39 @@ def SearchAddressesByValue(
     if pytype not in [bool, int, float, str, bytes]:
         raise ValueError("The type must be bool, int, float, str or bytes.")
 
-    # Convert the target value (or tuple of values) to the corresponding bytes.
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
-
-    # Enumerate regions only when a snapshot wasn't provided.
-    checked_memory_size = 0
-    memory_total = 0
-    filtered_regions = []
 
     source_regions = (
         memory_regions
         if memory_regions is not None
         else GetMemoryRegions(process_handle)
     )
-    for region in source_regions:
-        if not _is_region_scannable(region, writeable_only):
-            continue
-        memory_total += region["size"]
-        filtered_regions.append(region)
+    filtered_regions = [
+        region
+        for region in source_regions
+        if _is_region_scannable(region, writeable_only)
+    ]
+    filtered_regions.sort(key=lambda region: region["address"])
 
-    memory_regions = filtered_regions
-    memory_regions.sort(key=lambda region: region["address"])
+    def read_chunk(address: int, size: int):
+        # `_read_region` returns None on transient failures (page unmapped /
+        # made inaccessible mid-scan). The helper accepts None directly and
+        # skips the chunk — no exception classification needed here.
+        return _read_region(process_handle, address, size)
 
-    # Avoid division by zero when no regions matched.
-    if memory_total == 0:
-        return
+    yield from iter_search_results(
+        filtered_regions,
+        pytype,
+        bufflength,
+        target_value_bytes,
+        scan_type,
+        read_chunk,
+        progress_information=progress_information,
+    )
 
-    searching_method = scan_memory
-    if scan_type in [ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE]:
-        searching_method = scan_memory_for_exact_value
 
-    for region in memory_regions:
-        address, size = region["address"], region["size"]
-
-        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
-            chunk_address = address + chunk_offset
-            chunk_data = _read_region(process_handle, chunk_address, chunk_size)
-            if chunk_data is None:
-                continue
-
-            for offset in searching_method(
-                chunk_data,
-                chunk_size,
-                target_value_bytes,
-                bufflength,
-                scan_type,
-                pytype is str,
-            ):
-                found_address = chunk_address + offset
-
-                if progress_information:
-                    yield (
-                        found_address,
-                        {
-                            "memory_total": memory_total,
-                            "progress": (checked_memory_size + chunk_offset + offset)
-                            / memory_total,
-                        },
-                    )
-                else:
-                    yield found_address
-
-        checked_memory_size += size
+class _Win32ChunkReadError(OSError):
+    """Raised internally when ReadProcessMemory returns 0 during chunked reads."""
 
 
 def SearchValuesByAddresses(
@@ -410,7 +396,9 @@ def SearchValuesByAddresses(
 
     Reads memory in chunks (see iter_region_chunks) to avoid allocating
     multi-GB regions at once. Chunks reading addresses near a boundary include
-    `bufflength - 1` extra bytes so the value is fully covered.
+    `bufflength - 1` extra bytes so the value is fully covered. Addresses that
+    fall in gaps between regions or extend past a region's end yield
+    `(address, None)`.
     """
     if pytype not in [bool, int, float, str, bytes]:
         raise ValueError("The type must be bool, int, float, str or bytes.")
@@ -419,74 +407,40 @@ def SearchValuesByAddresses(
     # explicitly is honored verbatim — scanning nothing is a valid choice when
     # the caller pre-filtered to zero regions.
     if memory_regions is None:
-        memory_regions = []
-        for region in GetMemoryRegions(process_handle):
+        memory_regions = [
+            region
+            for region in GetMemoryRegions(process_handle)
             # Accept both private and image (loaded DLLs) regions, matching
             # SearchAddressesByValue. Previously this filter was stricter and
             # caused addresses found via search_by_value to fail here.
-            if not _is_region_scannable(region, writeable_only=False):
-                continue
-            memory_regions.append(region)
+            if _is_region_scannable(region, writeable_only=False)
+        ]
     else:
         memory_regions = list(memory_regions)
 
-    addresses = sorted(addresses)
-    memory_regions.sort(key=lambda region: region["address"])
-    address_index = 0
+    def read_chunk(address: int, size: int):
+        buffer = _read_region(process_handle, address, size)
+        if buffer is None:
+            raise _Win32ChunkReadError(
+                "ReadProcessMemory failed at 0x%X (%d bytes)" % (address, size)
+            )
+        return buffer
 
-    for region in memory_regions:
-        if address_index >= len(addresses):
-            break
+    # ReadProcessMemory returning 0 during scanning typically means the page
+    # was unmapped / made inaccessible mid-scan — transient. The user can still
+    # force propagation via raise_error=True.
+    def is_transient(exc: BaseException) -> bool:
+        return isinstance(exc, _Win32ChunkReadError)
 
-        base_address, size = region["address"], region["size"]
-        if not (base_address <= addresses[address_index] < base_address + size):
-            continue
-
-        for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
-            if address_index >= len(addresses):
-                break
-
-            chunk_address = base_address + chunk_offset
-            chunk_end = chunk_address + chunk_size
-
-            if addresses[address_index] >= chunk_end:
-                continue
-
-            # Read up to `bufflength - 1` bytes past the chunk so addresses
-            # near the boundary can still be fully decoded.
-            extra = bufflength - 1 if chunk_offset + chunk_size < size else 0
-            read_size = chunk_size + extra
-            chunk_data = _read_region(process_handle, chunk_address, read_size)
-
-            if chunk_data is None:
-                while (
-                    address_index < len(addresses)
-                    and chunk_address <= addresses[address_index] < chunk_end
-                ):
-                    yield addresses[address_index], None
-                    address_index += 1
-                continue
-
-            while (
-                address_index < len(addresses)
-                and chunk_address <= addresses[address_index] < chunk_end
-            ):
-                target_address = addresses[address_index]
-                offset_in_chunk = target_address - chunk_address
-
-                try:
-                    data = chunk_data[offset_in_chunk : offset_in_chunk + bufflength]
-                    data = (ctypes.c_byte * bufflength)(*data)
-                    yield target_address, convert_from_byte_array(
-                        data, pytype, bufflength
-                    )
-
-                except (ValueError, UnicodeDecodeError, OSError) as error:
-                    if raise_error:
-                        raise error
-                    yield target_address, None
-
-                address_index += 1
+    yield from iter_values_for_addresses(
+        addresses,
+        memory_regions,
+        pytype,
+        bufflength,
+        read_chunk,
+        raise_error=raise_error,
+        transient_error_check=is_transient,
+    )
 
 
 def WriteProcessMemory(
@@ -520,5 +474,14 @@ def WriteProcessMemory(
 
     if not success:
         _raise_last_error("WriteProcessMemory")
+
+    # WriteProcessMemory can return TRUE even when fewer than `bufflength` bytes
+    # made it across (e.g. the target range straddles a freed/guarded page).
+    # Surface that as OSError rather than silently lying about the write.
+    if bytes_written.value != bufflength:
+        raise OSError(
+            "WriteProcessMemory partial write at 0x%X: %d of %d bytes written."
+            % (address, bytes_written.value, bufflength)
+        )
 
     return value

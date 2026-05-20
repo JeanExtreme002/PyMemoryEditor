@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-from enum import Enum
+from enum import IntFlag
 
 
-class StandardAccessRightsEnum(Enum):
+class StandardAccessRightsEnum(IntFlag):
     """
-    Enum with of standard access rights that correspond to operations
-    common to most types of securable objects.
+    Standard access rights common to most securable Win32 objects.
+
+    Reference:
+      https://learn.microsoft.com/en-us/windows/win32/secauthz/access-mask-format
     """
 
     # Required to delete the object.
     DELETE = 0x00010000
 
-    # Required to read information in the security descriptor for the object, not including the
-    # information in the SACL. To read or write the SACL, you must request the ACCESS_SYSTEM_SECURITY
-    # access right. For more information, see SACL Access Right.
+    # Required to read information in the security descriptor for the object.
     READ_CONTROL = 0x00020000
 
-    # The right to use the object for synchronization. This enables a thread to wait until the object
-    # is in the signaled state.
+    # Right to use the object for synchronization.
     SYNCHRONIZE = 0x00100000
 
     # Required to modify the DACL in the security descriptor for the object.

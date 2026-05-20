@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor.process import AbstractProcess
 
+from ._widgets import parse_hex_address
+
 
 _BYTES_PER_LINE = 16
 
@@ -138,16 +140,15 @@ class MemoryViewerDialog(QDialog):
         text = self._addr_edit.text().strip()
         if not text:
             return None
-        # int(text, 16) already accepts the "0x"/"0X" prefix, so no need to
-        # strip it manually. Fall back to base-10 for callers that paste a
-        # decimal value.
+        # Try hex first (with or without `0x`); fall back to decimal so callers
+        # that paste a plain integer still work.
+        addr = parse_hex_address(text)
+        if addr is not None:
+            return addr
         try:
-            return int(text, 16)
-        except ValueError:
-            try:
-                return int(text)
-            except ValueError:
-                return None
+            return int(text)
+        except (TypeError, ValueError):
+            return None
 
     def refresh(self) -> None:
         addr = self._parse_address()

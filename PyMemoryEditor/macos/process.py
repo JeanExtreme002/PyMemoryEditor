@@ -78,6 +78,29 @@ class MacProcess(AbstractProcess):
         self.__closed = True
         return True
 
+    def __del__(self) -> None:
+        """
+        Best-effort safety net for callers who forget to ``close()`` /
+        use the context manager. The Mach task port lives until ``close()``
+        deallocates it (no-op for the self-task) — leaving it leaked
+        accumulates port-name slots in the host across multiple
+        ``OpenProcess`` calls.
+
+        ``__del__`` is not guaranteed to run (cyclic GC, interpreter
+        teardown), so this is only a fallback. ``release_task`` itself
+        catches errors via ``mach_port_deallocate`` returning a
+        kern_return_t we never read here.
+        """
+        # Avoid touching anything if construction failed before __task was set.
+        if getattr(self, "_MacProcess__closed", True):
+            return
+        try:
+            self.close()
+        except Exception:
+            # __del__ must not raise; the port may already be gone if the
+            # interpreter is shutting down.
+            pass
+
     def get_memory_regions(self) -> Generator[dict, None, None]:
         self.__require_open()
         return get_memory_regions(self.__task)

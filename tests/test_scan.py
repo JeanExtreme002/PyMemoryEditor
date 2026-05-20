@@ -212,13 +212,32 @@ def test_iter_region_chunks_large_region_aligned():
 
 
 def test_iter_region_chunks_unaligned_target():
-    """Target size doesn't divide max_chunk evenly — still aligned."""
-    chunks = list(iter_region_chunks(1000, 3, max_chunk=500))
-    # Each chunk size must be a multiple of 3.
-    for _, size in chunks:
-        assert size % 3 == 0 or (
-            size + sum(s for _, s in chunks[: chunks.index((_, size))]) == 1000
-        )
+    """
+    Target size doesn't divide max_chunk evenly — chunks must still tile
+    the region exactly and every chunk except possibly the last must be a
+    multiple of target_value_size.
+
+    Regression: the previous version asserted
+    `size % 3 == 0 or (size + sum(s for _, s in chunks[: chunks.index((_, size))]) == 1000)`,
+    which reused the outer-loop tuple inside the comprehension and ended up
+    comparing a value to itself — the assertion always passed regardless of
+    the chunking output.
+    """
+    region_size = 1000
+    target_value_size = 3
+    chunks = list(iter_region_chunks(region_size, target_value_size, max_chunk=500))
+
+    # Chunks tile the region without gaps or overlap.
+    assert sum(size for _, size in chunks) == region_size
+    expected_offset = 0
+    for offset, size in chunks:
+        assert offset == expected_offset
+        expected_offset += size
+
+    # All but the last chunk are aligned so a typed scan won't skip a value
+    # straddling a boundary.
+    for _offset, size in chunks[:-1]:
+        assert size % target_value_size == 0
 
 
 @pytest.mark.parametrize(
@@ -244,7 +263,114 @@ def test_scan_memory_all_scan_types_run(scan_type):
             scan_memory_for_exact_value(data, len(data), target, 4, scan_type)
         )
     else:
-        results = list(scan_memory(data, len(data), target, 4, scan_type, False))
+        results = list(scan_memory(data, len(data), target, 4, scan_type, int))
 
     # The result list is non-empty for at least one of the scan types we packed values for.
     assert isinstance(results, list)
+
+
+def test_scan_memory_signed_int_bigger_than_negative():
+    """Regression: BIGGER_THAN with a negative signed int target used to compare
+    against the unsigned reinterpretation (e.g. -1 → 0xFFFFFFFF), yielding no
+    matches even when positive values clearly exceeded it. With pytype=int the
+    scan must use the signed encoding (struct 'i') and the comparison holds.
+    """
+    data = bytearray()
+    for value in (-10, -1, 0, 5, 100):
+        data.extend(_pack(value))
+
+    # Looking for values > -5: -1 (offset 4), 0 (8), 5 (12), 100 (16) match;
+    # -10 (offset 0) does not.
+    target = _pack(-5)
+    results = list(
+        scan_memory(data, len(data), target, 4, ScanTypesEnum.BIGGER_THAN, int)
+    )
+
+    assert results == [4, 8, 12, 16]
+
+
+def test_scan_memory_signed_int_smaller_than_zero():
+    """Negatives must be found by SMALLER_THAN 0 — would fail under unsigned."""
+    data = bytearray()
+    for value in (-3, -1, 0, 1, 3):
+        data.extend(_pack(value))
+
+    target = _pack(0)
+    results = list(
+        scan_memory(data, len(data), target, 4, ScanTypesEnum.SMALLER_THAN, int)
+    )
+
+    # Offsets 0 (=-3) and 4 (=-1) match.
+    assert results == [0, 4]
+
+
+def test_scan_memory_signed_int_value_between_with_negatives():
+    data = bytearray()
+    for value in (-100, -50, -10, 0, 10, 50, 100):
+        data.extend(_pack(value))
+
+    results = list(
+        scan_memory(
+            data,
+            len(data),
+            (_pack(-50), _pack(10)),
+            4,
+            ScanTypesEnum.VALUE_BETWEEN,
+            int,
+        )
+    )
+
+    # Values -50, -10, 0, 10 fall in the inclusive range.
+    assert results == [4, 8, 12, 16]
+
+
+def _pack_float(value: float, size: int = 4) -> bytes:
+    fmt = {4: "<f", 8: "<d"}[size]
+    return struct.pack(fmt, value)
+
+
+def test_scan_memory_float_bigger_than_orders_correctly():
+    """Regression: BIGGER_THAN 0.0 on floats used to compare bit-patterns as
+    unsigned ints, so -1.0 (0xBF800000) appeared greater than 1.0 (0x3F800000).
+    With pytype=float the scan must use IEEE-754 ordering.
+    """
+    data = bytearray()
+    for value in (-2.0, -1.0, 0.0, 1.0, 2.0):
+        data.extend(_pack_float(value))
+
+    target = _pack_float(0.0)
+    results = list(
+        scan_memory(data, len(data), target, 4, ScanTypesEnum.BIGGER_THAN, float)
+    )
+
+    # Only 1.0 (offset 12) and 2.0 (offset 16) are > 0.0.
+    assert results == [12, 16]
+
+
+def test_scan_memory_float_smaller_than_zero_finds_negatives():
+    data = bytearray()
+    for value in (-1.5, -0.5, 0.0, 0.5, 1.5):
+        data.extend(_pack_float(value))
+
+    target = _pack_float(0.0)
+    results = list(
+        scan_memory(data, len(data), target, 4, ScanTypesEnum.SMALLER_THAN, float)
+    )
+
+    # Offsets 0 (=-1.5) and 4 (=-0.5) match.
+    assert results == [0, 4]
+
+
+def test_scan_memory_double_bigger_than_negative():
+    """Same regression check for 8-byte doubles."""
+    data = bytearray()
+    for value in (-3.0, -1.0, 1.0, 3.0):
+        data.extend(_pack_float(value, size=8))
+
+    target = _pack_float(-2.0, size=8)
+    results = list(
+        scan_memory(data, len(data), target, 8, ScanTypesEnum.BIGGER_THAN, float)
+    )
+
+    # -1.0 (offset 8), 1.0 (16), 3.0 (24) match; -3.0 (offset 0) does not.
+    assert results == [8, 16, 24]

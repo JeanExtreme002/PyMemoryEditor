@@ -74,7 +74,6 @@ install-deps:
 install-dev:
 	@echo "$(GREEN)Installing development dependencies...$(NC)"
 	$(PIP) install -e ".[dev]"
-	$(PIP) install pytest-cov mypy
 	@echo "$(GREEN)Development dependencies installed successfully!$(NC)"
 
 # Install package in development mode
@@ -120,11 +119,11 @@ lint-fix:
 	$(PYTHON) -m black $(PACKAGE_NAME) $(TEST_DIR)
 	@echo "$(GREEN)Code formatting completed!$(NC)"
 
-# Run type checker
+# Run type checker (config in pyproject.toml — ignore_missing_imports is set there)
 .PHONY: type-check
 type-check:
 	@echo "$(GREEN)Running type checker (mypy)...$(NC)"
-	$(PYTHON) -m mypy $(PACKAGE_NAME) --ignore-missing-imports
+	$(PYTHON) -m mypy $(PACKAGE_NAME)
 	@echo "$(GREEN)Type checking completed!$(NC)"
 
 # Clean build artifacts
@@ -207,12 +206,13 @@ update-deps:
 	$(PIP) install --upgrade -e ".[dev]"
 	@echo "$(GREEN)Dependencies updated!$(NC)"
 
-# Security audit
+# Security audit — uses pip-audit (PyPA-maintained) which works without a
+# paid account, unlike the older `safety` tool.
 .PHONY: security
 security:
-	@echo "$(GREEN)Running security audit...$(NC)"
-	$(PIP) install safety
-	safety check
+	@echo "$(GREEN)Running security audit (pip-audit)...$(NC)"
+	$(PIP) install pip-audit
+	pip-audit
 	@echo "$(GREEN)Security audit completed!$(NC)"
 
 # Generate documentation

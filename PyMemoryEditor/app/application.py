@@ -210,8 +210,19 @@ QLabel#processBadge {
 """
 
 
-def main(*_args, **_kwargs):
-    if len(sys.argv) > 1 and sys.argv[1].strip() in ["--version", "-v"]:
+def main(argv=None):
+    """
+    Entry point for the ``pymemoryeditor`` console script.
+
+    ``argv`` defaults to ``sys.argv`` so packaging tools (which call
+    ``main()`` with no arguments) keep working. Tests and embedders can pass
+    an explicit list — previously a positional ``*args`` was accepted but
+    ignored, which made the parameter meaningless.
+    """
+    if argv is None:
+        argv = sys.argv
+
+    if len(argv) > 1 and argv[1].strip() in ["--version", "-v"]:
         return print(__version__)
 
     _abort_if_qt_unavailable()
@@ -221,7 +232,7 @@ def main(*_args, **_kwargs):
     from .main_window import MainWindow
     from .open_process_dialog import OpenProcessDialog
 
-    app = QApplication.instance() or QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("PyMemoryEditor")
     app.setApplicationDisplayName("PyMemoryEditor — Qt App")
     apply_dark_theme(app)

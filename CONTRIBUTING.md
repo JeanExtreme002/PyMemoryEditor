@@ -10,7 +10,7 @@ source venv/bin/activate    # On Windows: venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-The `dev` extra includes `pytest`, `flake8`, `build` and `twine`.
+The `dev` extra includes `pytest`, `pytest-cov`, `flake8`, `mypy`, `build` and `twine`.
 
 ## Running the test suite
 
@@ -27,7 +27,16 @@ pytest tests -v
 flake8 PyMemoryEditor tests
 ```
 
-The CI pipeline runs both steps and blocks merges on failure.
+## Type checking
+
+```bash
+mypy PyMemoryEditor
+```
+
+The CI pipeline runs lint, mypy and tests, and blocks merges on failure.
+macOS is intentionally not included in CI (free-tier runner congestion);
+contributors with macOS hardware should run `pytest tests` locally before
+submitting changes that touch the Mach backend.
 
 ## Project layout
 
