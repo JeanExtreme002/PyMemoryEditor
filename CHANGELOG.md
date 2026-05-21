@@ -85,11 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **Python 3.8 dropped.** `requires-python` is now `>=3.9`. 3.8 reached
-  end-of-life upstream in October 2024 and supporting it after that
-  point produces no value for users on supported Pythons. The CI
-  matrix was updated to start at 3.9.
-
 ### Fixed
 
 - `tests/test_macos_protect.py` dropped a copy-paste artifact: the

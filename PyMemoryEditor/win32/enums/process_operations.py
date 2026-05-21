@@ -55,7 +55,7 @@ class ProcessOperationsEnum(IntFlag):
     PROCESS_SET_LIMITED_INFORMATION = 0x2000
 
     # All possible access rights for a process object on Windows Vista and
-    # later. Pre-Vista (Windows XP / Server 2003) used 0x1F0FFF; PyMemoryEditor
-    # targets Python 3.8+, which already required Vista+ as a baseline. The
-    # `_has_all_access` helper checks against this canonical value.
+    # later. Pre-Vista (Windows XP / Server 2003) used 0x1F0FFF;
+    # Python 3.8+ already required Vista+ as a baseline.
+    # The `_has_all_access` helper checks against this canonical value.
     PROCESS_ALL_ACCESS = 0x1FFFFF

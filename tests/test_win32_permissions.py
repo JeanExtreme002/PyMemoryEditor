@@ -98,7 +98,6 @@ def test_read_plus_write_combo():
 
 def test_process_all_access_uses_modern_value():
     """PROCESS_ALL_ACCESS bumped from the pre-Vista 0x1F0FFF to 0x1FFFFF.
-    The library targets Python 3.8+, which already requires Vista or later.
     """
     assert ProcessOperationsEnum.PROCESS_ALL_ACCESS.value == 0x1FFFFF
 
