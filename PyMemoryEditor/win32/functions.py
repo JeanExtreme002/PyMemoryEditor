@@ -14,6 +14,7 @@ from ..enums import ScanTypesEnum
 from ..process.region import enrich_region
 from ..process.scanning import iter_search_results, iter_values_for_addresses
 from ..util import (
+    _validate_pytype,
     get_c_type_of,
     values_to_bytes,
 )
@@ -249,8 +250,7 @@ def ReadProcessMemory(
 
     Raises OSError if the read fails.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
     bytes_read = ctypes.c_size_t(0)
@@ -343,8 +343,7 @@ def SearchAddressesByValue(
     Passing a `memory_regions` snapshot (see `snapshot_memory_regions()`) skips
     the per-call region enumeration — useful in refine-scan workflows.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
@@ -400,8 +399,7 @@ def SearchValuesByAddresses(
     fall in gaps between regions or extend past a region's end yield
     `(address, None)`.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     # `None` means "no snapshot provided, enumerate now". An empty list passed
     # explicitly is honored verbatim — scanning nothing is a valid choice when
@@ -455,8 +453,7 @@ def WriteProcessMemory(
 
     Raises OSError if the write fails.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
     data.value = value.encode() if isinstance(value, str) else value

@@ -7,6 +7,23 @@ import ctypes
 T = TypeVar("T")
 
 
+# The five Python types the library supports as read/write/scan targets.
+# Mirrored by the user-facing error in `_validate_pytype` so the failure
+# message points at exactly the set the caller is allowed to pass.
+_SUPPORTED_PYTYPES = (bool, int, float, str, bytes)
+
+
+def _validate_pytype(pytype: Type) -> None:
+    """
+    Raise ``ValueError`` when ``pytype`` is not one of the five supported
+    primitives. Used at every public read / write / search entry point on
+    all three backends so the rejection message stays identical regardless
+    of which platform path the caller landed on.
+    """
+    if pytype not in _SUPPORTED_PYTYPES:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+
 # Default byte widths for numeric Python types when the caller doesn't specify
 # `bufflength`. Matches the natural C type used by ctypes for each Python type.
 _DEFAULT_BUFFLENGTH = {

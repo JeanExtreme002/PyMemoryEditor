@@ -14,6 +14,7 @@ from ..enums import ScanTypesEnum
 from ..process.region import enrich_region
 from ..process.scanning import iter_search_results, iter_values_for_addresses
 from ..util import (
+    _validate_pytype,
     get_c_type_of,
     values_to_bytes,
 )
@@ -156,6 +157,30 @@ class MachReadError(OSError):
         self.kr = kr
 
 
+class MachPartialReadError(MachReadError):
+    """
+    ``mach_vm_read_overwrite`` returned KERN_SUCCESS but ``outsize`` was less
+    than the requested ``size``. The kernel transferred what it could (often
+    because the read straddled a freed or guarded page) and the caller's
+    buffer is part real-bytes, part zero-initialized.
+
+    The previous behavior silently accepted the short result, which let
+    downstream code decode garbage as valid memory. Mirrors the Win32
+    partial-read check on ``ReadProcessMemory``. Scan loops classify this
+    as transient so the chunk is skipped instead of aborting.
+    """
+
+    def __init__(self, address: int, bytes_read: int, bytes_requested: int):
+        super().__init__(
+            KERN_INVALID_ADDRESS,
+            "mach_vm_read_overwrite partial read at 0x%X: %d of %d bytes."
+            % (address, bytes_read, bytes_requested),
+        )
+        self.address = address
+        self.bytes_read = bytes_read
+        self.bytes_requested = bytes_requested
+
+
 def _mach_read(task: int, address: int, local_buffer_address: int, size: int) -> int:
     """Read `size` bytes from `address` into `local_buffer_address`. Raises on failure."""
     out_size = mach_vm_size_t(0)
@@ -171,6 +196,8 @@ def _mach_read(task: int, address: int, local_buffer_address: int, size: int) ->
             kr,
             "mach_vm_read_overwrite failed: %s (kr=%d)" % (mach_error_message(kr), kr),
         )
+    if out_size.value != size:
+        raise MachPartialReadError(address, out_size.value, size)
     return out_size.value
 
 
@@ -289,8 +316,7 @@ def read_process_memory(
     bufflength: int,
 ) -> T:
     """Return a value from a memory address."""
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
     _mach_read(task, address, ctypes.addressof(data), bufflength)
@@ -311,8 +337,7 @@ def write_process_memory(
     value: Union[bool, int, float, str, bytes],
 ) -> Union[bool, int, float, str, bytes]:
     """Write a value to a memory address."""
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
     data.value = value.encode() if isinstance(value, str) else value
@@ -338,8 +363,7 @@ def search_addresses_by_value(
 
     Passing a `memory_regions` snapshot skips region enumeration.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
@@ -396,8 +420,7 @@ def search_values_by_addresses(
     Addresses that fall in gaps between regions or extend past a region's end
     yield `(address, None)`.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     # `None` means "no snapshot provided, enumerate now". An empty list passed
     # explicitly is honored verbatim — scanning nothing is a valid choice when

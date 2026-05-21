@@ -30,7 +30,6 @@ help:
 	@echo "  $(YELLOW)test-verbose$(NC)     - Run tests with verbose output"
 	@echo "  $(YELLOW)test-coverage$(NC)    - Run tests with coverage report"
 	@echo "  $(YELLOW)lint$(NC)             - Run linter (flake8)"
-	@echo "  $(YELLOW)lint-fix$(NC)         - Run auto-formatter (black)"
 	@echo "  $(YELLOW)type-check$(NC)       - Run type checker (mypy)"
 	@echo "  $(YELLOW)clean$(NC)            - Clean build artifacts"
 	@echo "  $(YELLOW)build$(NC)            - Build package"
@@ -111,13 +110,6 @@ lint:
 	@echo "$(GREEN)Running linter (flake8)...$(NC)"
 	$(PYTHON) -m flake8 $(PACKAGE_NAME) $(TEST_DIR)
 	@echo "$(GREEN)Linting completed!$(NC)"
-
-# Run auto-formatter
-.PHONY: lint-fix
-lint-fix:
-	@echo "$(GREEN)Running auto-formatter (black)...$(NC)"
-	$(PYTHON) -m black $(PACKAGE_NAME) $(TEST_DIR)
-	@echo "$(GREEN)Code formatting completed!$(NC)"
 
 # Run type checker (config in pyproject.toml — ignore_missing_imports is set there)
 .PHONY: type-check
@@ -261,7 +253,7 @@ info:
 	@echo "Pip: $(shell $(PIP) --version)"
 	@echo ""
 	@echo "$(GREEN)Installed packages:$(NC)"
-	@$(PIP) list | grep -E "($(PACKAGE_NAME)|pytest|flake8|black|mypy|twine|build)"
+	@$(PIP) list | grep -E "($(PACKAGE_NAME)|pytest|flake8|mypy|twine|build)"
 
 # Quick release workflow
 .PHONY: release

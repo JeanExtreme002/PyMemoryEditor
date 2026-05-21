@@ -62,7 +62,10 @@ class ProcessInfo(object):
     @window_title.setter
     def window_title(self, window_title: str) -> None:
         pid = get_process_id_by_window_title(window_title)
-        if not pid:
+        # `pid is None` (or 0 — never a real process, but EnumWindows returns 0
+        # when no match was found). Use an explicit None check to align with
+        # the `pid.setter` semantics where 0 is rejected by `pid_exists(0)`.
+        if pid is None or pid == 0:
             raise WindowNotFoundError(window_title)
 
         self.__pid = pid

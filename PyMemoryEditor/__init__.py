@@ -14,6 +14,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from .enums import ScanTypesEnum
+from .process.abstract import AbstractProcess
 from .process.errors import (
     AmbiguousProcessNameError,
     ClosedProcess,
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "AbstractProcess",
     "AmbiguousProcessNameError",
     "ClosedProcess",
     "OpenProcess",

@@ -3,17 +3,23 @@
 The "cheat table" — Cheat Engine's lower pane.
 
 Holds rows the user has saved off (description, address, type, length, value,
-plus a freeze checkbox). A :class:`QTimer` polls every frozen row at ~10 Hz,
-re-writing its frozen value with ``process.write_process_memory`` so the
-target can't change it back. Non-frozen rows are merely read on the same
-tick so the displayed value stays fresh.
+plus a freeze checkbox). A background :class:`_CheatPollWorker` thread polls
+every active entry at ~10 Hz, re-writing frozen values with
+``process.write_process_memory`` so the target can't change them back.
+Non-frozen rows are merely read on the same tick so the displayed value
+stays fresh.
+
+This module hosts only the Qt widget; the dataclass and the worker thread
+live in ``cheat_entry.py`` and ``cheat_poll_worker.py`` respectively. The
+``CheatEntry`` and ``_CheatPollWorker`` names are re-exported from here for
+backward compatibility with code (and tests) that imported them from this
+module before the split.
 """
 import copy
 import json
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QMutex, QMutexLocker, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -30,188 +36,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from PyMemoryEditor.process import AbstractProcess
+from PyMemoryEditor import AbstractProcess
 
 from ._widgets import parse_hex_address
+from .cheat_entry import CheatEntry
+from .cheat_poll_worker import TICK_INTERVAL_MS, _CheatPollWorker
 from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec, parse_value
 
 
-# Threshold above which the per-tick refresh collapses N read_process_memory
-# calls into one search_by_addresses batch. Below this the per-entry path is
-# simpler and roughly equivalent in syscalls (search_by_addresses still has
-# to enumerate the target's memory regions internally on every call).
-_BATCH_THRESHOLD = 8
-
-# Tick interval for the background read/freeze loop in the cheat table.
-_TICK_INTERVAL_MS = 100
-
-
-@dataclass
-class CheatEntry:
-    description: str
-    address: int
-    spec_label: str
-    length: int
-    frozen: bool = False
-    frozen_value: Any = None
-    # Last value we read from memory — only used to populate the table cell.
-    last_value: Any = field(default=None, compare=False)
-
-    @property
-    def spec(self) -> ValueTypeSpec:
-        spec = find_spec(self.spec_label)
-        if spec is None:
-            # Fallback — first entry in the catalogue is always the default 4-byte int.
-            return VALUE_TYPES[0]
-        return spec
-
-    def to_dict(self) -> Dict:
-        # Serialise byte values as hex so JSON stays human-readable.
-        frozen = self.frozen_value
-        if isinstance(frozen, (bytes, bytearray)):
-            frozen = frozen.hex()
-        return {
-            "description": self.description,
-            "address": f"0x{self.address:X}",
-            "spec": self.spec_label,
-            "length": self.length,
-            "frozen": self.frozen,
-            "frozen_value": frozen,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: Dict) -> "CheatEntry":
-        spec_label = raw.get("spec") or raw.get("spec_label") or VALUE_TYPES[0].label
-        spec = find_spec(spec_label) or VALUE_TYPES[0]
-        addr_raw = raw["address"]
-        if isinstance(addr_raw, str):
-            parsed = parse_hex_address(addr_raw)
-            if parsed is None:
-                raise ValueError(f"Invalid hex address in cheat-table row: {addr_raw!r}")
-            address = parsed
-        else:
-            address = int(addr_raw)
-        frozen = raw.get("frozen_value")
-        if isinstance(frozen, str) and spec.pytype is bytes:
-            try:
-                frozen = bytes.fromhex(frozen)
-            except ValueError:
-                frozen = None
-        return cls(
-            description=str(raw.get("description") or ""),
-            address=address,
-            spec_label=spec.label,
-            length=int(raw.get("length") or spec.length),
-            frozen=bool(raw.get("frozen", False)),
-            frozen_value=frozen,
-        )
-
-
-class _CheatPollWorker(QThread):
-    """
-    Background thread that polls the target process for every active entry's
-    current value and re-writes frozen entries.
-
-    Lives on its own thread so the UI doesn't stall when the target is slow
-    (especially noticeable on macOS Mach-VM reads). Communication is single-
-    direction: the UI publishes the current entry snapshot via
-    ``update_snapshot()``; the worker emits ``values_ready`` with
-    ``(address, pytype, length, value)`` tuples for the UI to render. The
-    worker also handles the freeze write itself, so the syscall never
-    crosses thread boundaries. Identifying entries by (address, pytype,
-    length) instead of by row index means deletes/reorders between snapshot
-    and signal don't apply a value to the wrong row.
-    """
-
-    values_ready = Signal(object)  # list[tuple[int, type, int, Any]]
-
-    def __init__(self, process: AbstractProcess, parent=None):
-        super().__init__(parent)
-        self._process = process
-        self._mutex = QMutex()
-        self._snapshot: List[Tuple[int, type, int, Any, bool]] = []
-        self._stop = False
-
-    def update_snapshot(
-        self, snapshot: List[Tuple[int, type, int, Any, bool]]
-    ) -> None:
-        """Replace the entry list the worker iterates each tick.
-
-        The tuple is ``(address, pytype, length, frozen_value, is_frozen)``.
-        Defensive copy: the snapshot is small (one tuple per row) and
-        decoupling the worker's view from the UI's avoids races on edits.
-        """
-        with QMutexLocker(self._mutex):
-            self._snapshot = list(snapshot)
-
-    def stop(self) -> None:
-        with QMutexLocker(self._mutex):
-            self._stop = True
-
-    def run(self) -> None:  # type: ignore[override]
-        while True:
-            with QMutexLocker(self._mutex):
-                if self._stop:
-                    return
-                snapshot = list(self._snapshot)
-
-            if snapshot:
-                results = self._poll_once(snapshot)
-                if results:
-                    self.values_ready.emit(results)
-
-            QThread.msleep(_TICK_INTERVAL_MS)
-
-    def _poll_once(
-        self, snapshot: List[Tuple[int, type, int, Any, bool]]
-    ) -> List[Tuple[int, type, int, Any]]:
-        """Read every entry and (re-)write frozen values. Returns key→value."""
-        # Group by (pytype, length) so search_by_addresses can amortize the
-        # per-region enumeration when groups are large enough.
-        groups: Dict[Tuple[type, int], List[int]] = {}
-        freeze_by_addr: Dict[Tuple[type, int, int], Tuple[Any, bool]] = {}
-        for address, pytype, length, frozen_value, is_frozen in snapshot:
-            key = (pytype, length)
-            groups.setdefault(key, []).append(address)
-            freeze_by_addr[(*key, address)] = (frozen_value, is_frozen)
-
-        results: List[Tuple[int, type, int, Any]] = []
-        for (pytype, length), addresses in groups.items():
-            values_by_address: Optional[Dict[int, Any]] = None
-            if len(addresses) >= _BATCH_THRESHOLD:
-                try:
-                    values_by_address = dict(
-                        self._process.search_by_addresses(pytype, length, addresses)
-                    )
-                except Exception:  # noqa: BLE001
-                    # Batched read failed (target died mid-tick?). Fall through
-                    # to the per-entry path so we still surface what we can.
-                    values_by_address = None
-
-            for address in addresses:
-                frozen_value, is_frozen = freeze_by_addr[(pytype, length, address)]
-                if values_by_address is not None:
-                    current = values_by_address.get(address)
-                else:
-                    try:
-                        current = self._process.read_process_memory(
-                            address, pytype, length
-                        )
-                    except Exception:  # noqa: BLE001
-                        current = None
-
-                if is_frozen and frozen_value is not None:
-                    try:
-                        self._process.write_process_memory(
-                            address, pytype, length, frozen_value
-                        )
-                        current = frozen_value
-                    except Exception:  # noqa: BLE001
-                        pass
-
-                results.append((address, pytype, length, current))
-
-        return results
+# Re-exported for backward compatibility with callers that imported the
+# poll-interval constant from this module before the split.
+_TICK_INTERVAL_MS = TICK_INTERVAL_MS
 
 
 class CheatTable(QWidget):
@@ -241,7 +76,7 @@ class CheatTable(QWidget):
         # is far cheaper than the previous QTimer that did real syscalls — it
         # only copies a small list of tuples.
         self._publish_timer = QTimer(self)
-        self._publish_timer.setInterval(_TICK_INTERVAL_MS)
+        self._publish_timer.setInterval(TICK_INTERVAL_MS)
         self._publish_timer.timeout.connect(self._publish_snapshot_to_worker)
         self._publish_timer.start()
 
@@ -700,3 +535,11 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
         spec_label=spec.label,
         length=int(length),
     )
+
+
+__all__ = (
+    "CheatEntry",
+    "CheatTable",
+    "_CheatPollWorker",
+    "prompt_for_manual_entry",
+)

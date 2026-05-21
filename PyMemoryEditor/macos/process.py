@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import warnings
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
@@ -46,6 +47,9 @@ class MacProcess(AbstractProcess):
         :param pid: process ID.
         :param permission: accepted for cross-platform API parity; ignored on
             macOS (access is governed by entitlements / mach_task_self_).
+            Passing a non-None value emits a ``UserWarning`` so a Windows-shaped
+            mask doesn't disappear silently here — pass ``None`` (or omit) on
+            non-Windows platforms.
         :param case_sensitive: when False, process_name matching ignores case.
         """
         if window_title is not None:
@@ -59,8 +63,19 @@ class MacProcess(AbstractProcess):
             pid=pid,
             case_sensitive=case_sensitive,
         )
-        # `permission` is accepted but not used; kept for cross-platform parity.
-        del permission
+
+        # `permission` is accepted for cross-platform parity but has no effect
+        # on macOS. Stay silent for the documented parity case (`permission=None`);
+        # warn when the caller passes a real value that's about to be discarded.
+        if permission is not None:
+            warnings.warn(
+                "`permission` has no effect on macOS — access is governed by "
+                "the com.apple.security.cs.debugger entitlement (or SIP off + "
+                "root) and by mach_task_self_ for the current process. Pass "
+                "`None` (or omit the argument) on non-Windows platforms.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self.__closed = False
         self.__task = get_task_for_pid(self.pid)
@@ -201,6 +216,27 @@ class MacProcess(AbstractProcess):
         bufflength: Optional[int],
         value: Union[bool, int, float, str, bytes],
     ) -> Union[bool, int, float, str, bytes]:
+        """
+        Write a value to a memory address.
+
+        .. warning::
+           **macOS-specific side effect.** When the target page is read-only,
+           this method transparently elevates its protection via
+           ``mach_vm_protect`` (with ``VM_PROT_COPY``), performs the write,
+           and tries to restore the original protection. If the restore step
+           fails (e.g. the target task disappears mid-call), a
+           ``ResourceWarning`` is emitted and the page is left more
+           permissive than it started — a *persistent* side effect outside
+           the library's process. Defensive tooling should treat that
+           warning as an event to log/alert on, not ignore.
+
+        :param address: target memory address.
+        :param pytype: type of value to be written (bool, int, float, str, bytes).
+        :param bufflength: value size in bytes. ``None`` uses the default for
+            numeric types (int→4, float→8, bool→1); ``str``/``bytes`` require
+            an explicit size.
+        :param value: value to be written.
+        """
         self.__require_open()
         return write_process_memory(
             self.__task, address, pytype, resolve_bufflength(pytype, bufflength), value

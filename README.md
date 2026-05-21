@@ -6,7 +6,7 @@ reading, writing and searching values in the process memory.
 [![Pypi](https://img.shields.io/pypi/v/PyMemoryEditor)](https://pypi.org/project/PyMemoryEditor/)
 [![License](https://img.shields.io/pypi/l/PyMemoryEditor)](https://pypi.org/project/PyMemoryEditor/)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-8A2BE2)](https://pypi.org/project/PyMemoryEditor/)
-[![Python Version](https://img.shields.io/badge/python-3.8%20%7C...%7C%203.12%20%7C%203.13-blue)](https://pypi.org/project/PyMemoryEditor/)
+[![Python Version](https://img.shields.io/badge/python-3.9%20%7C...%7C%203.12%20%7C%203.13-blue)](https://pypi.org/project/PyMemoryEditor/)
 [![Downloads](https://static.pepy.tech/personalized-badge/pymemoryeditor?period=total&units=international_system&left_color=grey&right_color=orange&left_text=Downloads)](https://pypi.org/project/PyMemoryEditor/)
 
 # Installing PyMemoryEditor:
@@ -116,6 +116,17 @@ with OpenProcess(process_name="NOTEPAD.EXE", case_sensitive=False) as process:
 > `com.apple.security.cs.debugger` entitlement (or SIP disabled and running as
 > root). Opening the **current** process always works because the library calls
 > `mach_task_self_` directly — handy for self-inspection and tests.
+
+> ⚠️ **macOS write side effect.** `write_process_memory` on a read-only page
+> transparently elevates the page protection via `mach_vm_protect`, performs
+> the write, and tries to restore the original protection. **If the restore
+> step fails** (e.g. the target task disappears mid-call), the library emits
+> a `ResourceWarning` and the target page is left more permissive than it
+> started — a persistent side effect outside the library's process. Treat
+> the warning as a signal to investigate, not log noise. The Win32 and Linux
+> backends do not have this property: protection elevation is opt-in on
+> Windows (`PROCESS_VM_OPERATION`) and Linux does not need protection
+> changes for `process_vm_writev`.
 
 # Getting memory addresses by a target value:
 You can look up a value in memory and get the address of all matches, like this:

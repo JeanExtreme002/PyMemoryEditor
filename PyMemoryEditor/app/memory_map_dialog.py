@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from PyMemoryEditor.process import AbstractProcess
+from PyMemoryEditor import AbstractProcess
 
 from ._widgets import NumericItem
 

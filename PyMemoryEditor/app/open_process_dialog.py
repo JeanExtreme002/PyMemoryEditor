@@ -28,13 +28,13 @@ from PySide6.QtWidgets import (
 )
 
 from PyMemoryEditor import (
+    AbstractProcess,
     AmbiguousProcessNameError,
     OpenProcess,
     ProcessIDNotExistsError,
     ProcessNotFoundError,
     __version__,
 )
-from PyMemoryEditor.process import AbstractProcess
 
 from ._widgets import NumericItem
 

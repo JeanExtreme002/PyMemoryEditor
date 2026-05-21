@@ -38,8 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from PyMemoryEditor import __version__
-from PyMemoryEditor.process import AbstractProcess
+from PyMemoryEditor import AbstractProcess, __version__
 
 from .cheat_table import CheatTable
 from .memory_map_dialog import MemoryMapDialog

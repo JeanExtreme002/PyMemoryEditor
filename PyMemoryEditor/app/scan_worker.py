@@ -14,15 +14,18 @@ Two workers live here:
 Both expose ``progress`` / ``found`` / ``finished`` signals so the UI never
 blocks on a long scan.
 """
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import QThread, Signal
 
-from PyMemoryEditor import ScanTypesEnum
-from PyMemoryEditor.process import AbstractProcess
+from PyMemoryEditor import AbstractProcess, ScanTypesEnum
 
 from .value_types import ValueTypeSpec
+
+
+_LOG = logging.getLogger(__name__)
 
 
 # Map of ScanTypesEnum → comparison used by the refine step.
@@ -192,7 +195,20 @@ class RefineScanWorker(_BaseWorker):
                 elif self._filter_only and compare is not None:
                     try:
                         keeps = bool(compare(current, req.value))
-                    except TypeError:
+                    except TypeError as exc:
+                        # The comparator received incompatible types — usually
+                        # a spec/value mismatch in the user's scan request.
+                        # Surfacing this to the log lets us spot a real bug
+                        # without aborting the whole refine pass.
+                        _LOG.debug(
+                            "refine comparator raised TypeError at 0x%X "
+                            "(scan_type=%s, current=%r, target=%r): %s",
+                            address,
+                            req.scan_type,
+                            current,
+                            req.value,
+                            exc,
+                        )
                         keeps = False
                     chunk.append((address, current, keeps))
                     if keeps:

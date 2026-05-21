@@ -43,10 +43,6 @@ jobs:
   type-check:
     needs: lint
     runs-on: ubuntu-latest
-    # Informational while pre-existing type debt is being paid down. Surfaces
-    # regressions in PR diffs without blocking merges. Flip to required once
-    # the existing errors are addressed.
-    continue-on-error: true
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python
@@ -112,9 +108,3 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       run: |
         pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term
-
-# macOS is intentionally NOT in CI: GitHub-hosted macOS runners are heavily
-# congested for free-tier accounts (jobs sit in queue for 30+ min without
-# acquiring a runner). The Mach backend is validated by local self-process
-# tests during development; contributors with macOS hardware can run
-# `pytest tests` locally.

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .convert import (
+    _validate_pytype,
     convert_from_byte_array,
     get_c_type_of,
     resolve_bufflength,

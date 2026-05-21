@@ -16,6 +16,7 @@ from ..enums import ScanTypesEnum
 from ..process.region import enrich_region
 from ..process.scanning import iter_search_results, iter_values_for_addresses
 from ..util import (
+    _validate_pytype,
     get_c_type_of,
     values_to_bytes,
 )
@@ -32,12 +33,40 @@ T = TypeVar("T")
 _PAGE_GONE_ERRNOS = frozenset((errno_mod.EFAULT, errno_mod.ENOMEM))
 
 
+class _LinuxPartialIOError(OSError):
+    """
+    process_vm_readv / process_vm_writev returned fewer bytes than requested.
+
+    In practice this happens when the target range straddles a freed or
+    inaccessible page — the kernel transfers what it can and reports the
+    short count. The previous behavior was to silently accept the short
+    result, leaving the caller's buffer half-filled with real bytes and
+    half with zeros (which downstream decoding would treat as valid).
+    Mirrors the partial-read/write check the Win32 backend already does
+    against ``ReadProcessMemory`` / ``WriteProcessMemory``.
+    """
+
+    def __init__(self, op: str, address: int, bytes_done: int, length: int):
+        super().__init__(
+            "%s partial transfer at 0x%X: %d of %d bytes."
+            % (op, address, bytes_done, length)
+        )
+        self.address = address
+        self.bytes_done = bytes_done
+        self.length = length
+
+
 def _process_vm_readv(
     pid: int, local_address: int, remote_address: int, length: int
 ) -> int:
     """
     Wrapper for process_vm_readv that raises OSError on failure.
     Returns the number of bytes read.
+
+    Raises ``_LinuxPartialIOError`` when the kernel reports a short read
+    (``result < length``) so callers don't decode a buffer that is part
+    real-bytes, part zero-initialized. Scan loops classify this as a
+    transient failure (same shape as a vanished page).
     """
     local = (iovec * 1)(iovec(local_address, length))
     remote = (iovec * 1)(iovec(remote_address, length))
@@ -46,6 +75,11 @@ def _process_vm_readv(
     if result == -1:
         errno = ctypes.get_errno()
         raise OSError(errno, os.strerror(errno))
+
+    if result != length:
+        raise _LinuxPartialIOError(
+            "process_vm_readv", remote_address, result, length
+        )
 
     return result
 
@@ -56,6 +90,10 @@ def _process_vm_writev(
     """
     Wrapper for process_vm_writev that raises OSError on failure.
     Returns the number of bytes written.
+
+    Raises ``_LinuxPartialIOError`` on a short write so the caller learns
+    that the value did not fully land. The Win32 backend already enforces
+    this for ``WriteProcessMemory``.
     """
     local = (iovec * 1)(iovec(local_address, length))
     remote = (iovec * 1)(iovec(remote_address, length))
@@ -64,6 +102,11 @@ def _process_vm_writev(
     if result == -1:
         errno = ctypes.get_errno()
         raise OSError(errno, os.strerror(errno))
+
+    if result != length:
+        raise _LinuxPartialIOError(
+            "process_vm_writev", remote_address, result, length
+        )
 
     return result
 
@@ -121,8 +164,7 @@ def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int
     """
     Return a value from a memory address.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
     _process_vm_readv(pid, addressof(data), address, sizeof(data))
@@ -152,8 +194,7 @@ def search_addresses_by_value(
 
     Passing a `memory_regions` snapshot skips region enumeration.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
@@ -183,6 +224,11 @@ def search_addresses_by_value(
         return buffer
 
     def is_transient(exc: BaseException) -> bool:
+        # A short read mid-scan is equivalent to a page disappearing — the
+        # scan should skip the chunk and keep going. Real permission /
+        # configuration errors (EACCES, EPERM, ESRCH, EINVAL) propagate.
+        if isinstance(exc, _LinuxPartialIOError):
+            return True
         return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
     yield from iter_search_results(
@@ -216,8 +262,7 @@ def search_values_by_addresses(
     Addresses that fall in gaps between regions or extend past a region's end
     yield `(address, None)`.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     # `None` means "no snapshot provided, enumerate now". An empty list passed
     # explicitly is honored verbatim — scanning nothing is a valid choice when
@@ -235,6 +280,11 @@ def search_values_by_addresses(
         return buffer
 
     def is_transient(exc: BaseException) -> bool:
+        # A short read mid-scan is equivalent to a page disappearing — the
+        # scan should skip the chunk and keep going. Real permission /
+        # configuration errors (EACCES, EPERM, ESRCH, EINVAL) propagate.
+        if isinstance(exc, _LinuxPartialIOError):
+            return True
         return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
     yield from iter_values_for_addresses(
@@ -258,8 +308,7 @@ def write_process_memory(
     """
     Write a value to a memory address.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
     data.value = value.encode() if isinstance(value, str) else value

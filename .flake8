@@ -4,9 +4,8 @@ max-line-length = 130
 # E203: whitespace before ':' (black-compatible — black puts spaces around the
 #       colon in slices like data[i : i + n], which conflicts with PEP 8).
 # E701: multiple statements on one line (colon) — used pervasively as a style choice.
-# E722: do not use bare 'except'.
 # W503: line break before binary operator (black-compatible).
-ignore = E203, E701, E722, W503
+ignore = E203, E701, W503
 
 per-file-ignores =
     # __init__.py files are allowed to have unused imports and lines-too-long.

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import warnings
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
@@ -38,6 +39,9 @@ class LinuxProcess(AbstractProcess):
         :param pid: process ID.
         :param permission: accepted for cross-platform API parity; ignored on
             Linux (access is governed by ptrace_scope and process ownership).
+            Passing a non-None value emits a ``UserWarning`` so a Windows-shaped
+            mask doesn't disappear silently here — pass ``None`` (or omit) on
+            non-Windows platforms.
         :param case_sensitive: when False, process_name matching ignores case.
         """
         if window_title is not None:
@@ -52,8 +56,18 @@ class LinuxProcess(AbstractProcess):
             case_sensitive=case_sensitive,
         )
         self.__closed = False
-        # `permission` is accepted but not used; kept for cross-platform parity.
-        del permission
+
+        # `permission` is accepted for cross-platform parity but has no effect
+        # on Linux. Stay silent for the documented parity case (`permission=None`);
+        # warn when the caller passes a real value that's about to be discarded.
+        if permission is not None:
+            warnings.warn(
+                "`permission` has no effect on Linux — access is governed by "
+                "ptrace_scope and process ownership. Pass `None` (or omit the "
+                "argument) on non-Windows platforms.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     def __require_open(self) -> None:
         if self.__closed:

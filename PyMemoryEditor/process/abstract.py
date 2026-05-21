@@ -13,7 +13,8 @@ from typing import (
 )
 
 from ..enums import ScanTypesEnum
-from ..process.info import ProcessInfo
+from .info import ProcessInfo
+from .scanning import _PRESORTED_KEY
 
 
 T = TypeVar("T")
@@ -92,8 +93,19 @@ class AbstractProcess(ABC):
         `search_by_value`, `search_by_value_between` or `search_by_addresses`
         to skip the region enumeration. Useful for "scan → refine → refine"
         workflows where the region map doesn't change between calls.
+
+        Regions are pre-sorted by base address and tagged so that the helper
+        functions in ``process.scanning`` skip their per-call ``sorted(...)``
+        step on reuse. Don't reorder the returned list manually; if you must
+        slice or filter, pass the result of ``sorted(my_slice, key=...)`` (or
+        an unsorted slice) — the helpers re-sort defensively when the tag is
+        missing.
         """
-        return list(self.get_memory_regions())
+        regions = list(self.get_memory_regions())
+        regions.sort(key=lambda region: region["address"])
+        for region in regions:
+            region[_PRESORTED_KEY] = True
+        return regions
 
     @abstractmethod
     def search_by_addresses(
@@ -179,6 +191,14 @@ class AbstractProcess(ABC):
         :param bufflength: value size in bytes (1, 2, 4, 8). For numeric types
             (int, float, bool) you may omit this; defaults are int→4, float→8,
             bool→1. str and bytes require an explicit size.
+
+        .. note::
+           When ``pytype=str`` the raw bytes are decoded with
+           ``errors="replace"``: any byte sequence that is not valid UTF-8
+           becomes the Unicode replacement character (``U+FFFD``) instead of
+           raising ``UnicodeDecodeError``. This matches ``search_by_addresses``
+           and ``convert_from_byte_array``. Callers that need the original
+           bytes verbatim (no decoding) should pass ``pytype=bytes``.
         """
         raise NotImplementedError()
 

@@ -17,16 +17,12 @@ if sys.platform != "darwin":
     pytest.skip("macOS-only module", allow_module_level=True)
 
 
+from ctypes.util import find_library  # noqa: E402
+
 from PyMemoryEditor import OpenProcess  # noqa: E402
 
 
 # Page size on macOS arm64 is 16 KB; x86_64 is 4 KB. mmap will pick the right one.
-_libsystem = ctypes.CDLL(
-    ctypes.util.find_library("System") if hasattr(ctypes, "util") else "libSystem.dylib"
-)
-# Re-import the proper way:
-from ctypes.util import find_library  # noqa: E402
-
 _libsystem = ctypes.CDLL(find_library("System"))
 
 # mmap / munmap signatures

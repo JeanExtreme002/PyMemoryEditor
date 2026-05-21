@@ -59,6 +59,38 @@ _SearchingMethod = Callable[
 T = TypeVar("T")
 
 
+# Sentinel key on a region dict marking the dict as already address-sorted.
+# `iter_values_for_addresses` and `iter_search_results` consult this to skip
+# the per-call `sorted(...)` cost. ``snapshot_memory_regions()`` pre-sorts the
+# list and tags every region; pre-filtered slices that preserve order can
+# carry the tag through too.
+_PRESORTED_KEY = "_pymemoryeditor_presorted"
+
+
+def _ensure_sorted_by_address(memory_regions: Sequence[Dict]) -> Sequence[Dict]:
+    """
+    Return ``memory_regions`` sorted by ``address``, reusing the input verbatim
+    when every region is already tagged with :data:`_PRESORTED_KEY`.
+
+    Tagging is purely advisory — falsifying it on an unsorted snapshot would
+    silently mis-walk regions, but no public API does that. The optimization
+    matters in tight refine-scan loops where snapshots are reused across many
+    ``search_by_addresses``/``search_by_value*`` calls.
+    """
+    if not memory_regions:
+        return memory_regions
+    # Cheap check: only inspect the first region; the tagging contract is
+    # all-or-nothing.
+    if memory_regions[0].get(_PRESORTED_KEY):
+        return memory_regions
+    return sorted(memory_regions, key=lambda region: region["address"])
+
+
+def _always_false(_exc: BaseException) -> bool:
+    """Default ``transient_error_check`` — every exception is fatal."""
+    return False
+
+
 def iter_values_for_addresses(
     addresses: Sequence[int],
     memory_regions: Sequence[Dict],
@@ -85,10 +117,10 @@ def iter_values_for_addresses(
         silently zero-padded.
     """
     if transient_error_check is None:
-        transient_error_check = lambda _exc: False  # noqa: E731
+        transient_error_check = _always_false
 
     sorted_addresses = sorted(addresses)
-    sorted_regions = sorted(memory_regions, key=lambda region: region["address"])
+    sorted_regions = _ensure_sorted_by_address(memory_regions)
     address_index = 0
     region_index = 0
 
@@ -223,7 +255,7 @@ def iter_search_results(
     ``address`` if monotonic progress fractions matter.
     """
     if transient_error_check is None:
-        transient_error_check = lambda _exc: False  # noqa: E731
+        transient_error_check = _always_false
 
     memory_total = 0
     for region in memory_regions:
