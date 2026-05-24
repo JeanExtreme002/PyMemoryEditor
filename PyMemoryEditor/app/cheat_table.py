@@ -89,7 +89,9 @@ class CheatTable(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Small top inset so the toolbar buttons don't sit flush against the
+        # vertical splitter handle above.
+        layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(8)
 
         # Toolbar

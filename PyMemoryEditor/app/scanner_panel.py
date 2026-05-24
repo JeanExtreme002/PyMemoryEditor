@@ -72,7 +72,9 @@ class ScannerPanel(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Small right inset so the group boxes don't sit flush against the
+        # outer splitter handle.
+        layout.setContentsMargins(0, 0, 4, 0)
         layout.setSpacing(10)
 
         # -- Value group ---------------------------------------------------

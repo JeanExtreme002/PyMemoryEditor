@@ -118,7 +118,7 @@ class MainWindow(QMainWindow):
 
         # Splitter for scanner + (results / cheat table)
         outer_splitter = QSplitter(Qt.Horizontal)
-        outer_splitter.setHandleWidth(2)
+        outer_splitter.setHandleWidth(4)
         outer_splitter.setChildrenCollapsible(False)
 
         # Left: scanner panel
@@ -135,13 +135,25 @@ class MainWindow(QMainWindow):
         # and QSplitter has its own widget management (no Q*Layout).
         self._right_splitter = QSplitter(Qt.Vertical)
         right_splitter = self._right_splitter
-        right_splitter.setHandleWidth(2)
+        right_splitter.setHandleWidth(4)
         right_splitter.setChildrenCollapsible(False)
 
-        # Results
+        # The right (vertical) splitter sits flush against the outer
+        # (horizontal) splitter handle, which makes the two divider lines
+        # touch at a "T" intersection. We wrap it in a container with a
+        # left inset so the horizontal divider has a small gap from the
+        # vertical one.
+        right_container = QWidget()
+        right_container_layout = QHBoxLayout(right_container)
+        right_container_layout.setContentsMargins(8, 0, 0, 0)
+        right_container_layout.setSpacing(0)
+        right_container_layout.addWidget(right_splitter)
+
+        # Results — small bottom margin so the table doesn't sit flush
+        # against the right splitter handle.
         results_wrap = QWidget()
         results_layout = QVBoxLayout(results_wrap)
-        results_layout.setContentsMargins(0, 0, 0, 0)
+        results_layout.setContentsMargins(0, 0, 0, 4)
         results_layout.setSpacing(6)
 
         self._results_label = QLabel("No scan yet. Press First Scan to begin.")
@@ -162,7 +174,7 @@ class MainWindow(QMainWindow):
         right_splitter.addWidget(self._cheat)
         right_splitter.setSizes([520, 260])
 
-        outer_splitter.addWidget(right_splitter)
+        outer_splitter.addWidget(right_container)
         outer_splitter.setSizes([320, 1040])
         outer.addWidget(outer_splitter, 1)
 

@@ -195,9 +195,10 @@ QMenuBar::item:selected { background: %(bg_button)s; }
 QMenu { background: %(bg)s; border: 1px solid %(border)s; }
 QMenu::item:selected { background: %(accent)s; color: #0E0F17; }
 QCheckBox::indicator, QRadioButton::indicator { width: 14px; height: 14px; }
-QSplitter::handle { background: %(border)s; }
-QSplitter::handle:horizontal { width: 2px; }
-QSplitter::handle:vertical { height: 2px; }
+QSplitter::handle { background: %(border)s; border-radius: 2px; margin: 2px; }
+QSplitter::handle:horizontal { width: 4px; }
+QSplitter::handle:vertical { height: 4px; }
+QSplitter::handle:hover { background: #4A4D63; }
 QLabel#hint { color: %(text_dim)s; }
 QLabel#processBadge {
     background: %(bg_alt)s;
