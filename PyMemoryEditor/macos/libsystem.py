@@ -107,6 +107,37 @@ libsystem.mach_vm_protect.restype = kern_return_t
 libsystem.mach_port_deallocate.argtypes = (mach_port_t, mach_port_t)
 libsystem.mach_port_deallocate.restype = kern_return_t
 
+
+# struct rusage_info_v0 — first slice of rusage_info_t. ri_phys_footprint is
+# the number Activity Monitor's "Memory" column shows (anonymous + compressed
+# + IOKit mappings, minus shared file-backed pages). Reachable via libproc's
+# proc_pid_rusage without needing task_for_pid.
+class rusage_info_v0(ctypes.Structure):
+    _fields_ = [
+        ("ri_uuid", ctypes.c_uint8 * 16),
+        ("ri_user_time", ctypes.c_uint64),
+        ("ri_system_time", ctypes.c_uint64),
+        ("ri_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_interrupt_wkups", ctypes.c_uint64),
+        ("ri_pageins", ctypes.c_uint64),
+        ("ri_wired_size", ctypes.c_uint64),
+        ("ri_resident_size", ctypes.c_uint64),
+        ("ri_phys_footprint", ctypes.c_uint64),
+        ("ri_proc_start_abstime", ctypes.c_uint64),
+        ("ri_proc_exit_abstime", ctypes.c_uint64),
+    ]
+
+
+RUSAGE_INFO_V0 = 0
+
+# int proc_pid_rusage(int pid, int flavor, rusage_info_t *buffer);
+libsystem.proc_pid_rusage.argtypes = (
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_void_p,
+)
+libsystem.proc_pid_rusage.restype = ctypes.c_int
+
 # char *mach_error_string(mach_error_t error_value);
 libsystem.mach_error_string.argtypes = (ctypes.c_int,)
 libsystem.mach_error_string.restype = ctypes.c_char_p

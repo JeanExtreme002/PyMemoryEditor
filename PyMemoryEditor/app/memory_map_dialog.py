@@ -150,7 +150,8 @@ def _region_shared(region: Dict) -> str:
 class MemoryMapDialog(QDialog):
     """Shows the output of ``get_memory_regions()`` in a sortable table."""
 
-    open_hex_viewer = Signal(int, int)  # (address, length)
+    # qulonglong: 64-bit addresses overflow Qt's default int (C++ signed 32-bit).
+    open_hex_viewer = Signal("qulonglong", "qulonglong")  # (address, length)
 
     def __init__(self, process: AbstractProcess, parent=None):
         super().__init__(parent)

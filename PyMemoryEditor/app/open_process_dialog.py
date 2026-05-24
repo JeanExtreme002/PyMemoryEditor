@@ -6,8 +6,9 @@ Lists all visible processes via psutil and lets the user pick one — either by
 clicking a row, typing a PID, or typing a process name (with an optional
 case-insensitive toggle, surfacing the library's ``case_sensitive`` flag).
 """
+import ctypes
 import sys
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import psutil
 
@@ -53,6 +54,33 @@ else:
     _APP_PERMISSION = None
 
 
+# macOS: psutil's rss includes shared framework pages, so it over-reports vs.
+# Activity Monitor's "Memory" column (which uses phys_footprint). proc_pid_rusage
+# exposes phys_footprint directly and doesn't need task_for_pid.
+def _build_macos_phys_footprint() -> Optional[Callable[[int], int]]:
+    if sys.platform != "darwin":
+        return None
+    try:
+        from PyMemoryEditor.macos.libsystem import (
+            RUSAGE_INFO_V0,
+            libsystem,
+            rusage_info_v0,
+        )
+    except (OSError, AttributeError):
+        return None
+
+    def _impl(pid: int) -> int:
+        info = rusage_info_v0()
+        if libsystem.proc_pid_rusage(pid, RUSAGE_INFO_V0, ctypes.byref(info)) != 0:
+            return -1
+        return int(info.ri_phys_footprint)
+
+    return _impl
+
+
+_macos_phys_footprint: Optional[Callable[[int], int]] = _build_macos_phys_footprint()
+
+
 def _open_kwargs():
     return {"permission": _APP_PERMISSION} if _APP_PERMISSION is not None else {}
 
@@ -92,11 +120,20 @@ class _ProcessListWorker(QThread):
                 info = proc.info
                 name = (info.get("name") or "").strip() or f"<pid {info['pid']}>"
                 user = info.get("username") or ""
-                try:
-                    mem = proc.memory_info().vms
-                except transient:
-                    mem = 0
-                rows.append((int(info["pid"]), name, mem, user))
+                pid = int(info["pid"])
+                mem = -1
+                if _macos_phys_footprint is not None:
+                    mem = _macos_phys_footprint(pid)
+                if mem < 0:
+                    try:
+                        # RSS — physical memory in use. VMS on macOS is useless
+                        # here: the kernel reserves huge virtual ranges for
+                        # dyld/frameworks/malloc zones, so every process looks
+                        # like 100s of GB.
+                        mem = proc.memory_info().rss
+                    except transient:
+                        mem = 0
+                rows.append((pid, name, mem, user))
             except transient:
                 continue
 
@@ -165,7 +202,7 @@ class OpenProcessDialog(QDialog):
         # Process table
         self._model = QStandardItemModel(0, 4, self)
         self._model.setHorizontalHeaderLabels(
-            ["PID", "Process Name", "Memory (VMS)", "User"]
+            ["PID", "Process Name", "Memory (RSS)", "User"]
         )
 
         self._proxy = QSortFilterProxyModel(self)

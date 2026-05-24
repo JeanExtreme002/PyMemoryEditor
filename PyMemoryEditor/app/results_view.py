@@ -187,7 +187,8 @@ class ResultsView(QTableView):
     """Pre-configured QTableView for the results model."""
 
     promote_to_cheat_table = Signal(list)  # list[int]
-    open_in_hex_viewer = Signal(int)
+    # qulonglong: 64-bit address overflows Qt's default int (C++ signed 32-bit).
+    open_in_hex_viewer = Signal("qulonglong")
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
