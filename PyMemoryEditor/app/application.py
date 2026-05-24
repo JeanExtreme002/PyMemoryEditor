@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Entry point for the PyMemoryEditor Qt app.
+Entry point for the PyMemoryEditor App.
 
 A Cheat-Engine-inspired memory scanner built on PySide6 (Qt for Python),
 working on Windows, Linux and macOS.
@@ -237,7 +237,7 @@ def main(argv=None):
 
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("PyMemoryEditor")
-    app.setApplicationDisplayName("PyMemoryEditor — Qt App")
+    app.setApplicationDisplayName("PyMemoryEditor App")
     app.setWindowIcon(app_icon())
     apply_dark_theme(app)
 

@@ -23,10 +23,17 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
+    QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -101,6 +108,10 @@ class CheatTable(QWidget):
         self._add_btn = QPushButton("Add Address Manually…")
         self._add_btn.clicked.connect(self._on_add_manually)
         bar.addWidget(self._add_btn)
+
+        self._edit_btn = QPushButton("Edit Selected…")
+        self._edit_btn.clicked.connect(self._on_edit_selected)
+        bar.addWidget(self._edit_btn)
 
         self._remove_btn = QPushButton("Remove Selected")
         self._remove_btn.setObjectName("danger")
@@ -358,16 +369,113 @@ class CheatTable(QWidget):
         if entry is not None:
             self.add_entry(entry)
 
+    def _selected_rows(self) -> List[int]:
+        """Return unique selected row indices in ascending order."""
+        return sorted({idx.row() for idx in self._table.selectedIndexes()})
+
+    def _active_rows(self) -> List[int]:
+        """Return row indices whose Active (freeze) checkbox is checked."""
+        return [i for i, entry in enumerate(self._entries) if entry.frozen]
+
+    def _target_rows(self) -> List[int]:
+        """Rows that bulk operations should act on.
+
+        Union of "selected by mouse" and "Active checkbox checked" — the
+        latter is the natural way to flag a row for a bulk edit in this UI,
+        because drag-selecting rows doesn't toggle Active for you. Falling
+        back to the mouse selection alone keeps the workflow that doesn't
+        involve freezing anything working too.
+        """
+        return sorted(set(self._selected_rows()) | set(self._active_rows()))
+
     def _on_remove_selected(self) -> None:
-        rows = sorted(
-            {idx.row() for idx in self._table.selectedIndexes()}, reverse=True
-        )
+        rows = sorted(self._selected_rows(), reverse=True)
         if not rows:
             return
         for row in rows:
             if 0 <= row < len(self._entries):
                 self._entries.pop(row)
         self._rebuild()
+
+    def _on_edit_selected(self) -> None:
+        """Bulk-edit description / type / value across every targeted row.
+
+        "Targeted" = rows the user highlighted with the mouse, plus any rows
+        whose Active checkbox is on — so flipping Active is a valid way to
+        opt rows into the bulk operation without having to drag-select them.
+        """
+        rows = [r for r in self._target_rows() if 0 <= r < len(self._entries)]
+        if not rows:
+            QMessageBox.information(
+                self,
+                "Edit selected",
+                "Select rows in the cheat table (or tick their Active "
+                "checkbox) before using Edit Selected.",
+            )
+            return
+
+        entries = [self._entries[r] for r in rows]
+        dialog = _BulkEditDialog(entries, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        plan = dialog.result_plan()
+        if plan is None:
+            return
+
+        failures: List[Tuple[int, str]] = []
+        self._suspend_signals = True
+        try:
+            for entry in entries:
+                if plan.description is not None:
+                    entry.description = plan.description
+
+                if plan.spec is not None:
+                    entry.spec_label = plan.spec.label
+                    if not plan.spec.accepts_length_override:
+                        entry.length = plan.spec.length
+
+                if plan.value_text is not None:
+                    spec = entry.spec
+                    try:
+                        value, effective_length = parse_value(
+                            spec, plan.value_text, entry.length
+                        )
+                    except ValueError as exc:
+                        failures.append((entry.address, str(exc)))
+                        continue
+
+                    if spec.accepts_length_override:
+                        entry.length = effective_length
+
+                    try:
+                        self._process.write_process_memory(
+                            entry.address, spec.pytype, entry.length, value
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        failures.append(
+                            (entry.address, f"{type(exc).__name__}: {exc}")
+                        )
+                        continue
+
+                    entry.last_value = value
+                    if entry.frozen:
+                        entry.frozen_value = value
+        finally:
+            self._suspend_signals = False
+
+        self._rebuild()
+
+        if failures:
+            preview = "\n".join(
+                f"0x{addr:X}: {msg}" for addr, msg in failures[:10]
+            )
+            extra = "" if len(failures) <= 10 else f"\n…and {len(failures) - 10} more."
+            QMessageBox.warning(
+                self,
+                "Edit selected",
+                f"{len(failures)} of {len(rows)} row(s) failed:\n\n{preview}{extra}",
+            )
 
     def _on_clear(self) -> None:
         if not self._entries:
@@ -387,23 +495,52 @@ class CheatTable(QWidget):
         if row < 0 or row >= len(self._entries):
             return
         menu = QMenu(self)
-        copy_addr = QAction("Copy address", self)
-        copy_addr.triggered.connect(lambda: self._copy_address(row))
-        menu.addAction(copy_addr)
 
-        change_type = QAction("Change value type…", self)
-        change_type.triggered.connect(lambda: self._change_type(row))
-        menu.addAction(change_type)
+        selected = self._selected_rows()
+        multi = len(selected) > 1
 
-        change_len = QAction("Change buffer length…", self)
-        change_len.triggered.connect(lambda: self._change_length(row))
-        menu.addAction(change_len)
+        if multi:
+            # Drag-selected several rows — the single-row actions don't make
+            # sense here, so show only the two bulk actions.
+            edit_selected = QAction(f"Edit selected ({len(selected)})…", self)
+            edit_selected.triggered.connect(self._on_edit_selected)
+            menu.addAction(edit_selected)
 
-        menu.addSeparator()
+            menu.addSeparator()
 
-        remove = QAction("Remove", self)
-        remove.triggered.connect(self._on_remove_selected)
-        menu.addAction(remove)
+            remove = QAction("Remove", self)
+            remove.triggered.connect(self._on_remove_selected)
+            menu.addAction(remove)
+        else:
+            copy_addr = QAction("Copy address", self)
+            copy_addr.triggered.connect(lambda: self._copy_address(row))
+            menu.addAction(copy_addr)
+
+            change_type = QAction("Change value type…", self)
+            change_type.triggered.connect(lambda: self._change_type(row))
+            menu.addAction(change_type)
+
+            change_len = QAction("Change buffer length…", self)
+            change_len.triggered.connect(lambda: self._change_length(row))
+            menu.addAction(change_len)
+
+            # Active-checked rows still count as "selected" for the bulk edit,
+            # so surface the action with the right count when applicable.
+            targets = self._target_rows()
+            edit_label = (
+                f"Edit selected ({len(targets)})…"
+                if len(targets) > 1
+                else "Edit selected…"
+            )
+            edit_selected = QAction(edit_label, self)
+            edit_selected.triggered.connect(self._on_edit_selected)
+            menu.addAction(edit_selected)
+
+            menu.addSeparator()
+
+            remove = QAction("Remove", self)
+            remove.triggered.connect(self._on_remove_selected)
+            menu.addAction(remove)
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -537,6 +674,129 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
         spec_label=spec.label,
         length=int(length),
     )
+
+
+class _BulkEditPlan:
+    """What a successful bulk-edit dialog accept resolves to.
+
+    ``None`` means "don't touch that field on the selected rows".
+    """
+
+    __slots__ = ("description", "spec", "value_text")
+
+    def __init__(
+        self,
+        description: Optional[str],
+        spec: Optional[ValueTypeSpec],
+        value_text: Optional[str],
+    ) -> None:
+        self.description = description
+        self.spec = spec
+        self.value_text = value_text
+
+
+class _BulkEditDialog(QDialog):
+    """Dialog that lets the user retype description / type / value at once.
+
+    Each field has a leading "Apply" checkbox so the user can pick exactly
+    which attributes to overwrite on the selected rows. Unchecked fields are
+    left untouched.
+    """
+
+    def __init__(self, entries: List[CheatEntry], parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Edit selected")
+        self._plan: Optional[_BulkEditPlan] = None
+
+        # Use the first entry's current state to pre-fill defaults — saves a
+        # round-trip for the common "I just want to tweak this one value"
+        # path that still goes through the bulk dialog.
+        first = entries[0]
+        spec = first.spec
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        layout.addWidget(
+            QLabel(
+                f"{len(entries)} row(s) selected. "
+                "Check a field to overwrite it; leave unchecked to keep "
+                "each row's current value."
+            )
+        )
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        # --- Description row
+        self._desc_chk = QCheckBox("Set description")
+        self._desc_edit = QLineEdit(first.description)
+        self._desc_edit.setEnabled(False)
+        self._desc_chk.toggled.connect(self._desc_edit.setEnabled)
+        form.addRow(self._desc_chk, self._desc_edit)
+
+        # --- Type row
+        self._type_chk = QCheckBox("Set value type")
+        self._type_combo = QComboBox()
+        for s in VALUE_TYPES:
+            self._type_combo.addItem(s.label)
+        if first.spec_label in (s.label for s in VALUE_TYPES):
+            self._type_combo.setCurrentText(first.spec_label)
+        self._type_combo.setEnabled(False)
+        self._type_chk.toggled.connect(self._type_combo.setEnabled)
+        form.addRow(self._type_chk, self._type_combo)
+
+        # --- Value row
+        self._value_chk = QCheckBox("Set value")
+        self._value_edit = QLineEdit()
+        if first.last_value is not None:
+            try:
+                self._value_edit.setText(spec.format(first.last_value))
+            except Exception:  # noqa: BLE001 — defensive: bad formatter shouldn't kill the dialog
+                pass
+        self._value_edit.setEnabled(False)
+        self._value_chk.toggled.connect(self._value_edit.setEnabled)
+        form.addRow(self._value_chk, self._value_edit)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _current_spec(self) -> Optional[ValueTypeSpec]:
+        if not self._type_chk.isChecked():
+            return None
+        return find_spec(self._type_combo.currentText())
+
+    def _on_accept(self) -> None:
+        if (
+            not self._desc_chk.isChecked()
+            and not self._type_chk.isChecked()
+            and not self._value_chk.isChecked()
+        ):
+            QMessageBox.information(
+                self,
+                "Edit selected",
+                "Check at least one field to apply, or press Cancel.",
+            )
+            return
+
+        description = self._desc_edit.text() if self._desc_chk.isChecked() else None
+        value_text = self._value_edit.text() if self._value_chk.isChecked() else None
+
+        self._plan = _BulkEditPlan(
+            description=description,
+            spec=self._current_spec(),
+            value_text=value_text,
+        )
+        self.accept()
+
+    def result_plan(self) -> Optional[_BulkEditPlan]:
+        return self._plan
 
 
 __all__ = (

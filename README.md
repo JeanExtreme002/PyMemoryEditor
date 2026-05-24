@@ -21,7 +21,7 @@ pip install PyMemoryEditor
 > to write must request
 > `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_WRITE | PROCESS_VM_OPERATION`.
 
-### Qt app:
+### App:
 Type `pymemoryeditor` at the CLI to launch a [Cheat Engine](https://en.wikipedia.org/wiki/Cheat_Engine)-style memory scanner built on Qt (PySide6). The app exercises every public surface of the library: all eight `ScanTypesEnum` modes, the five value types (`bool`, `int`, `float`, `str`, `bytes`), `search_by_value`, `search_by_value_between`, `search_by_addresses`, `read_process_memory`, `write_process_memory`, `get_memory_regions` / `snapshot_memory_regions`, plus value freezing and a hex viewer.
 
 > The app requires **PySide6**. Install it with the `app` extra:

@@ -508,7 +508,7 @@ class MainWindow(QMainWindow):
             self,
             "About PyMemoryEditor",
             f"<b>PyMemoryEditor</b> v{__version__}<br>"
-            f"Qt app — Cheat Engine-style memory scanner.<br><br>"
+            f"App — Cheat Engine-style memory scanner.<br><br>"
             f"<b>Platform:</b> {sys.platform}<br>"
             f"<b>Target process:</b> PID {self._process.pid} ({self._proc_name})<br><br>"
             "Source: <a href='https://github.com/JeanExtreme002/PyMemoryEditor'>"
@@ -519,7 +519,7 @@ class MainWindow(QMainWindow):
         return f"PID {self._process.pid}  ·  {self._proc_name}"
 
     def _window_title(self) -> str:
-        return f"PyMemoryEditor — Qt App  (PID {self._process.pid} · {self._proc_name})"
+        return f"PyMemoryEditor App — (PID {self._process.pid} · {self._proc_name})"
 
     def _read_proc_name(self) -> str:
         try:

@@ -155,7 +155,7 @@ class OpenProcessDialog(QDialog):
         self.process: Optional[AbstractProcess] = None
         self._scan_worker: Optional[_ProcessListWorker] = None
 
-        self.setWindowTitle("PyMemoryEditor — Select a Process")
+        self.setWindowTitle("PyMemoryEditor App — Select a Process")
         self.setWindowIcon(app_icon())
         self.setMinimumSize(720, 520)
 
