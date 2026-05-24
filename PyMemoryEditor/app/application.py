@@ -232,9 +232,12 @@ def main(argv=None):
     from .main_window import MainWindow
     from .open_process_dialog import OpenProcessDialog
 
+    from ._icon import app_icon
+
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("PyMemoryEditor")
     app.setApplicationDisplayName("PyMemoryEditor — Qt App")
+    app.setWindowIcon(app_icon())
     apply_dark_theme(app)
 
     picker = OpenProcessDialog()

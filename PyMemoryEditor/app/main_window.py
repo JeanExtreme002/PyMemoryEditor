@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess, __version__
 
+from ._icon import app_icon
 from .cheat_table import CheatTable
 from .memory_map_dialog import MemoryMapDialog
 from .memory_viewer_dialog import MemoryViewerDialog
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow):
 
         self._proc_name = self._read_proc_name()
         self.setWindowTitle(self._window_title())
+        self.setWindowIcon(app_icon())
         self.resize(1280, 780)
 
         self._build_ui()

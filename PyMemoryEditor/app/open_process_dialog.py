@@ -37,6 +37,7 @@ from PyMemoryEditor import (
     __version__,
 )
 
+from ._icon import app_icon
 from ._widgets import NumericItem
 
 
@@ -155,6 +156,7 @@ class OpenProcessDialog(QDialog):
         self._scan_worker: Optional[_ProcessListWorker] = None
 
         self.setWindowTitle("PyMemoryEditor — Select a Process")
+        self.setWindowIcon(app_icon())
         self.setMinimumSize(720, 520)
 
         self._build_ui()

@@ -100,6 +100,7 @@ packages = ["PyMemoryEditor"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "PyMemoryEditor/py.typed" = "PyMemoryEditor/py.typed"
+"PyMemoryEditor/app/assets/icon.svg" = "PyMemoryEditor/app/assets/icon.svg"
 
 [build-system]
 requires = ["hatchling"]
