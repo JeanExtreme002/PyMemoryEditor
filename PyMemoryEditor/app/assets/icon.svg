@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PyMemoryEditor app icon.
+
+  Concept: a QFP-style memory chip with the interlocking Python snakes
+  (blue + yellow) sitting on the silkscreen face. The chip background
+  uses the same near-black graphite as the app's Fusion dark theme and
+  the chip outline uses the app's Kali-teal accent, so the icon reads
+  consistently inside the window chrome on every platform.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Chip leads (QFP package, 8 per side) -->
+  <g fill="#9AA3B7">
+    <!-- Top leads -->
+    <rect x="102" y="68"  width="28" height="32" rx="3"/>
+    <rect x="142" y="68"  width="28" height="32" rx="3"/>
+    <rect x="182" y="68"  width="28" height="32" rx="3"/>
+    <rect x="222" y="68"  width="28" height="32" rx="3"/>
+    <rect x="262" y="68"  width="28" height="32" rx="3"/>
+    <rect x="302" y="68"  width="28" height="32" rx="3"/>
+    <rect x="342" y="68"  width="28" height="32" rx="3"/>
+    <rect x="382" y="68"  width="28" height="32" rx="3"/>
+    <!-- Bottom leads -->
+    <rect x="102" y="412" width="28" height="32" rx="3"/>
+    <rect x="142" y="412" width="28" height="32" rx="3"/>
+    <rect x="182" y="412" width="28" height="32" rx="3"/>
+    <rect x="222" y="412" width="28" height="32" rx="3"/>
+    <rect x="262" y="412" width="28" height="32" rx="3"/>
+    <rect x="302" y="412" width="28" height="32" rx="3"/>
+    <rect x="342" y="412" width="28" height="32" rx="3"/>
+    <rect x="382" y="412" width="28" height="32" rx="3"/>
+    <!-- Left leads -->
+    <rect x="68"  y="102" width="32" height="28" rx="3"/>
+    <rect x="68"  y="142" width="32" height="28" rx="3"/>
+    <rect x="68"  y="182" width="32" height="28" rx="3"/>
+    <rect x="68"  y="222" width="32" height="28" rx="3"/>
+    <rect x="68"  y="262" width="32" height="28" rx="3"/>
+    <rect x="68"  y="302" width="32" height="28" rx="3"/>
+    <rect x="68"  y="342" width="32" height="28" rx="3"/>
+    <rect x="68"  y="382" width="32" height="28" rx="3"/>
+    <!-- Right leads -->
+    <rect x="412" y="102" width="32" height="28" rx="3"/>
+    <rect x="412" y="142" width="32" height="28" rx="3"/>
+    <rect x="412" y="182" width="32" height="28" rx="3"/>
+    <rect x="412" y="222" width="32" height="28" rx="3"/>
+    <rect x="412" y="262" width="32" height="28" rx="3"/>
+    <rect x="412" y="302" width="32" height="28" rx="3"/>
+    <rect x="412" y="342" width="32" height="28" rx="3"/>
+    <rect x="412" y="382" width="32" height="28" rx="3"/>
+  </g>
+
+  <!-- Chip body -->
+  <rect x="96" y="96" width="320" height="320" rx="26"
+        fill="#0F1419" stroke="#2DD4BF" stroke-width="3"/>
+
+  <!-- Pin-1 indicator dot -->
+  <circle cx="120" cy="120" r="6" fill="#2DD4BF" opacity="0.75"/>
+
+  <!-- Python logo (interlocking L-shapes), centered on the chip face -->
+  <g transform="translate(141, 141)">
+    <!-- Blue snake: top bar + left-bottom tail -->
+    <path fill="#3776AB" d="
+      M 22,0
+      L 128,0
+      A 22,22 0 0 1 150,22
+      L 150,68
+      A 22,22 0 0 1 128,90
+      L 70,90
+      L 70,208
+      A 22,22 0 0 1 48,230
+      L 22,230
+      A 22,22 0 0 1 0,208
+      L 0,22
+      A 22,22 0 0 1 22,0 Z"/>
+
+    <!-- Yellow snake: bottom bar + right-top tail -->
+    <path fill="#FFD43B" d="
+      M 182,0
+      L 208,0
+      A 22,22 0 0 1 230,22
+      L 230,208
+      A 22,22 0 0 1 208,230
+      L 102,230
+      A 22,22 0 0 1 80,208
+      L 80,162
+      A 22,22 0 0 1 102,140
+      L 160,140
+      L 160,22
+      A 22,22 0 0 1 182,0 Z"/>
+
+    <!-- Blue snake eye -->
+    <circle cx="128" cy="42" r="9" fill="#FFFFFF"/>
+    <!-- Yellow snake eye -->
+    <circle cx="102" cy="188" r="9" fill="#0F1419"/>
+  </g>
+</svg>

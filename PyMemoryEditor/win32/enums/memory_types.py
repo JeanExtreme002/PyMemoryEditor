@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
-from enum import Enum
+from enum import IntFlag
 
 
-class MemoryTypesEnum(Enum):
+class MemoryTypesEnum(IntFlag):
     """
-    Enum with all types of a memory page.
+    Memory region type (MEM_* constants from MEMORY_BASIC_INFORMATION.Type).
+
+    These values are mutually exclusive in practice but use distinct bit
+    patterns; ``IntFlag`` keeps direct bitwise comparisons working without
+    requiring ``.value`` unwrapping.
     """
-    # Indicates that the memory pages within the region are mapped into the view of an image section.
+
+    # Memory pages within the region are mapped into the view of an image section.
     MEM_IMAGE = 0x1000000
 
-    # Indicates that the memory pages within the region are mapped into the view of a section.
+    # Memory pages within the region are mapped into the view of a section.
     MEM_MAPPED = 0x40000
 
-    # Indicates that the memory pages within the region are private (that is, not shared by other processes).
+    # Memory pages within the region are private (not shared by other processes).
     MEM_PRIVATE = 0x20000

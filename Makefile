@@ -25,12 +25,13 @@ help:
 	@echo "Available targets:"
 	@echo "  $(YELLOW)install$(NC)          - Install package in development mode"
 	@echo "  $(YELLOW)install-deps$(NC)     - Install dependencies"
+	@echo "  $(YELLOW)install-app$(NC)      - Install dependencies to run the PyMemoryEditor App"
+	@echo "  $(YELLOW)run-app$(NC)          - Run the PyMemoryEditor App"
 	@echo "  $(YELLOW)install-dev$(NC)      - Install development dependencies"
 	@echo "  $(YELLOW)test$(NC)             - Run tests"
 	@echo "  $(YELLOW)test-verbose$(NC)     - Run tests with verbose output"
 	@echo "  $(YELLOW)test-coverage$(NC)    - Run tests with coverage report"
 	@echo "  $(YELLOW)lint$(NC)             - Run linter (flake8)"
-	@echo "  $(YELLOW)lint-fix$(NC)         - Run auto-formatter (black)"
 	@echo "  $(YELLOW)type-check$(NC)       - Run type checker (mypy)"
 	@echo "  $(YELLOW)clean$(NC)            - Clean build artifacts"
 	@echo "  $(YELLOW)build$(NC)            - Build package"
@@ -62,24 +63,37 @@ venv-activate:
 	@echo "$(YELLOW)To activate virtual environment run:$(NC)"
 	@echo "source $(VENV_DIR)/bin/activate"
 
-# Install dependencies
+# Install dependencies (uses pyproject.toml — requirements.txt was removed in v2.0)
 .PHONY: install-deps
 install-deps:
-	@echo "$(GREEN)Installing dependencies...$(NC)"
-	$(PIP) install -r requirements.txt
+	@echo "$(GREEN)Installing runtime dependencies...$(NC)"
+	$(PIP) install -e .
 	@echo "$(GREEN)Dependencies installed successfully!$(NC)"
+
+# Install dependencies to run the PyMemoryEditor App (Qt GUI)
+.PHONY: install-app
+install-app:
+	@echo "$(GREEN)Installing PyMemoryEditor App dependencies...$(NC)"
+	$(PIP) install -e ".[app]"
+	@echo "$(GREEN)App dependencies installed successfully!$(NC)"
+	@echo "$(YELLOW)Launch the app with: pymemoryeditor$(NC)"
+
+# Run the PyMemoryEditor App (Qt GUI)
+.PHONY: run-app
+run-app:
+	@echo "$(GREEN)Starting PyMemoryEditor App...$(NC)"
+	$(PYTHON) -m PyMemoryEditor
 
 # Install development dependencies
 .PHONY: install-dev
 install-dev:
 	@echo "$(GREEN)Installing development dependencies...$(NC)"
-	$(PIP) install -r requirements.txt
-	$(PIP) install pytest pytest-cov flake8 black mypy twine build hatch
+	$(PIP) install -e ".[dev]"
 	@echo "$(GREEN)Development dependencies installed successfully!$(NC)"
 
 # Install package in development mode
 .PHONY: install
-install: install-deps
+install:
 	@echo "$(GREEN)Installing package in development mode...$(NC)"
 	$(PIP) install -e .
 	@echo "$(GREEN)Package installed successfully!$(NC)"
@@ -113,18 +127,11 @@ lint:
 	$(PYTHON) -m flake8 $(PACKAGE_NAME) $(TEST_DIR)
 	@echo "$(GREEN)Linting completed!$(NC)"
 
-# Run auto-formatter
-.PHONY: lint-fix
-lint-fix:
-	@echo "$(GREEN)Running auto-formatter (black)...$(NC)"
-	$(PYTHON) -m black $(PACKAGE_NAME) $(TEST_DIR)
-	@echo "$(GREEN)Code formatting completed!$(NC)"
-
-# Run type checker
+# Run type checker (config in pyproject.toml — ignore_missing_imports is set there)
 .PHONY: type-check
 type-check:
 	@echo "$(GREEN)Running type checker (mypy)...$(NC)"
-	$(PYTHON) -m mypy $(PACKAGE_NAME) --ignore-missing-imports
+	$(PYTHON) -m mypy $(PACKAGE_NAME)
 	@echo "$(GREEN)Type checking completed!$(NC)"
 
 # Clean build artifacts
@@ -204,15 +211,16 @@ check-deps:
 .PHONY: update-deps
 update-deps:
 	@echo "$(GREEN)Updating dependencies...$(NC)"
-	$(PIP) install --upgrade -r requirements.txt
+	$(PIP) install --upgrade -e ".[dev]"
 	@echo "$(GREEN)Dependencies updated!$(NC)"
 
-# Security audit
+# Security audit — uses pip-audit (PyPA-maintained) which works without a
+# paid account, unlike the older `safety` tool.
 .PHONY: security
 security:
-	@echo "$(GREEN)Running security audit...$(NC)"
-	$(PIP) install safety
-	safety check
+	@echo "$(GREEN)Running security audit (pip-audit)...$(NC)"
+	$(PIP) install pip-audit
+	pip-audit
 	@echo "$(GREEN)Security audit completed!$(NC)"
 
 # Generate documentation
@@ -261,7 +269,7 @@ info:
 	@echo "Pip: $(shell $(PIP) --version)"
 	@echo ""
 	@echo "$(GREEN)Installed packages:$(NC)"
-	@$(PIP) list | grep -E "($(PACKAGE_NAME)|pytest|flake8|black|mypy|twine|build)"
+	@$(PIP) list | grep -E "($(PACKAGE_NAME)|pytest|flake8|mypy|twine|build)"
 
 # Quick release workflow
 .PHONY: release

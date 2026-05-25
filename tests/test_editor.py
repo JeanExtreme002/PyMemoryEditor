@@ -1,33 +1,63 @@
-from PyMemoryEditor import OpenProcess, ScanTypesEnum, __version__
-from os import getpid
-from typing import Optional
+# -*- coding: utf-8 -*-
+
+"""
+End-to-end read/write/search tests against the current process.
+
+All tests share a single ``OpenProcess`` handle via a module-scoped fixture so
+they don't depend on declaration order (`pytest-randomly` and parallel runners
+are safe) and don't pollute stdout at import time. Heuristic thresholds
+(found/total ratios) are tolerated because some target addresses live in
+regions outside our control and may have their values changed mid-scan.
+"""
+
 import ctypes
-import platform
+import os
 import random
+import sys
+from typing import Iterator
 
-print("Testing PyMemoryEditor version %s." % __version__)
+import pytest
 
-print("\nOS Information: {} - {} {}".format(platform.platform(), *platform.architecture()[::-1]))
-print("Processor Information: {} | {}\n".format(platform.machine(), platform.processor()))
-
-process_id = getpid()
-process: Optional[OpenProcess] = None
+from PyMemoryEditor import OpenProcess, ScanTypesEnum
 
 
-def generate_text(size):
-    # Return a random text.
-    return "".join([chr(random.randint(ord("A"), ord("Z"))) for letter in range(size)])
+# The default permission on Windows already includes read+write, but spell
+# the mask out here so the suite stays explicit about what it needs. Linux
+# and macOS ignore the `permission` kwarg.
+if sys.platform == "win32":
+    from PyMemoryEditor import ProcessOperationsEnum
+
+    _PERMISSION = (
+        ProcessOperationsEnum.PROCESS_VM_READ.value
+        | ProcessOperationsEnum.PROCESS_VM_WRITE.value
+        | ProcessOperationsEnum.PROCESS_VM_OPERATION.value
+        # PROCESS_QUERY_INFORMATION is required by VirtualQueryEx, which the
+        # search_by_value* / search_by_addresses code paths use to enumerate
+        # the target's memory regions. Without it the scan returns nothing.
+        | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value
+    )
+else:
+    _PERMISSION = None
 
 
-def test_open_process():
-    global process
-
-    # Open the process to write and read the process memory.
-    process = OpenProcess(pid=process_id)
+def _generate_text(size: int) -> str:
+    return "".join(chr(random.randint(ord("A"), ord("Z"))) for _ in range(size))
 
 
-def test_read_bool():
-    # Compare with True and False values.
+@pytest.fixture(scope="module")
+def process() -> Iterator[OpenProcess]:
+    """Open `OpenProcess` against the current process for the whole module."""
+    if _PERMISSION is not None:
+        handle = OpenProcess(pid=os.getpid(), permission=_PERMISSION)
+    else:
+        handle = OpenProcess(pid=os.getpid())
+    try:
+        yield handle
+    finally:
+        handle.close()
+
+
+def test_read_bool(process):
     target_value_1 = ctypes.c_bool(True)
     target_value_2 = ctypes.c_bool(False)
 
@@ -36,7 +66,6 @@ def test_read_bool():
 
     data_length = ctypes.sizeof(target_value_1)
 
-    # Read the process memory and compare the results.
     result_1 = process.read_process_memory(address_1, bool, data_length)
     result_2 = process.read_process_memory(address_2, bool, data_length)
 
@@ -44,43 +73,36 @@ def test_read_bool():
     assert type(result_2) is bool and result_2 == target_value_2.value
 
 
-def test_read_float():
-    # Get a random value to compare the result.
+def test_read_float(process):
     target_value = ctypes.c_double(random.random())
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
-    # Read the process memory and compare the result.
     result = process.read_process_memory(address, float, data_length)
     assert type(result) is float and result == target_value.value
 
 
-def test_read_int():
-    # Get a random value to compare the result.
+def test_read_int(process):
     target_value = ctypes.c_int(random.randint(0, 10000))
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
-    # Read the process memory and compare the result.
     result = process.read_process_memory(address, int, data_length)
     assert type(result) is int and result == target_value.value
 
 
-def test_read_string():
-    # Get a random text to compare the result.
+def test_read_string(process):
     target_value = ctypes.create_string_buffer(20)
-    target_value.value = generate_text(20).encode()
+    target_value.value = _generate_text(20).encode()
 
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
-    # Read the process memory and compare the result.
     result = process.read_process_memory(address, str, data_length)
     assert type(result) is str and result == target_value.value.decode()
 
 
-def test_write_bool():
-    # Compare with True and False values.
+def test_write_bool(process):
     original_value_1 = True
     original_value_2 = False
 
@@ -95,16 +117,18 @@ def test_write_bool():
 
     data_length = ctypes.sizeof(target_value_1)
 
-    # Write to the process memory and compare the results.
     process.write_process_memory(address_1, bool, data_length, new_value_1)
     process.write_process_memory(address_2, bool, data_length, new_value_2)
 
-    assert target_value_1.value != original_value_1 and target_value_1.value == new_value_1
-    assert target_value_2.value != original_value_2 and target_value_2.value == new_value_2
+    assert (
+        target_value_1.value != original_value_1 and target_value_1.value == new_value_1
+    )
+    assert (
+        target_value_2.value != original_value_2 and target_value_2.value == new_value_2
+    )
 
 
-def test_write_float():
-    # Get a random value to compare the result.
+def test_write_float(process):
     original_value = random.random()
     new_value = original_value + 7651
 
@@ -112,13 +136,11 @@ def test_write_float():
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
-    # Write to the process memory and compare the result.
     process.write_process_memory(address, float, data_length, new_value)
     assert target_value.value != original_value and target_value.value == new_value
 
 
-def test_write_int():
-    # Get a random value to compare the result.
+def test_write_int(process):
     original_value = random.randint(0, 10000)
     new_value = original_value + 7651
 
@@ -126,15 +148,13 @@ def test_write_int():
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
-    # Write to the process memory and compare the result.
     process.write_process_memory(address, int, data_length, new_value)
     assert target_value.value != original_value and target_value.value == new_value
 
 
-def test_write_string():
-    # Get a random text to compare the result.
-    original_value = generate_text(20).encode()
-    new_value = generate_text(20).encode()
+def test_write_string(process):
+    original_value = _generate_text(20).encode()
+    new_value = _generate_text(20).encode()
 
     target_value = ctypes.create_string_buffer(20)
     target_value.value = original_value
@@ -142,134 +162,141 @@ def test_write_string():
     address = ctypes.addressof(target_value)
     data_length = ctypes.sizeof(target_value)
 
-    # Write to the process memory and compare the result.
     process.write_process_memory(address, str, data_length, new_value.decode())
     assert target_value.value != original_value and target_value.value == new_value
 
 
-def test_search_by_int_addresses():
-    # Get random values to compare the result.
+def test_search_by_int_addresses(process):
     test_length = 10
 
-    target_values = [ctypes.c_int(random.randint(0, 10000)) for i in range(test_length)]
+    target_values = [ctypes.c_int(random.randint(0, 10000)) for _ in range(test_length)]
     data_length = ctypes.sizeof(target_values[0])
 
-    target_values = {ctypes.addressof(v): v for v in target_values}
-    addresses = list(target_values.keys())
+    targets_by_address = {ctypes.addressof(v): v for v in target_values}
+    addresses = list(targets_by_address.keys())
 
     for address, value in process.search_by_addresses(int, data_length, addresses):
-        assert target_values[address].value == value and type(value) is int
+        assert targets_by_address[address].value == value and type(value) is int
 
 
-def test_search_by_float_addresses():
-    # Get random values to compare the result.
+def test_search_by_float_addresses(process):
     test_length = 10
 
-    target_values = [ctypes.c_double(random.randint(0, 10000) / random.randint(0, 10000)) for i in range(test_length)]
+    target_values = [
+        ctypes.c_double(random.randint(0, 10000) / random.randint(1, 10000))
+        for _ in range(test_length)
+    ]
     data_length = ctypes.sizeof(target_values[0])
 
-    target_values = {ctypes.addressof(v): v for v in target_values}
-    addresses = list(target_values.keys())
+    targets_by_address = {ctypes.addressof(v): v for v in target_values}
+    addresses = list(targets_by_address.keys())
 
     for address, value in process.search_by_addresses(float, data_length, addresses):
-        assert target_values[address].value == value and type(value) is float
+        assert targets_by_address[address].value == value and type(value) is float
 
 
-def test_search_by_string_addresses():
-    # Get random values to compare the result.
+def test_search_by_string_addresses(process):
     string_length, test_length = 20, 10
 
-    target_values = list()
-
-    for i in range(test_length):
+    target_values = []
+    for _ in range(test_length):
         value = ctypes.create_string_buffer(string_length)
-        value.value = generate_text(string_length).encode()
+        value.value = _generate_text(string_length).encode()
         target_values.append(value)
 
     data_length = ctypes.sizeof(target_values[0])
 
-    target_values = {ctypes.addressof(v): v for v in target_values}
-    addresses = list(target_values.keys())
+    targets_by_address = {ctypes.addressof(v): v for v in target_values}
+    addresses = list(targets_by_address.keys())
 
     for address, value in process.search_by_addresses(str, data_length, addresses):
-        assert target_values[address].value.decode() == value and type(value) is str
+        assert (
+            targets_by_address[address].value.decode() == value and type(value) is str
+        )
 
 
-def test_search_by_int():
-    # Get random values to compare the result.
+def test_search_by_int(process):
     test_length = 10
 
-    target_values = [ctypes.c_int(random.randint(0, 10000)) for i in range(test_length)]
+    target_values = [ctypes.c_int(random.randint(0, 10000)) for _ in range(test_length)]
     addresses = [ctypes.addressof(v) for v in target_values]
     data_length = ctypes.sizeof(target_values[0])
 
-    min_value = min([v.value for v in target_values])
-    max_value = max([v.value for v in target_values])
+    min_value = min(v.value for v in target_values)
+    max_value = max(v.value for v in target_values)
 
     total = 0
     found = 0
     correct = 0
 
-    # Get addresses of values exact or smaller than max_value.
-    for found_address in process.search_by_value_between(int, data_length, min_value, max_value):
-
-        # Check if the found address is a target address.
+    for found_address in process.search_by_value_between(
+        int, data_length, min_value, max_value
+    ):
         if found_address in addresses:
             addresses.remove(found_address)
             found += 1
 
         total += 1
 
-        # Check if the address really points to a valid value.
-        value = process.read_process_memory(found_address, int, data_length)
-        if min_value <= value <= max_value: correct += 1
+        # A page may have been decommitted between scan and read (genuine race
+        # condition); the syscall now surfaces it as OSError instead of
+        # returning zeros.
+        try:
+            value = process.read_process_memory(found_address, int, data_length)
+            if min_value <= value <= max_value:
+                correct += 1
+        except OSError:
+            pass
 
     assert found / test_length >= 0.7
-    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+    # Some addresses are beyond our control and may have their values changed.
+    assert correct / total >= 0.7
 
 
-def test_search_by_float():
-    # Get random values to compare the result.
+def test_search_by_float(process):
     test_length = 10
 
-    target_values = [ctypes.c_double(random.randint(0, 10000)) for i in range(test_length)]
+    target_values = [
+        ctypes.c_double(random.randint(0, 10000)) for _ in range(test_length)
+    ]
     addresses = [ctypes.addressof(v) for v in target_values]
     data_length = ctypes.sizeof(target_values[0])
 
-    min_value = min([v.value for v in target_values])
-    max_value = max([v.value for v in target_values])
+    min_value = min(v.value for v in target_values)
+    max_value = max(v.value for v in target_values)
 
     total = 0
     found = 0
     correct = 0
 
-    # Get addresses of values exact or smaller than max_value.
-    for found_address in process.search_by_value_between(float, data_length, min_value, max_value):
-
-        # Check if the found address is a target address.
+    for found_address in process.search_by_value_between(
+        float, data_length, min_value, max_value
+    ):
         if found_address in addresses:
             addresses.remove(found_address)
             found += 1
 
         total += 1
 
-        # Check if the address really points to a valid value.
-        value = process.read_process_memory(found_address, float, data_length)
-        if min_value <= value <= max_value: correct += 1
+        # Same race as test_search_by_int — tolerate OSError on read.
+        try:
+            value = process.read_process_memory(found_address, float, data_length)
+            if min_value <= value <= max_value:
+                correct += 1
+        except OSError:
+            pass
 
     assert found / test_length >= 0.7
-    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+    assert correct / total >= 0.7
 
 
-def test_search_by_string():
-    # Get random values to compare the result.
+def test_search_by_string(process):
     string_length, test_length = 20, 10
 
-    target_values = list()
-
-    for i in range(test_length):
+    target_values = []
+    for _ in range(test_length):
         value = ctypes.create_string_buffer(string_length)
-        value.value = generate_text(string_length).encode()
+        value.value = _generate_text(string_length).encode()
         target_values.append(value)
 
     data_length = ctypes.sizeof(target_values[0])
@@ -278,44 +305,45 @@ def test_search_by_string():
     found = 0
     correct = 0
 
-    # Get addresses of values exact or smaller than max_value.
     for target_value in target_values:
-        for found_address in process.search_by_value(str, data_length, target_value.value, ScanTypesEnum.EXACT_VALUE):
-
-            # Check if the found address is the target address.
+        for found_address in process.search_by_value(
+            str, data_length, target_value.value, ScanTypesEnum.EXACT_VALUE
+        ):
             if found_address == ctypes.addressof(target_value):
                 found += 1
 
             total += 1
 
-            # Check if the address really points to a valid value.
             try:
                 value = process.read_process_memory(found_address, str, data_length)
-                if value == target_value.value.decode(): correct += 1
-            except: pass
+                if value == target_value.value.decode():
+                    correct += 1
+            except (OSError, ValueError, UnicodeDecodeError):
+                # The address may belong to another region by the time we read
+                # it back, or hold non-decodable bytes. Either way, skip it.
+                pass
 
     assert found / test_length >= 0.7
-    assert correct / total >= 0.7  # Some of the addresses are beyond our control and may have their values changed.
+    assert correct / total >= 0.7
 
 
-def test_search_by_string_between():
-    # Get random values to compare the result.
+def test_search_by_string_between(process):
     string_length, test_length = 20, 10
 
-    values = list()
-
-    for i in range(test_length * 2):
+    values = []
+    for _ in range(test_length * 2):
         value = ctypes.create_string_buffer(string_length)
-        value.value = generate_text(string_length).encode()
+        value.value = _generate_text(string_length).encode()
         values.append(value)
 
     values.sort(key=lambda target_value: target_value.value)
 
-    # Half of the set of strings is the target and the other half contains string that should be ignored by the scanner.
-    target_values = [target_value for target_value in values[test_length // 4: test_length - test_length // 4]]
+    # Half of the set are targets; the other half are noise that the scanner
+    # must NOT return.
+    target_values = values[test_length // 4 : test_length - test_length // 4]
 
-    addresses = [ctypes.addressof(v) for v in values]
-    target_addresses = [ctypes.addressof(v) for v in target_values]
+    noise_addresses = {ctypes.addressof(v) for v in values}
+    target_addresses = {ctypes.addressof(v) for v in target_values}
 
     data_length = ctypes.sizeof(target_values[0])
 
@@ -324,20 +352,14 @@ def test_search_by_string_between():
 
     found = 0
 
-    # Get addresses of values exact or smaller than max_value.
-    for found_address in process.search_by_value_between(str, data_length, min_value, max_value):
-
-        # Check if the found address is a target address.
+    for found_address in process.search_by_value_between(
+        str, data_length, min_value, max_value
+    ):
         if found_address in target_addresses:
-            addresses.remove(found_address)
             found += 1
-
-        elif found_address in addresses:
-            raise ValueError("Scanner returned the address of a clearly invalid string.")
+        elif found_address in noise_addresses:
+            raise ValueError(
+                "Scanner returned the address of a clearly invalid string."
+            )
 
     assert found / test_length >= 0.5
-
-
-def test_close_process():
-    # Try to close the process handle.
-    assert process.close()

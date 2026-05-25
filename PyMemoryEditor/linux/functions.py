@@ -6,18 +6,109 @@
 # Read more about proc and memory mapping here:
 # https://man7.org/linux/man-pages/man5/proc.5.html
 
+import ctypes
+import errno as errno_mod
+import os
 from ctypes import addressof, sizeof
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
-from ..util import convert_from_byte_array, get_c_type_of, scan_memory, scan_memory_for_exact_value
-from .ptrace import libc
-from .types import MEMORY_BASIC_INFORMATION, iovec
-
-import ctypes
+from ..process.region import enrich_region
+from ..process.scanning import iter_search_results, iter_values_for_addresses
+from ..util import (
+    _validate_pytype,
+    get_c_type_of,
+    values_to_bytes,
+)
+from .libc import libc
+from .types import MEMORY_BASIC_INFORMATION, PATH_SIZE, PRIVILEGES_SIZE, iovec
 
 
 T = TypeVar("T")
+
+
+# Errors that mean "the page is no longer mapped" — safe to skip during scans.
+# Other errors (EACCES, EPERM, ESRCH, EINVAL) reveal a real problem and are
+# propagated so callers can act on them.
+_PAGE_GONE_ERRNOS = frozenset((errno_mod.EFAULT, errno_mod.ENOMEM))
+
+
+class _LinuxPartialIOError(OSError):
+    """
+    process_vm_readv / process_vm_writev returned fewer bytes than requested.
+
+    In practice this happens when the target range straddles a freed or
+    inaccessible page — the kernel transfers what it can and reports the
+    short count. The previous behavior was to silently accept the short
+    result, leaving the caller's buffer half-filled with real bytes and
+    half with zeros (which downstream decoding would treat as valid).
+    Mirrors the partial-read/write check the Win32 backend already does
+    against ``ReadProcessMemory`` / ``WriteProcessMemory``.
+    """
+
+    def __init__(self, op: str, address: int, bytes_done: int, length: int):
+        super().__init__(
+            "%s partial transfer at 0x%X: %d of %d bytes."
+            % (op, address, bytes_done, length)
+        )
+        self.address = address
+        self.bytes_done = bytes_done
+        self.length = length
+
+
+def _process_vm_readv(
+    pid: int, local_address: int, remote_address: int, length: int
+) -> int:
+    """
+    Wrapper for process_vm_readv that raises OSError on failure.
+    Returns the number of bytes read.
+
+    Raises ``_LinuxPartialIOError`` when the kernel reports a short read
+    (``result < length``) so callers don't decode a buffer that is part
+    real-bytes, part zero-initialized. Scan loops classify this as a
+    transient failure (same shape as a vanished page).
+    """
+    local = (iovec * 1)(iovec(local_address, length))
+    remote = (iovec * 1)(iovec(remote_address, length))
+    result = libc.process_vm_readv(pid, local, 1, remote, 1, 0)
+
+    if result == -1:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno))
+
+    if result != length:
+        raise _LinuxPartialIOError(
+            "process_vm_readv", remote_address, result, length
+        )
+
+    return result
+
+
+def _process_vm_writev(
+    pid: int, local_address: int, remote_address: int, length: int
+) -> int:
+    """
+    Wrapper for process_vm_writev that raises OSError on failure.
+    Returns the number of bytes written.
+
+    Raises ``_LinuxPartialIOError`` on a short write so the caller learns
+    that the value did not fully land. The Win32 backend already enforces
+    this for ``WriteProcessMemory``.
+    """
+    local = (iovec * 1)(iovec(local_address, length))
+    remote = (iovec * 1)(iovec(remote_address, length))
+    result = libc.process_vm_writev(pid, local, 1, remote, 1, 0)
+
+    if result == -1:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno))
+
+    if result != length:
+        raise _LinuxPartialIOError(
+            "process_vm_writev", remote_address, result, length
+        )
+
+    return result
 
 
 def get_memory_regions(pid: int) -> Generator[dict, None, None]:
@@ -28,48 +119,58 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
 
     with open(mapping_filename, "r") as mapping_file:
         for line in mapping_file:
-
-            # Each line keeps information about a memory region of the process.
             region_information = line.split()
 
-            addressing_range, privileges, offset, device, inode = region_information[0: 5]
-            path = region_information[5] if len(region_information) >= 6 else str()
+            addressing_range, privileges, offset, device, inode = region_information[
+                0:5
+            ]
+            path = region_information[5] if len(region_information) >= 6 else ""
 
-            # Convert hexadecimal values to decimal.
-            start_address, end_address = [int(addr, 16) for addr in addressing_range.split("-")]
+            start_address, end_address = [
+                int(addr, 16) for addr in addressing_range.split("-")
+            ]
             major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
 
             offset = int(offset, 16)
-            inode = int(inode, 16)
+            inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
 
-            # Calculate the region size.
             size = end_address - start_address
 
-            region = MEMORY_BASIC_INFORMATION(start_address, size, privileges.encode(), offset, major_id, minor_id, inode, path.encode())
-            yield {"address": start_address, "size": region.RegionSize, "struct": region}
+            # Truncate to fit the fixed-size inline byte arrays in the struct.
+            # Leave room for a null so attribute reads always terminate cleanly.
+            privileges_bytes = privileges.encode()[: PRIVILEGES_SIZE - 1]
+            path_bytes = path.encode()[: PATH_SIZE - 1]
+
+            region = MEMORY_BASIC_INFORMATION(
+                start_address,
+                size,
+                privileges_bytes,
+                offset,
+                major_id,
+                minor_id,
+                inode,
+                path_bytes,
+            )
+            yield enrich_region(
+                {
+                    "address": start_address,
+                    "size": region.RegionSize,
+                    "struct": region,
+                }
+            )
 
 
-def read_process_memory(
-    pid: int,
-    address: int,
-    pytype: Type[T],
-    bufflength: int
-) -> T:
+def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int) -> T:
     """
     Return a value from a memory address.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
-
-    libc.process_vm_readv(
-        pid, (iovec * 1)(iovec(addressof(data), sizeof(data))),
-        1, (iovec * 1)(iovec(address, sizeof(data))), 1, 0
-    )
+    _process_vm_readv(pid, addressof(data), address, sizeof(data))
 
     if pytype is str:
-        return bytes(data).decode()
+        return bytes(data).decode("utf-8", errors="replace")
     elif pytype is bytes:
         return bytes(data)
     else:
@@ -84,76 +185,62 @@ def search_addresses_by_value(
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: bool = False,
     writeable_only: bool = False,
+    *,
+    memory_regions: Optional[Sequence[Dict]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
     for the provided value, returning the found addresses.
+
+    Passing a `memory_regions` snapshot skips region enumeration.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
-    # Convert the target value, or all values of a tuple, as bytes.
-    target_values = value if isinstance(value, tuple) else (value,)
+    target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
-    conversion_buffer = list()
+    source_regions = (
+        memory_regions if memory_regions is not None else get_memory_regions(pid)
+    )
 
-    for v in target_values:
-        target_value = get_c_type_of(pytype, bufflength)
-        target_value.value = v.encode() if isinstance(v, str) else v
+    def is_scannable(region) -> bool:
+        privileges = region["struct"].Privileges
+        if b"r" not in privileges:
+            return False
+        if writeable_only and b"w" not in privileges:
+            return False
+        # Skip shared mappings — they typically hold libc and other code that
+        # the caller is not interested in, and scanning them adds noise and
+        # CPU cost. Mirrors the Win32 backend filtering on MEM_PRIVATE.
+        if b"s" in privileges:
+            return False
+        return True
 
-        target_value_bytes = ctypes.cast(ctypes.byref(target_value), ctypes.POINTER(ctypes.c_byte * bufflength))
-        conversion_buffer.append(bytes(target_value_bytes.contents))
+    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions.sort(key=lambda region: region["address"])
 
-    target_value_bytes = tuple(conversion_buffer) if isinstance(value, tuple) else conversion_buffer[0]
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
+        return buffer
 
-    checked_memory_size = 0
-    memory_total = 0
-    memory_regions = list()
+    def is_transient(exc: BaseException) -> bool:
+        # A short read mid-scan is equivalent to a page disappearing — the
+        # scan should skip the chunk and keep going. Real permission /
+        # configuration errors (EACCES, EPERM, ESRCH, EINVAL) propagate.
+        if isinstance(exc, _LinuxPartialIOError):
+            return True
+        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
-    # Get the memory regions, computing the total amount of memory to be scanned.
-    for region in get_memory_regions(pid):
-
-        # Only readable memory pages.
-        if b"r" not in region["struct"].Privileges: continue
-
-        # If writeable_only is True, checks if the memory page is writeable.
-        if writeable_only and b"w" not in region["struct"].Privileges: continue
-
-        memory_total += region["size"]
-        memory_regions.append(region)
-
-    # Sort the list to return ordered addresses.
-    memory_regions.sort(key=lambda region: region["address"])
-
-    # Check each memory region used by the process.
-    for region in memory_regions:
-        address, size = region["address"], region["size"]
-        region_data = (ctypes.c_byte * size)()
-
-        # Get data from the region.
-        libc.process_vm_readv(
-            pid, (iovec * 1)(iovec(addressof(region_data), sizeof(region_data))),
-            1, (iovec * 1)(iovec(address, sizeof(region_data))), 1, 0
-        )
-
-        # Choose the searching method.
-        searching_method = scan_memory
-
-        if scan_type in [ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE]:
-            searching_method = scan_memory_for_exact_value
-
-        # Search the value and return the found addresses.
-        for offset in searching_method(region_data, size, target_value_bytes, bufflength, scan_type, pytype is str):
-            found_address = address + offset
-
-            extra_information = {
-                "memory_total": memory_total,
-                "progress": (checked_memory_size + offset) / memory_total,
-            }
-            yield (found_address, extra_information) if progress_information else found_address
-
-        # Compute the region size to the checked memory size.
-        checked_memory_size += size
+    yield from iter_search_results(
+        filtered_regions,
+        pytype,
+        bufflength,
+        target_value_bytes,
+        scan_type,
+        read_chunk,
+        progress_information=progress_information,
+        transient_error_check=is_transient,
+    )
 
 
 def search_values_by_addresses(
@@ -168,56 +255,47 @@ def search_values_by_addresses(
     """
     Search the whole memory space, accessible to the process,
     for the provided list of addresses, returning their values.
+
+    Memory is read in chunks (see iter_region_chunks) to bound the per-call
+    allocation. Chunks near an address boundary read `bufflength - 1` extra
+    bytes so values straddling the boundary are still decoded correctly.
+    Addresses that fall in gaps between regions or extend past a region's end
+    yield `(address, None)`.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
-    memory_regions = list(memory_regions) if memory_regions else list()
-    addresses = sorted(addresses)
+    # `None` means "no snapshot provided, enumerate now". An empty list passed
+    # explicitly is honored verbatim — scanning nothing is a valid choice when
+    # the caller pre-filtered to zero regions.
+    if memory_regions is None:
+        memory_regions = [
+            region for region in get_memory_regions(pid) if region["is_readable"]
+        ]
+    else:
+        memory_regions = list(memory_regions)
 
-    # If no memory page has been given, get all readable memory pages.
-    if not memory_regions:
-        for region in get_memory_regions(pid):
-            if b"r" not in region["struct"].Privileges: continue
-            memory_regions.append(region)
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
+        return buffer
 
-    memory_regions.sort(key=lambda region: region["address"])
-    address_index = 0
+    def is_transient(exc: BaseException) -> bool:
+        # A short read mid-scan is equivalent to a page disappearing — the
+        # scan should skip the chunk and keep going. Real permission /
+        # configuration errors (EACCES, EPERM, ESRCH, EINVAL) propagate.
+        if isinstance(exc, _LinuxPartialIOError):
+            return True
+        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
-    # Walk by each memory region.
-    for region in memory_regions:
-        if address_index >= len(addresses): break
-
-        target_address = addresses[address_index]
-
-        # Check if the memory region contains the target address.
-        base_address, size = region["address"], region["size"]
-        if not (base_address <= target_address < base_address + size): continue
-
-        region_data = (ctypes.c_byte * size)()
-
-        # Get data from the region.
-        libc.process_vm_readv(
-            pid, (iovec * 1)(iovec(addressof(region_data), sizeof(region_data))),
-            1, (iovec * 1)(iovec(base_address, sizeof(region_data))), 1, 0
-        )
-
-        # Get the value of each address.
-        while base_address <= target_address < base_address + size:
-            offset = target_address - base_address
-            address_index += 1
-
-            try:
-                data = region_data[offset: offset + bufflength]
-                data = (ctypes.c_byte * bufflength)(*data)
-                yield target_address, convert_from_byte_array(data, pytype, bufflength)
-
-            except Exception as error:
-                if raise_error: raise error
-                yield target_address, None
-
-            if address_index >= len(addresses): break
-            target_address = addresses[address_index]
+    yield from iter_values_for_addresses(
+        addresses,
+        memory_regions,
+        pytype,
+        bufflength,
+        read_chunk,
+        raise_error=raise_error,
+        transient_error_check=is_transient,
+    )
 
 
 def write_process_memory(
@@ -225,19 +303,15 @@ def write_process_memory(
     address: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes]
-) -> T:
+    value: Union[bool, int, float, str, bytes],
+) -> Union[bool, int, float, str, bytes]:
     """
     Write a value to a memory address.
     """
-    if pytype not in [bool, int, float, str, bytes]:
-        raise ValueError("The type must be bool, int, float, str or bytes.")
+    _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
     data.value = value.encode() if isinstance(value, str) else value
 
-    libc.process_vm_writev(
-        pid, (iovec * 1)(iovec(addressof(data), sizeof(data))),
-        1, (iovec * 1)(iovec(address, sizeof(data))), 1, 0
-    )
+    _process_vm_writev(pid, addressof(data), address, sizeof(data))
     return value

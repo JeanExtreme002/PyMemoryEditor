@@ -1,42 +1,140 @@
 # -*- coding: utf-8 -*-
 
-from typing import Type, TypeVar
+from typing import Any, Optional, Tuple, Type, TypeVar, Union, cast
 import ctypes
 
 
 T = TypeVar("T")
 
 
-def convert_from_byte_array(byte_array: ctypes.Array, pytype: Type[T], length: int) -> T:
+# The five Python types the library supports as read/write/scan targets.
+# Mirrored by the user-facing error in `_validate_pytype` so the failure
+# message points at exactly the set the caller is allowed to pass.
+_SUPPORTED_PYTYPES = (bool, int, float, str, bytes)
+
+
+def _validate_pytype(pytype: Type) -> None:
+    """
+    Raise ``ValueError`` when ``pytype`` is not one of the five supported
+    primitives. Used at every public read / write / search entry point on
+    all three backends so the rejection message stays identical regardless
+    of which platform path the caller landed on.
+    """
+    if pytype not in _SUPPORTED_PYTYPES:
+        raise ValueError("The type must be bool, int, float, str or bytes.")
+
+
+# Default byte widths for numeric Python types when the caller doesn't specify
+# `bufflength`. Matches the natural C type used by ctypes for each Python type.
+_DEFAULT_BUFFLENGTH = {
+    bool: 1,  # c_bool
+    int: 4,  # c_int32
+    float: 8,  # c_double
+}
+
+
+def resolve_bufflength(pytype: Type, bufflength: Optional[int]) -> int:
+    """
+    Return a concrete bufflength: the caller-provided value, or the default for
+    numeric `pytype` when `bufflength is None`. str and bytes require an
+    explicit length since they're variable-width.
+    """
+    if bufflength is not None:
+        return bufflength
+    if pytype in _DEFAULT_BUFFLENGTH:
+        return _DEFAULT_BUFFLENGTH[pytype]
+    raise ValueError(
+        "bufflength is required for pytype=%s (only int, float and bool have a default)."
+        % pytype.__name__
+    )
+
+
+def convert_from_byte_array(
+    byte_array: ctypes.Array, pytype: Type[T], length: int
+) -> T:
     """
     Convert a byte array to a Python type.
+
+    String decoding uses errors="replace" so that non-UTF-8 bytes (common in
+    raw memory) do not raise UnicodeDecodeError — they become U+FFFD instead.
+    Callers that need raw bytes should pass pytype=bytes.
     """
-    if pytype is bytes: return bytes(byte_array)
-    if pytype is str: return bytes(byte_array).decode()
+    # cast() reassures mypy that the runtime check above narrows T; without it
+    # the generic-return-vs-concrete-bytes/str pair triggers "Incompatible
+    # return value type [return-value]" errors.
+    if pytype is bytes:
+        return cast(T, bytes(byte_array))
+    if pytype is str:
+        return cast(T, bytes(byte_array).decode("utf-8", errors="replace"))
 
     c_value = get_c_type_of(pytype, length)
 
     return c_value.__class__.from_buffer(byte_array).value
 
 
-def get_c_type_of(pytype: Type, length) -> ctypes._SimpleCData:
+def value_to_bytes(pytype: Type, bufflength: int, value) -> bytes:
+    """
+    Encode a single scan target value as a fixed-width byte string using the
+    same ctypes representation the backend will compare against.
+
+    Strings are utf-8 encoded; bytes pass through; numerics are written into a
+    ctypes value and cast back. Shared by the three platform backends to avoid
+    duplicating ~10 lines per call site.
+    """
+    target_value = get_c_type_of(pytype, bufflength)
+    target_value.value = value.encode() if isinstance(value, str) else value
+
+    target_value_bytes = ctypes.cast(
+        ctypes.byref(target_value),
+        ctypes.POINTER(ctypes.c_byte * bufflength),
+    )
+    return bytes(target_value_bytes.contents)
+
+
+def values_to_bytes(
+    pytype: Type,
+    bufflength: int,
+    value: Union[object, Tuple],
+) -> Union[bytes, Tuple[bytes, ...]]:
+    """
+    Convert either a single value or a tuple of values (for VALUE_BETWEEN /
+    NOT_VALUE_BETWEEN) to the corresponding byte form.
+    """
+    if isinstance(value, tuple):
+        return tuple(value_to_bytes(pytype, bufflength, v) for v in value)
+    return value_to_bytes(pytype, bufflength, value)
+
+
+def get_c_type_of(pytype: Type, length: int) -> Any:
     """
     Return a C type of a primitive type of the Python language.
+
+    Return type is `Any` because the function legitimately returns either a
+    `ctypes._SimpleCData` subclass instance (for numeric types) or a
+    `ctypes.Array[c_char]` (for str/bytes), which don't share a common base
+    that mypy can reason about.
     """
-    if pytype is str or pytype is bytes: return ctypes.create_string_buffer(length)
+    if pytype is str or pytype is bytes:
+        return ctypes.create_string_buffer(length)
 
     elif pytype is int:
 
-        if length == 1: return ctypes.c_int8()      # 1 Byte
-        if length == 2: return ctypes.c_int16()     # 2 Bytes
-        if length <= 4: return ctypes.c_int32()     # 4 Bytes
-        return ctypes.c_int64()                     # 8 Bytes
+        if length == 1:
+            return ctypes.c_int8()
+        if length == 2:
+            return ctypes.c_int16()
+        if length <= 4:
+            return ctypes.c_int32()
+        return ctypes.c_int64()
 
     elif pytype is float:
 
-        if length == 4: return ctypes.c_float()     # 4 Bytes
-        return ctypes.c_double()                    # 8 Bytes
+        if length == 4:
+            return ctypes.c_float()
+        return ctypes.c_double()
 
-    elif pytype is bool: return ctypes.c_bool()
+    elif pytype is bool:
+        return ctypes.c_bool()
 
-    else: raise ValueError("The type must be bool, int, float, str or bytes.")
+    else:
+        raise ValueError("The type must be bool, int, float, str or bytes.")

@@ -6,19 +6,31 @@
 # Read more about iovec here:
 # https://man7.org/linux/man-pages/man3/iovec.3type.html
 
-from ctypes import Structure, c_char_p, c_size_t, c_uint, c_void_p
+from ctypes import Structure, c_char, c_size_t, c_uint, c_uint64, c_void_p
+
+
+# Fixed-size inline byte arrays for the variable-length text fields. Using
+# `c_char_p` (which is just a pointer) would tie the field's validity to the
+# lifetime of the Python `bytes` object passed at construction time — once that
+# bytes object is GC'd the pointer dangles and any later read of
+# `region.Privileges` / `region.Path` is undefined behavior. Inline arrays own
+# the storage and survive as long as the struct does.
+PRIVILEGES_SIZE = 8       # "rwxp" + null + slack
+PATH_SIZE = 4096          # PATH_MAX on Linux
 
 
 class MEMORY_BASIC_INFORMATION(Structure):
+    # Address/size/offset fields are 64-bit so that mappings beyond 4 GB
+    # (huge pages, large file mmaps) are not silently truncated on x86_64.
     _fields_ = [
-        ("BaseAddress", c_uint),
-        ("RegionSize", c_uint),
-        ("Privileges", c_char_p),
-        ("Offset", c_uint),
+        ("BaseAddress", c_uint64),
+        ("RegionSize", c_uint64),
+        ("Privileges", c_char * PRIVILEGES_SIZE),
+        ("Offset", c_uint64),
         ("MajorID", c_uint),
         ("MinorID", c_uint),
-        ("InodeID", c_uint),
-        ("Path", c_char_p),
+        ("InodeID", c_uint64),
+        ("Path", c_char * PATH_SIZE),
     ]
 
 
@@ -34,7 +46,5 @@ class iovec(Structure):
 
     Reference: https://man7.org/linux/man-pages/man3/iovec.3type.html
     """
-    _fields_ = [
-        ("iov_base", c_void_p),
-        ("iov_len", c_size_t)
-    ]
+
+    _fields_ = [("iov_base", c_void_p), ("iov_len", c_size_t)]

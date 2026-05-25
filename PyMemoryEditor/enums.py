@@ -6,6 +6,7 @@ class ScanTypesEnum(Enum):
     """
     Enum with scan types.
     """
+
     EXACT_VALUE = 0
     NOT_EXACT_VALUE = 1
     BIGGER_THAN = 2

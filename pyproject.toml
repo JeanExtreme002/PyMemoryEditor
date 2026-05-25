@@ -3,7 +3,7 @@ name = "PyMemoryEditor"
 dynamic = ["version"]
 description = "Multi-platform library developed with ctypes for reading, writing and searching at process memory, in a simple and friendly way with Python 3."
 authors = [
-    { name = "Jean Loui Bernard Silva de Jesus", email = "jeanextreme002@gmail.com" },
+    { name = "Jean Loui Bernard Silva de Jesus", email = "contact@jeanloui.dev" },
 ]
 license = "MIT"
 readme = "README.md"
@@ -17,7 +17,7 @@ keywords = [
     "reader",
     "editor",
     "override",
-    "win32", "api", "ctypes", "linux", "ptrace",
+    "win32", "api", "ctypes", "linux", "macos", "mach",
     "cheat", "scanner", "debug", "track",
     "readprocessmemory", "writeprocessmemory"
 ]
@@ -29,36 +29,98 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
     "Topic :: Security",
     "Topic :: System :: Monitoring"
 ]
 exclude = ["tests", ".flake8"]
 requires-python = ">=3.6"
-dependencies = ["psutil"]
+dependencies = ["psutil>=5.9,<7"]
 
 [project.optional-dependencies]
 tests = [
   "pytest",
+  "pytest-xdist",
+]
+app = [
+  "PySide6>=6.5",
+]
+dev = [
+  "pytest",
+  "pytest-xdist",
+  "pytest-cov",
+  "pytest-qt",
+  "hypothesis",
+  "flake8",
+  "mypy",
+  "build",
+  "twine",
+  "PySide6>=6.5",
 ]
 
 [project.urls]
 "Homepage" = "https://github.com/JeanExtreme002/PyMemoryEditor"
 
+[tool.mypy]
+# The Qt app uses dynamic types and depends on the optional PySide6 GUI
+# toolkit, so it isn't worth annotating strictly. Library code under
+# PyMemoryEditor/ (excluding app/) is the surface that ships with
+# `py.typed` and should aim for clean mypy output over time.
+exclude = ["PyMemoryEditor/app/"]
+ignore_missing_imports = true
+# Initial pass: surface issues without immediately blocking CI. Tighten this
+# over time as the pre-existing type debt gets paid down.
+warn_unused_ignores = true
+
+# Platform-specific backends use symbols that only exist on their target OS
+# (`ctypes.windll`, `WINFUNCTYPE`, `WinError`, `set_last_error`, etc. on
+# Windows; Mach types on macOS). mypy running on a single OS sees the others
+# as undefined. The shared layer (process/, util/) is still type-checked.
+[[tool.mypy.overrides]]
+module = [
+    "PyMemoryEditor.win32.*",
+    "PyMemoryEditor.linux.*",
+    "PyMemoryEditor.macos.*",
+]
+ignore_errors = true
+
 [tool.hatch.version]
 path = "PyMemoryEditor/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["PyMemoryEditor"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"PyMemoryEditor/py.typed" = "PyMemoryEditor/py.typed"
+"PyMemoryEditor/app/assets/icon.svg" = "PyMemoryEditor/app/assets/icon.svg"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-pymemoryeditor = "PyMemoryEditor.sample.application:main"
+pymemoryeditor = "PyMemoryEditor.app.application:main"
+
+# Coverage scope: the Qt app is excluded — it's exercised manually, not by
+# the automated test suite. The library code (everything else) is what we
+# track regressions against.
+[tool.coverage.run]
+source = ["PyMemoryEditor"]
+omit = ["PyMemoryEditor/app/*", "PyMemoryEditor/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+# Parallelize the suite with pytest-xdist. ``--dist=loadfile`` keeps each
+# ``test_*.py`` together on a single worker (module-scoped fixtures stay
+# valid), and ``-n auto`` picks one worker per available CPU. Override with
+# ``pytest -n 0`` for serial debugging.
+[tool.pytest.ini_options]
+addopts = "-n auto --dist=loadfile"
