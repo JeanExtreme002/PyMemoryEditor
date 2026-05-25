@@ -147,7 +147,7 @@ class ScannerPanel(QWidget):
         buttons.setSpacing(6)
 
         self._first_scan_btn = QPushButton("First Scan")
-        self._first_scan_btn.setObjectName("primary")
+        self._first_scan_btn.setObjectName("secondary")
         self._first_scan_btn.clicked.connect(self._on_first_scan)
         buttons.addWidget(self._first_scan_btn)
 

@@ -82,7 +82,7 @@ class MemoryViewerDialog(QDialog):
         top.addWidget(self._size_spin)
 
         refresh_btn = QPushButton("Read")
-        refresh_btn.setObjectName("primary")
+        refresh_btn.setObjectName("secondary")
         refresh_btn.clicked.connect(self.refresh)
         top.addWidget(refresh_btn)
         layout.addLayout(top)

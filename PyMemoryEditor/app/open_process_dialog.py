@@ -272,11 +272,12 @@ class OpenProcessDialog(QDialog):
         button_row.addStretch(1)
 
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("padding: 7px 14px; min-height: 20px;")
         cancel_btn.clicked.connect(self.reject)
         button_row.addWidget(cancel_btn)
 
         self._open_btn = QPushButton("Open Process")
-        self._open_btn.setObjectName("primary")
+        self._open_btn.setObjectName("secondary")
         self._open_btn.setDefault(True)
         self._open_btn.clicked.connect(self._try_open)
         button_row.addWidget(self._open_btn)
