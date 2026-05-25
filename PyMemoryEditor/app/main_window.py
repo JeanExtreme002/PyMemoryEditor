@@ -21,19 +21,23 @@ from typing import List, Optional, Union
 
 import psutil
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtCore import Qt, QSettings, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +45,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, __version__
 
 from ._icon import app_icon
+from .application import DEFAULT_THEME_ID, THEMES, apply_theme
 from .cheat_table import CheatTable
 from .memory_map_dialog import MemoryMapDialog
 from .memory_viewer_dialog import MemoryViewerDialog
@@ -239,7 +244,47 @@ class MainWindow(QMainWindow):
         toolbar.addAction(hex_viewer_action)
         toolbar.addSeparator()
         toolbar.addAction(export_results)
+
+        # Push the theme switcher all the way to the right.
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        toolbar.addWidget(self._build_theme_button())
+
         self.addToolBar(toolbar)
+
+    def _build_theme_button(self) -> QToolButton:
+        """Toolbar button that opens a menu of dark themes (Kali, Dracula, …)."""
+        button = QToolButton(self)
+        button.setText("Theme")
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        button.setToolTip("Switch color theme")
+
+        menu = QMenu(button)
+        current_id = str(QSettings().value("theme", DEFAULT_THEME_ID))
+        self._theme_actions = QActionGroup(self)
+        self._theme_actions.setExclusive(True)
+
+        for theme_id, theme in THEMES.items():
+            action = QAction(theme.name, self, checkable=True)
+            action.setData(theme_id)
+            if theme_id == current_id:
+                action.setChecked(True)
+            # Bind theme_id at lambda-definition time so each menu entry
+            # captures its own id instead of the loop variable.
+            action.triggered.connect(
+                lambda _checked=False, tid=theme_id: self._on_theme_changed(tid)
+            )
+            self._theme_actions.addAction(action)
+            menu.addAction(action)
+
+        button.setMenu(menu)
+        return button
+
+    def _on_theme_changed(self, theme_id: str) -> None:
+        apply_theme(QApplication.instance(), theme_id)
+        QSettings().setValue("theme", theme_id)
 
     # ----------------------------------------------------------- scanner glue
 

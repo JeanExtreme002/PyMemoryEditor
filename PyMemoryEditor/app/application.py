@@ -6,6 +6,7 @@ A Cheat-Engine-inspired memory scanner built on PySide6 (Qt for Python),
 working on Windows, Linux and macOS.
 """
 import sys
+from dataclasses import dataclass
 
 from PyMemoryEditor import __version__
 
@@ -26,6 +27,155 @@ def _abort_if_qt_unavailable():
     except ImportError:
         sys.stderr.write(_QT_MISSING_HINT)
         sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Theme system
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Theme:
+    """A flat palette describing every color the app's QSS and QPalette need.
+
+    Hex strings are stored verbatim so they can be substituted into the QSS
+    template without re-formatting; QColor accepts the same form when we feed
+    them into QPalette.
+    """
+
+    id: str
+    name: str
+    bg: str
+    bg_alt: str
+    bg_button: str
+    alt_base: str
+    text: str
+    text_dim: str
+    bright_text: str
+    accent: str
+    accent_text: str
+    accent_hover: str
+    accent_pressed: str
+    border: str
+    splitter_hover: str
+    danger: str
+    danger_border: str
+
+
+_KALI_TEAL = Theme(
+    id="kali_teal",
+    name="Kali Teal",
+    bg="#0F1419",
+    bg_alt="#0A0E12",
+    bg_button="#1A2129",
+    alt_base="#11161C",
+    text="#C9D1D9",
+    text_dim="#6E7681",
+    bright_text="#F87171",
+    accent="#2DD4BF",
+    accent_text="#08111A",
+    accent_hover="#5EEAD4",
+    accent_pressed="#14B8A6",
+    border="#1F2A33",
+    splitter_hover="#3A4954",
+    danger="#F87171",
+    danger_border="#5C2424",
+)
+
+_DRACULA = Theme(
+    id="dracula",
+    name="Dracula",
+    bg="#282A36",
+    bg_alt="#1E1F29",
+    bg_button="#383A4D",
+    alt_base="#2D2F40",
+    text="#F8F8F2",
+    text_dim="#6272A4",
+    bright_text="#FF5555",
+    accent="#BD93F9",
+    accent_text="#282A36",
+    accent_hover="#D7BAFF",
+    accent_pressed="#9D7BD6",
+    border="#44475A",
+    splitter_hover="#6272A4",
+    danger="#FF5555",
+    danger_border="#5C2424",
+)
+
+_TOKYO_NIGHT = Theme(
+    id="tokyo_night",
+    name="Tokyo Night",
+    bg="#1A1B26",
+    bg_alt="#16161E",
+    bg_button="#24283B",
+    alt_base="#1F2335",
+    text="#C0CAF5",
+    text_dim="#565F89",
+    bright_text="#F7768E",
+    accent="#7DCFFF",
+    accent_text="#16161E",
+    accent_hover="#A8E0FF",
+    accent_pressed="#5DAFE0",
+    border="#2A2E45",
+    splitter_hover="#414868",
+    danger="#F7768E",
+    danger_border="#5C2434",
+)
+
+_MATRIX_GREEN = Theme(
+    id="matrix_green",
+    name="Matrix Green",
+    bg="#0A0E0A",
+    bg_alt="#050805",
+    bg_button="#141A14",
+    alt_base="#0B100B",
+    text="#C8E6C9",
+    text_dim="#5A7060",
+    bright_text="#FF5555",
+    accent="#00FF41",
+    accent_text="#050805",
+    accent_hover="#5EFF7E",
+    accent_pressed="#00CC33",
+    border="#1B2A1B",
+    splitter_hover="#2B3F2B",
+    danger="#FF5555",
+    danger_border="#5C2424",
+)
+
+_CYBERPUNK = Theme(
+    id="cyberpunk",
+    name="Cyberpunk",
+    bg="#0E0E14",
+    bg_alt="#08080D",
+    bg_button="#1A1A24",
+    alt_base="#15151F",
+    text="#E8E8F0",
+    text_dim="#6E6E80",
+    bright_text="#FF5C5C",
+    accent="#FF2A6D",
+    accent_text="#0E0E14",
+    accent_hover="#FF5C8E",
+    accent_pressed="#D11857",
+    border="#2A2A38",
+    splitter_hover="#3A3A4A",
+    danger="#FF5C5C",
+    danger_border="#5C2424",
+)
+
+
+THEMES = {
+    t.id: t
+    for t in (_KALI_TEAL, _DRACULA, _TOKYO_NIGHT, _MATRIX_GREEN, _CYBERPUNK)
+}
+DEFAULT_THEME_ID = _KALI_TEAL.id
+
+
+def _hex_to_rgba(hex_str: str, alpha: float) -> str:
+    """Format `#RRGGBB` as `rgba(R, G, B, alpha)` for Qt QSS."""
+    r = int(hex_str[1:3], 16)
+    g = int(hex_str[3:5], 16)
+    b = int(hex_str[5:7], 16)
+    return f"rgba({r}, {g}, {b}, {alpha})"
 
 
 class _PointerCursorFilter:
@@ -55,66 +205,73 @@ class _PointerCursorFilter:
         app.installEventFilter(self._impl)
 
 
-def apply_dark_theme(app) -> None:
+def apply_theme(app, theme_id: str = DEFAULT_THEME_ID) -> None:
     """
-    Apply a Cheat-Engine-flavored dark theme. We base everything on Qt's
-    Fusion style so the look is identical across Windows/Linux/macOS instead
-    of inheriting each platform's native widgets.
+    Apply a named dark theme to ``app``. Falls back to the default theme if
+    ``theme_id`` is unknown. We base everything on Qt's Fusion style so the
+    look is identical across Windows/Linux/macOS instead of inheriting each
+    platform's native widgets.
     """
     from PySide6.QtGui import QColor, QPalette
     from PySide6.QtWidgets import QStyleFactory
 
+    theme = THEMES.get(theme_id, THEMES[DEFAULT_THEME_ID])
+
     app.setStyle(QStyleFactory.create("Fusion"))
 
-    # Stash the filter on the app so it lives as long as the QApplication and
-    # isn't garbage-collected mid-run.
+    # Stash the cursor filter on the app so it lives as long as the
+    # QApplication and isn't garbage-collected mid-run. Idempotent across
+    # theme switches.
     if not hasattr(app, "_pointer_cursor_filter"):
         app._pointer_cursor_filter = _PointerCursorFilter()
         app._pointer_cursor_filter.install_on(app)
 
     palette = QPalette()
-    # Kali-inspired terminal palette: near-black backgrounds with a subtle cool
-    # tint, teal/dragon accent instead of the stock Qt blue.
-    bg = QColor(0x0F, 0x14, 0x19)  # window background (deep graphite)
-    bg_alt = QColor(0x0A, 0x0E, 0x12)  # text/list backgrounds (terminal black)
-    bg_button = QColor(0x1A, 0x21, 0x29)  # button base
-    text = QColor(0xC9, 0xD1, 0xD9)
-    text_dim = QColor(0x6E, 0x76, 0x81)
-    accent = QColor(0x2D, 0xD4, 0xBF)  # selection / highlight (Kali teal)
-    accent_text = QColor(0x08, 0x11, 0x14)
-    border = QColor(0x1F, 0x2A, 0x33)
-
-    palette.setColor(QPalette.Window, bg)
-    palette.setColor(QPalette.WindowText, text)
-    palette.setColor(QPalette.Base, bg_alt)
-    palette.setColor(QPalette.AlternateBase, QColor(0x11, 0x16, 0x1C))
-    palette.setColor(QPalette.ToolTipBase, bg)
-    palette.setColor(QPalette.ToolTipText, text)
-    palette.setColor(QPalette.Text, text)
-    palette.setColor(QPalette.Button, bg_button)
-    palette.setColor(QPalette.ButtonText, text)
-    palette.setColor(QPalette.BrightText, QColor(0xF8, 0x71, 0x71))
-    palette.setColor(QPalette.Link, accent)
-    palette.setColor(QPalette.Highlight, accent)
-    palette.setColor(QPalette.HighlightedText, accent_text)
-    palette.setColor(QPalette.PlaceholderText, text_dim)
-    palette.setColor(QPalette.Disabled, QPalette.Text, text_dim)
-    palette.setColor(QPalette.Disabled, QPalette.ButtonText, text_dim)
-    palette.setColor(QPalette.Disabled, QPalette.WindowText, text_dim)
+    palette.setColor(QPalette.Window, QColor(theme.bg))
+    palette.setColor(QPalette.WindowText, QColor(theme.text))
+    palette.setColor(QPalette.Base, QColor(theme.bg_alt))
+    palette.setColor(QPalette.AlternateBase, QColor(theme.alt_base))
+    palette.setColor(QPalette.ToolTipBase, QColor(theme.bg))
+    palette.setColor(QPalette.ToolTipText, QColor(theme.text))
+    palette.setColor(QPalette.Text, QColor(theme.text))
+    palette.setColor(QPalette.Button, QColor(theme.bg_button))
+    palette.setColor(QPalette.ButtonText, QColor(theme.text))
+    palette.setColor(QPalette.BrightText, QColor(theme.bright_text))
+    palette.setColor(QPalette.Link, QColor(theme.accent))
+    palette.setColor(QPalette.Highlight, QColor(theme.accent))
+    palette.setColor(QPalette.HighlightedText, QColor(theme.accent_text))
+    palette.setColor(QPalette.PlaceholderText, QColor(theme.text_dim))
+    palette.setColor(QPalette.Disabled, QPalette.Text, QColor(theme.text_dim))
+    palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(theme.text_dim))
+    palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor(theme.text_dim))
     app.setPalette(palette)
 
     app.setStyleSheet(
         STYLE_SHEET
         % {
-            "bg": bg.name(),
-            "bg_alt": bg_alt.name(),
-            "bg_button": bg_button.name(),
-            "text": text.name(),
-            "text_dim": text_dim.name(),
-            "accent": accent.name(),
-            "border": border.name(),
+            "bg": theme.bg,
+            "bg_alt": theme.bg_alt,
+            "bg_button": theme.bg_button,
+            "alt_base": theme.alt_base,
+            "text": theme.text,
+            "text_dim": theme.text_dim,
+            "accent": theme.accent,
+            "accent_text": theme.accent_text,
+            "accent_hover": theme.accent_hover,
+            "accent_pressed": theme.accent_pressed,
+            "border": theme.border,
+            "splitter_hover": theme.splitter_hover,
+            "danger": theme.danger,
+            "danger_border": theme.danger_border,
+            "danger_hover_bg": _hex_to_rgba(theme.danger, 0.08),
+            "danger_pressed_bg": _hex_to_rgba(theme.danger, 0.18),
         }
     )
+
+
+def apply_dark_theme(app) -> None:
+    """Backward-compatible shim that applies the default dark theme."""
+    apply_theme(app, DEFAULT_THEME_ID)
 
 
 STYLE_SHEET = """
@@ -154,17 +311,17 @@ QPushButton#primary, QPushButton#secondary, QPushButton#danger {
 }
 QPushButton#primary {
     background: %(accent)s;
-    color: #08111A;
+    color: %(accent_text)s;
     font-weight: 700;
     border-color: %(accent)s;
 }
 QPushButton#primary:hover {
-    background: #5EEAD4;
-    border-color: #5EEAD4;
+    background: %(accent_hover)s;
+    border-color: %(accent_hover)s;
 }
 QPushButton#primary:pressed {
-    background: #14B8A6;
-    border-color: #14B8A6;
+    background: %(accent_pressed)s;
+    border-color: %(accent_pressed)s;
 }
 QPushButton#primary:disabled {
     background: transparent;
@@ -178,12 +335,12 @@ QPushButton#secondary {
 }
 QPushButton#secondary:hover {
     background: %(accent)s;
-    color: #08111A;
+    color: %(accent_text)s;
 }
 QPushButton#secondary:pressed {
-    background: #14B8A6;
-    color: #08111A;
-    border-color: #14B8A6;
+    background: %(accent_pressed)s;
+    color: %(accent_text)s;
+    border-color: %(accent_pressed)s;
 }
 QPushButton#secondary:disabled {
     background: transparent;
@@ -192,16 +349,16 @@ QPushButton#secondary:disabled {
 }
 QPushButton#danger {
     background: transparent;
-    color: #F87171;
-    border: 1px solid #5C2424;
+    color: %(danger)s;
+    border: 1px solid %(danger_border)s;
 }
 QPushButton#danger:hover {
-    background: rgba(248, 113, 113, 0.08);
-    border-color: #F87171;
+    background: %(danger_hover_bg)s;
+    border-color: %(danger)s;
 }
 QPushButton#danger:pressed {
-    background: rgba(248, 113, 113, 0.18);
-    border-color: #F87171;
+    background: %(danger_pressed_bg)s;
+    border-color: %(danger)s;
 }
 QPushButton#danger:disabled {
     background: transparent;
@@ -214,7 +371,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {
     border-radius: 4px;
     padding: 4px 6px;
     selection-background-color: %(accent)s;
-    selection-color: #08111A;
+    selection-color: %(accent_text)s;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: %(accent)s;
@@ -223,7 +380,7 @@ QComboBox QAbstractItemView {
     background: %(bg_alt)s;
     border: 1px solid %(border)s;
     selection-background-color: %(accent)s;
-    selection-color: #08111A;
+    selection-color: %(accent_text)s;
 }
 QHeaderView::section {
     background: %(bg)s;
@@ -236,12 +393,12 @@ QHeaderView::section {
 }
 QTableView, QTreeView, QListView {
     background: %(bg_alt)s;
-    alternate-background-color: #11161C;
+    alternate-background-color: %(alt_base)s;
     gridline-color: %(border)s;
     border: 1px solid %(border)s;
     border-radius: 4px;
     selection-background-color: %(accent)s;
-    selection-color: #08111A;
+    selection-color: %(accent_text)s;
 }
 QTabWidget::pane {
     border: 1px solid %(border)s;
@@ -281,12 +438,12 @@ QStatusBar {
 QMenuBar { background: %(bg)s; }
 QMenuBar::item:selected { background: %(bg_button)s; }
 QMenu { background: %(bg)s; border: 1px solid %(border)s; }
-QMenu::item:selected { background: %(accent)s; color: #08111A; }
+QMenu::item:selected { background: %(accent)s; color: %(accent_text)s; }
 QCheckBox::indicator, QRadioButton::indicator { width: 14px; height: 14px; }
 QSplitter::handle { background: %(border)s; border-radius: 2px; margin: 2px; }
 QSplitter::handle:horizontal { width: 4px; }
 QSplitter::handle:vertical { height: 4px; }
-QSplitter::handle:hover { background: #3A4954; }
+QSplitter::handle:hover { background: %(splitter_hover)s; }
 QLabel#hint { color: %(text_dim)s; }
 QLabel#processBadge {
     background: %(bg_alt)s;
@@ -316,6 +473,7 @@ def main(argv=None):
 
     _abort_if_qt_unavailable()
 
+    from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
 
     from .main_window import MainWindow
@@ -326,8 +484,13 @@ def main(argv=None):
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("PyMemoryEditor")
     app.setApplicationDisplayName("PyMemoryEditor App")
+    # OrganizationName is required for QSettings() to resolve a stable path
+    # on every platform.
+    app.setOrganizationName("PyMemoryEditor")
     app.setWindowIcon(app_icon())
-    apply_dark_theme(app)
+
+    saved_theme = str(QSettings().value("theme", DEFAULT_THEME_ID))
+    apply_theme(app, saved_theme)
 
     picker = OpenProcessDialog()
     if picker.exec() != picker.DialogCode.Accepted:
