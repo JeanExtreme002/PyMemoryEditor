@@ -65,7 +65,7 @@ class _CheatPollWorker(QThread):
         with QMutexLocker(self._mutex):
             self._stop = True
 
-    def run(self) -> None:  # type: ignore[override]
+    def run(self) -> None:
         while True:
             with QMutexLocker(self._mutex):
                 if self._stop:

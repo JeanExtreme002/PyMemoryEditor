@@ -25,7 +25,6 @@ from .types import (
     MEMORY_BASIC_INFORMATION_32,
     MEMORY_BASIC_INFORMATION_64,
     SYSTEM_INFO,
-    WNDENUMPROC,
 )
 
 
@@ -35,7 +34,6 @@ from .types import (
 # `ctypes.get_last_error()` would always return 0, making the WinError path
 # in `_raise_last_error` effectively dead.
 kernel32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
-user32 = ctypes.WinDLL("user32.dll", use_last_error=True)
 
 # Configure argtypes/restype for each Windows API used.
 # Skipping argtypes silently truncates 64-bit handles to 32-bit on x64 Python builds
@@ -82,22 +80,6 @@ kernel32.VirtualQueryEx.restype = ctypes.c_size_t
 
 kernel32.GetSystemInfo.argtypes = (ctypes.POINTER(SYSTEM_INFO),)
 kernel32.GetSystemInfo.restype = None
-
-user32.EnumWindows.argtypes = (WNDENUMPROC, ctypes.wintypes.LPARAM)
-user32.EnumWindows.restype = ctypes.wintypes.BOOL
-
-user32.GetWindowTextW.argtypes = (
-    ctypes.wintypes.HWND,
-    ctypes.wintypes.LPWSTR,
-    ctypes.c_int,
-)
-user32.GetWindowTextW.restype = ctypes.c_int
-
-user32.GetWindowThreadProcessId.argtypes = (
-    ctypes.wintypes.HWND,
-    ctypes.POINTER(ctypes.wintypes.DWORD),
-)
-user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
 
 # BOOL IsWow64Process(HANDLE hProcess, PBOOL Wow64Process);
 # True when the target is a 32-bit process running on 64-bit Windows.
@@ -215,31 +197,6 @@ def GetProcessHandle(access_right: int, inherit: bool, pid: int) -> int:
         _raise_last_error("OpenProcess")
 
     return handle
-
-
-def GetProcessIdByWindowTitle(window_title: str) -> int:
-    """
-    Return the process ID by querying a window title.
-    """
-    result = ctypes.wintypes.DWORD(0)
-
-    string_buffer_size = (
-        len(window_title) + 2
-    )  # (+2) for the next possible character of a title and the NULL char.
-    string_buffer = ctypes.create_unicode_buffer(string_buffer_size)
-
-    def callback(hwnd, _lparam):
-        user32.GetWindowTextW(hwnd, string_buffer, string_buffer_size)
-
-        if window_title == string_buffer.value:
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(result))
-            return False
-
-        return True
-
-    user32.EnumWindows(WNDENUMPROC(callback), 0)
-
-    return result.value
 
 
 def ReadProcessMemory(

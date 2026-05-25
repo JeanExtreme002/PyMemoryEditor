@@ -31,7 +31,7 @@ class ResultsModel(QAbstractTableModel):
 
     HEADERS = ("Address", "Value", "Previous")
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._addresses: List[int] = []
         self._values: List[Any] = []

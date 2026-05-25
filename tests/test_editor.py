@@ -21,8 +21,8 @@ import pytest
 from PyMemoryEditor import OpenProcess, ScanTypesEnum
 
 
-# The default permission on Windows is PROCESS_VM_READ; this suite also
-# exercises write_process_memory, so request write access explicitly. Linux
+# The default permission on Windows already includes read+write, but spell
+# the mask out here so the suite stays explicit about what it needs. Linux
 # and macOS ignore the `permission` kwarg.
 if sys.platform == "win32":
     from PyMemoryEditor import ProcessOperationsEnum

@@ -1,11 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from .errors import ProcessIDNotExistsError, ProcessNotFoundError, WindowNotFoundError
-from .util import (
-    get_process_id_by_process_name,
-    get_process_id_by_window_title,
-    pid_exists,
-)
+from .errors import ProcessIDNotExistsError, ProcessNotFoundError
+from .util import get_process_id_by_process_name, pid_exists
 
 
 class ProcessInfo(object):
@@ -16,7 +12,6 @@ class ProcessInfo(object):
     def __init__(self) -> None:
         self.__pid: int = -1
         self.__process_name: str = ""
-        self.__window_title: str = ""
 
     @property
     def pid(self) -> int:
@@ -54,19 +49,3 @@ class ProcessInfo(object):
 
         self.__pid = pid
         self.__process_name = process_name
-
-    @property
-    def window_title(self) -> str:
-        return self.__window_title
-
-    @window_title.setter
-    def window_title(self, window_title: str) -> None:
-        pid = get_process_id_by_window_title(window_title)
-        # `pid is None` (or 0 — never a real process, but EnumWindows returns 0
-        # when no match was found). Use an explicit None check to align with
-        # the `pid.setter` semantics where 0 is rejected by `pid_exists(0)`.
-        if pid is None or pid == 0:
-            raise WindowNotFoundError(window_title)
-
-        self.__pid = pid
-        self.__window_title = window_title

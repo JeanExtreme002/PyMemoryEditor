@@ -27,14 +27,12 @@ class LinuxProcess(AbstractProcess):
     def __init__(
         self,
         *,
-        window_title: Optional[str] = None,
         process_name: Optional[str] = None,
         pid: Optional[int] = None,
         permission=None,
         case_sensitive: bool = True,
     ):
         """
-        :param window_title: not supported on Linux (raises OSError).
         :param process_name: name of the target process.
         :param pid: process ID.
         :param permission: accepted for cross-platform API parity; ignored on
@@ -44,13 +42,7 @@ class LinuxProcess(AbstractProcess):
             non-Windows platforms.
         :param case_sensitive: when False, process_name matching ignores case.
         """
-        if window_title is not None:
-            raise OSError(
-                "Opening a process by window title is not supported on Linux."
-            )
-
         super().__init__(
-            window_title=None,
             process_name=process_name,
             pid=pid,
             case_sensitive=case_sensitive,

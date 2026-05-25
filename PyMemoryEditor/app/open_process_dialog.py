@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableView,
     QVBoxLayout,
+    QWidget,
 )
 
 from PyMemoryEditor import (
@@ -113,7 +114,7 @@ class _ProcessListWorker(QThread):
 
     rows_ready = Signal(object)  # List[Tuple[int, str, int, str]]
 
-    def run(self) -> None:  # type: ignore[override]
+    def run(self) -> None:
         rows: List[Tuple[int, str, int, str]] = []
         transient = (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess)
         for proc in psutil.process_iter(["pid", "name", "username"]):
@@ -150,7 +151,7 @@ class OpenProcessDialog(QDialog):
     COL_MEMORY = 2
     COL_USER = 3
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.process: Optional[AbstractProcess] = None
         self._scan_worker: Optional[_ProcessListWorker] = None

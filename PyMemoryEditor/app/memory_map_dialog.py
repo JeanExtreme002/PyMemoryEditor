@@ -45,7 +45,7 @@ class _SnapshotWorker(QThread):
         super().__init__(parent)
         self._process = process
 
-    def run(self) -> None:  # type: ignore[override]
+    def run(self) -> None:
         try:
             snapshot = self._process.snapshot_memory_regions()
         except Exception as exc:  # noqa: BLE001
@@ -128,7 +128,7 @@ def _decode_protection(region: Dict) -> str:
 
     # Linux: privileges is a 4-char string like "rw-p".
     try:
-        privileges = struct.Privileges  # type: ignore[attr-defined]
+        privileges = struct.Privileges
         if isinstance(privileges, bytes):
             privileges = privileges.decode("latin-1", "replace")
         return privileges or "-"

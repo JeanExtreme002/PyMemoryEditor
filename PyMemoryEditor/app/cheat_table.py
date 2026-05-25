@@ -341,11 +341,12 @@ class CheatTable(QWidget):
         self._suspend_signals = True
         try:
             for address, pytype, length, value in results:
-                row = entries_by_key.get((address, pytype, length))
-                if row is None:
+                matched_row = entries_by_key.get((address, pytype, length))
+                if matched_row is None:
                     # Entry was deleted (or its spec/length changed) between
                     # snapshot and signal — skip silently.
                     continue
+                row = matched_row
                 if row == editing_row:
                     # Don't clobber whatever the user is typing.
                     continue

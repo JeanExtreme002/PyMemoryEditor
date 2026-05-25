@@ -16,7 +16,7 @@ Outputs (signals):
 * :pysig:`update_values_requested(ScanRequest)` — re-read values without filtering
 * :pysig:`cancel_requested()`
 """
-from typing import Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -241,6 +241,7 @@ class ScannerPanel(QWidget):
             self._length_spin.value() if spec.accepts_length_override else None
         )
 
+        value: Any
         try:
             if scan_type in (
                 ScanTypesEnum.VALUE_BETWEEN,

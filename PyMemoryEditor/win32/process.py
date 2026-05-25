@@ -29,12 +29,18 @@ _PROCESS_VM_WRITE = ProcessOperationsEnum.PROCESS_VM_WRITE.value
 _PROCESS_VM_OPERATION = ProcessOperationsEnum.PROCESS_VM_OPERATION.value
 _PROCESS_QUERY_INFORMATION = ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value
 
-# Default permission for a read-only workflow. VirtualQueryEx (used by
-# get_memory_regions, snapshot_memory_regions, search_by_value*, and
+# Default permission for the typical read-and-write workflow. VirtualQueryEx
+# (used by get_memory_regions, snapshot_memory_regions, search_by_value*, and
 # search_by_addresses) requires PROCESS_QUERY_INFORMATION in addition to
 # PROCESS_VM_READ — without it the kernel returns 0 from VirtualQueryEx and
-# every region scan comes back empty.
-DEFAULT_PERMISSION = _PROCESS_VM_READ | _PROCESS_QUERY_INFORMATION
+# every region scan comes back empty. PROCESS_VM_WRITE | PROCESS_VM_OPERATION
+# are bundled in so write_process_memory works without opt-in.
+DEFAULT_PERMISSION = (
+    _PROCESS_VM_READ
+    | _PROCESS_VM_WRITE
+    | _PROCESS_VM_OPERATION
+    | _PROCESS_QUERY_INFORMATION
+)
 
 
 def _permission_value(permission) -> int:
@@ -68,27 +74,24 @@ class WindowsProcess(AbstractProcess):
     def __init__(
         self,
         *,
-        window_title: Optional[str] = None,
         process_name: Optional[str] = None,
         pid: Optional[int] = None,
         permission: Union[ProcessOperationsEnum, int] = DEFAULT_PERMISSION,
         case_sensitive: bool = False,
     ):
         """
-        :param window_title: window title of the target program.
         :param process_name: name of the target process.
         :param pid: process ID.
-        :param permission: access mode to the process. Defaults to the minimal
-            read-only set: PROCESS_VM_READ | PROCESS_QUERY_INFORMATION (the
-            latter is required by VirtualQueryEx, used internally for region
-            enumeration). Combine flags with bitwise OR for write access, e.g.
-            PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION |
-            PROCESS_QUERY_INFORMATION.
+        :param permission: access mode to the process. Defaults to the
+            read-and-write set: PROCESS_VM_READ | PROCESS_VM_WRITE |
+            PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION
+            (PROCESS_QUERY_INFORMATION is required by VirtualQueryEx, used
+            internally for region enumeration). Narrow the mask if you want
+            a read-only handle, or pass PROCESS_ALL_ACCESS for full control.
         :param case_sensitive: when False (default on Windows), process_name
             matching ignores case to align with the OS convention.
         """
         super().__init__(
-            window_title=window_title,
             process_name=process_name,
             pid=pid,
             case_sensitive=case_sensitive,

@@ -29,13 +29,11 @@ class AbstractProcess(ABC):
     def __init__(
         self,
         *,
-        window_title: Optional[str] = None,
         process_name: Optional[str] = None,
         pid: Optional[int] = None,
         case_sensitive: bool = True,
     ):
         """
-        :param window_title: window title of the target program (Windows only).
         :param process_name: name of the target process.
         :param pid: process ID.
         :param case_sensitive: when False, process_name matching ignores case
@@ -47,9 +45,6 @@ class AbstractProcess(ABC):
         if pid is not None:
             self._process_info.pid = pid
 
-        elif window_title:
-            self._process_info.window_title = window_title
-
         elif process_name:
             self._process_info.set_process_name(
                 process_name, case_sensitive=case_sensitive
@@ -57,7 +52,7 @@ class AbstractProcess(ABC):
 
         else:
             raise TypeError(
-                "You must pass an argument to one of these parameters (window_title, process_name, pid)."
+                "You must pass an argument to one of these parameters (process_name, pid)."
             )
 
     def __enter__(self):

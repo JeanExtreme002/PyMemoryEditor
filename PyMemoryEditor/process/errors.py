@@ -24,12 +24,6 @@ class ProcessNotFoundError(PyMemoryEditorError):
         self.process_name = process_name
 
 
-class WindowNotFoundError(PyMemoryEditorError):
-    def __init__(self, window_title: str):
-        super().__init__('Could not find the window "%s".' % window_title)
-        self.window_title = window_title
-
-
 class AmbiguousProcessNameError(PyMemoryEditorError):
     """Raised when more than one process matches the provided name."""
 

@@ -81,12 +81,11 @@ with OpenProcess(process_name="example.exe") as process:
         print(f"Found at 0x{address:X}")
 ```
 
-Open a process by **window title**, **process name**, or **PID** — whichever you have:
+Open a process by **process name** or **PID** — whichever you have:
 
 ```python
-OpenProcess(window_title="Calculator")           # by window title (Windows only)
-OpenProcess(process_name="notepad.exe")          # by process name
-OpenProcess(pid=1234)                            # by PID
+OpenProcess(process_name="notepad.exe")   # by process name
+OpenProcess(pid=1234)                     # by PID
 ```
 
 ---
@@ -95,22 +94,16 @@ OpenProcess(pid=1234)                            # by PID
 
 ### Reading and writing memory
 
-`read_process_memory` and `write_process_memory` are the building blocks. Numeric types
+The building blocks are `read_process_memory` and `write_process_memory`. Numeric types
 (`int`, `float`, `bool`) infer the buffer length automatically; `str` and `bytes`
 need an explicit size.
 
 ```python
-from PyMemoryEditor import OpenProcess, ProcessOperationsEnum
+from PyMemoryEditor import OpenProcess
 
-# By default OpenProcess only requests READ permission. Opt in to write:
-permission = (
-    ProcessOperationsEnum.PROCESS_VM_READ.value
-    | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value
-    | ProcessOperationsEnum.PROCESS_VM_WRITE.value
-    | ProcessOperationsEnum.PROCESS_VM_OPERATION.value
-)
-
-with OpenProcess(window_title="Window title", permission=permission) as process:
+# By default OpenProcess opens a read+write handle, 
+# so no permission needed for the common case.
+with OpenProcess(process_name="notepad.exe") as process:
     address = 0x0005000C
 
     # Read: 4 bytes inferred for int.
@@ -136,6 +129,9 @@ for address in process.search_by_value(int, 4, target_value):
 
 The default is `EXACT_VALUE`, but you can swap in any `ScanTypesEnum` mode:
 
+<details>
+<summary>Click to see all eight modes</summary>
+
 | Mode | Description |
 | --- | --- |
 | `EXACT_VALUE` | Value equals the target. *(default)* |
@@ -146,6 +142,8 @@ The default is `EXACT_VALUE`, but you can swap in any `ScanTypesEnum` mode:
 | `SMALLER_THAN_OR_EXACT_VALUE` | `value ≤ target` |
 | `VALUE_BETWEEN` | `min ≤ value ≤ max` (use `search_by_value_between`) |
 | `NOT_VALUE_BETWEEN` | Value falls **outside** the given range. |
+
+</details>
 
 ```python
 from PyMemoryEditor import ScanTypesEnum
@@ -191,9 +189,9 @@ with OpenProcess(pid=1234) as process:
     ]
 ```
 
-`snapshot_memory_regions()`, `search_by_value`, `search_by_value_between` and
-`search_by_addresses` all accept the same `memory_regions=` keyword. Pass an empty
-list (`[]`) to explicitly scan nothing.
+All of `snapshot_memory_regions()`, `search_by_value`, `search_by_value_between` and
+`search_by_addresses` accept the same `memory_regions=` keyword. Pass an empty list
+(`[]`) to explicitly scan nothing.
 
 ### Reading many addresses efficiently
 
@@ -228,8 +226,9 @@ PyMemoryEditor abstracts away the OS, but the OS still gets a say in **what you'
 - Process names are matched case-insensitively in practice. Pass `case_sensitive=False`
   to follow the OS convention.
 - The `permission=` kwarg maps directly to the `PROCESS_*` flags of `OpenProcess`.
-  As of v2.0, the default is read-only — request `PROCESS_VM_WRITE | PROCESS_VM_OPERATION`
-  to write.
+  The default is read+write (`PROCESS_VM_READ | PROCESS_VM_WRITE |
+  PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION`) — pass a narrower mask if you
+  want a read-only handle.
 
 </details>
 
@@ -284,7 +283,7 @@ The app is a living demo of the library — it exercises every public surface (e
 <tr>
 <td width="50%" valign="top">
 
-**What you get out of the box**
+**✨ What you get out of the box**
 
 - **Process picker** — list all running processes and pick by row, PID or name
 - **Live scanner** — eight scan modes, value-between ranges, typed inputs
@@ -297,7 +296,7 @@ The app is a living demo of the library — it exercises every public surface (e
 </td>
 <td width="50%" valign="top">
 
-**Install the app extra** (adds PySide6):
+**📦 Install the app extra** (adds PySide6):
 
 ```bash
 $ pip install "PyMemoryEditor[app]"

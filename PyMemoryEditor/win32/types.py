@@ -2,8 +2,6 @@
 
 from ctypes import (
     Structure,
-    WINFUNCTYPE,
-    c_bool,
     c_ulonglong,
     c_void_p,
     sizeof,
@@ -63,6 +61,3 @@ MEMORY_BASIC_INFORMATION = (
     if sizeof(c_void_p) == 8
     else MEMORY_BASIC_INFORMATION_32
 )
-
-# For EnumWindows and EnumDesktopWindows functions.
-WNDENUMPROC = WINFUNCTYPE(c_bool, wintypes.HWND, wintypes.LPARAM)

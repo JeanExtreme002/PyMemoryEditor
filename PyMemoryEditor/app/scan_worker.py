@@ -16,7 +16,7 @@ blocks on a long scan.
 """
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, cast
 
 from PySide6.QtCore import QThread, Signal
 
@@ -112,7 +112,12 @@ class FirstScanWorker(_BaseWorker):
 
             chunk: List = []
             count = 0
-            for address, info in generator:
+            # progress_information=True makes the generator yield (address, info)
+            # tuples; the declared Union[int, Tuple[int, dict]] return type is
+            # for the no-progress case. Cast so tuple-unpacking is well-typed.
+            for address, info in cast(
+                "Iterable[Tuple[int, Dict[str, Any]]]", generator
+            ):
                 if self._cancelled:
                     self.status.emit("Scan cancelled.")
                     break

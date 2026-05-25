@@ -41,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `WindowsProcess.__init__` default `permission` now includes write access:
+  `PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION |
+  PROCESS_QUERY_INFORMATION`. The 2.0.0 release narrowed it to a read-only
+  set to make least-privilege the default, but the friction of always
+  opting into write for the common "scan + poke" workflow outweighed the
+  safety benefit. Callers who genuinely want a read-only handle should
+  pass `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION` explicitly.
 - `LinuxProcess` and `MacProcess` now emit a `UserWarning` when the caller
   passes a non-None `permission`. The argument is still accepted (for the
   documented cross-platform parity pattern of passing `None` outside Win32),
@@ -84,6 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   future regression gets caught.
 
 ### Removed
+
+- `OpenProcess(window_title=...)` is no longer supported on any platform.
+  The `window_title` keyword argument has been dropped from
+  `AbstractProcess`, `WindowsProcess`, `LinuxProcess` and `MacProcess`;
+  open processes by `process_name` or `pid` instead. The supporting
+  Win32 plumbing has been removed too: `GetProcessIdByWindowTitle`,
+  `get_process_id_by_window_title`, `WindowNotFoundError`, the
+  `WNDENUMPROC` ctypes type, and the `user32.dll` bindings for
+  `EnumWindows` / `GetWindowTextW` / `GetWindowThreadProcessId`.
+  `WindowNotFoundError` is no longer exported from the top-level
+  package.
 
 ### Fixed
 

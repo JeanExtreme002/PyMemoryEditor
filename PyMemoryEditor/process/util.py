@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import sys
 from typing import List, Optional
 
 import psutil
@@ -53,23 +52,6 @@ def get_process_id_by_process_name(
         raise AmbiguousProcessNameError(process_name, matches)
 
     return matches[0] if matches else None
-
-
-def get_process_id_by_window_title(window_title: str) -> int:
-    """
-    Get a window title and return its process ID.
-
-    Only supported on Windows; macOS would require AppleScript or the
-    Accessibility API and is intentionally not implemented.
-    """
-    if sys.platform != "win32":
-        raise OSError("This function is compatible only with Windows OS.")
-
-    # Late import so mypy on non-Windows hosts doesn't see this name as
-    # undefined (the module-level import is guarded by sys.platform).
-    from ..win32.functions import GetProcessIdByWindowTitle
-
-    return GetProcessIdByWindowTitle(window_title)
 
 
 def pid_exists(pid: int) -> bool:

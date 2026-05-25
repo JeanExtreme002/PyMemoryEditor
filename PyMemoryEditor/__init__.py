@@ -21,7 +21,6 @@ from .process.errors import (
     ProcessIDNotExistsError,
     ProcessNotFoundError,
     PyMemoryEditorError,
-    WindowNotFoundError,
 )
 
 
@@ -76,7 +75,6 @@ __all__ = (
     "ProcessNotFoundError",
     "PyMemoryEditorError",
     "ScanTypesEnum",
-    "WindowNotFoundError",
     "__author__",
     "__version__",
 ) + _PLATFORM_EXPORTS

@@ -40,8 +40,9 @@ def test_suspend_resume_alone_does_not_grant_read():
 def test_query_information_alone_does_not_grant_read():
     # PROCESS_QUERY_INFORMATION is required by VirtualQueryEx (region
     # enumeration) but must NOT by itself authorize ReadProcessMemory — the
-    # gate has to keep them independent so the default read-only permission
-    # bundle (VM_READ | QUERY_INFORMATION) remains the minimum.
+    # gate has to keep them independent so callers who request a read-only
+    # bundle (VM_READ | QUERY_INFORMATION) still get read access without
+    # picking up writes by accident.
     assert not _can_read(ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value)
 
 
