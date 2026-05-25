@@ -9,74 +9,100 @@ reading, writing and searching values in the process memory.
 [![Python Version](https://img.shields.io/badge/python-3.10+-8A2BE2)](https://pypi.org/project/PyMemoryEditor/)
 [![Downloads](https://static.pepy.tech/personalized-badge/pymemoryeditor?period=total&units=international_system&left_color=grey&right_color=orange&left_text=Downloads)](https://pypi.org/project/PyMemoryEditor/)
 
-# Installing PyMemoryEditor:
+---
+
+<p align="center">
+  <img src="PyMemoryEditor/app/assets/icon.svg" alt="PyMemoryEditor logo" width="120" />
+</p>
+
+<p align="center">
+  <b>Read, write and scan the memory of any process — straight from Python.</b><br>
+  <i>One unified API. Three operating systems. No C compiler. No native build step.</i>
+</p>
+
+<p align="center">
+  <a href="#-quick-start">Quick Start</a> ·
+  <a href="#-usage-guide">Usage Guide</a> ·
+  <a href="#platform-notes">Platform Notes</a> ·
+  <a href="#-bonus-the-pymemoryeditor-app">The App</a> ·
+  <a href="#-contributing">Contributing</a>
+</p>
+
+<p align="center">
+  Runs on <b>🪟 Windows</b> · <b>🐧 Linux</b> · <b>🍎 macOS</b> — 32-bit and 64-bit, with the same code on all three.
+</p>
+
+---
+
+## ✨ Highlights
+
+|     |     |
+| --- | --- |
+| **Read & write memory** | Change live values on the fly — just like Cheat Engine, but in a few lines of Python. |
+| **Pure-Python via `ctypes`** | No compilation, no native wheels — `pip install` and you're done. |
+| **Scan modes** | Exact, not-exact, bigger / smaller (±equal), in-range, out-of-range. |
+| **Snapshot caching** | The Cheat-Engine "scan → refine → refine" loop, accelerated. |
+| **Bundled GUI app** | A full memory scanner ships in the box — just type `pymemoryeditor`. |
+
+---
+
+## Installation
+
+Available on PyPI for Windows, Linux and macOS — no native build step, no extra wheels.
+
+```bash
+$ pip install PyMemoryEditor
 ```
-pip install PyMemoryEditor
+
+To also install the bundled GUI app, use the `app` extra and launch it from any terminal:
+
+```bash
+$ pip install "PyMemoryEditor[app]"
+$ pymemoryeditor
 ```
 
-> **Upgrading from 1.x?** See `CHANGELOG.md` — version 2.0 changes the default
-> permission from `PROCESS_ALL_ACCESS` to
-> `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION` (the minimal read-only set,
-> covering both `ReadProcessMemory` and `VirtualQueryEx`). Callers that need
-> to write must request
-> `PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_WRITE | PROCESS_VM_OPERATION`.
+---
 
-### App:
-Type `pymemoryeditor` at the CLI to launch a [Cheat Engine](https://en.wikipedia.org/wiki/Cheat_Engine)-style memory scanner built on Qt (PySide6). The app exercises every public surface of the library: all eight `ScanTypesEnum` modes, the five value types (`bool`, `int`, `float`, `str`, `bytes`), `search_by_value`, `search_by_value_between`, `search_by_addresses`, `read_process_memory`, `write_process_memory`, `get_memory_regions` / `snapshot_memory_regions`, plus value freezing and a hex viewer.
+## 🚀 Quick Start
 
-> The app requires **PySide6**. Install it with the `app` extra:
->
-> ```
-> pip install "PyMemoryEditor[app]"
-> ```
->
-> or separately: `pip install PySide6`. The app aborts with a clear
-> message if PySide6 is missing.
+Open a target process inside a `with` block, then read, write or scan its memory using
+plain Python types. Everything fits in a handful of lines:
 
-# Basic Usage:
-Import `PyMemoryEditor` and open a process using the `OpenProcess` class, passing a window title, process name <br>
-or PID as an argument. You can use the context manager for doing it.
-```py
+```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name = "example.exe") as process:
-    # Do something...
+with OpenProcess(process_name="example.exe") as process:
+    # Read a 4-byte int at a known address.
+    value = process.read_process_memory(0x0005000C, int)
+    print("Current value:", value)
+
+    # Scan the whole process for every address holding that value.
+    for address in process.search_by_value(int, 4, value):
+        print(f"Found at 0x{address:X}")
 ```
 
-## Refine-scan workflow (recommended)
-For the common "scan → restrict → restrict" pattern (Cheat Engine's classic
-loop), enumerate the regions **once** and reuse the snapshot across every
-subsequent call. On heavy targets (browsers, JVMs with 100k regions) this is
-a massive win — the per-call region enumeration is the dominant cost
-otherwise:
-```py
-with OpenProcess(pid=1234) as process:
-    regions = process.snapshot_memory_regions()
+Open a process by **window title**, **process name**, or **PID** — whichever you have:
 
-    # First pass: every address holding the value 100.
-    candidates = list(process.search_by_value(int, None, 100, memory_regions=regions))
-
-    # Refine: keep only those that now hold 95.
-    refined = [
-        addr for addr, value in process.search_by_addresses(int, None, candidates, memory_regions=regions)
-        if value == 95
-    ]
+```python
+OpenProcess(window_title="Calculator")           # by window title (Windows only)
+OpenProcess(process_name="notepad.exe")          # by process name
+OpenProcess(pid=1234)                            # by PID
 ```
-`snapshot_memory_regions()`, `search_by_value`, `search_by_value_between` and
-`search_by_addresses` all accept the same `memory_regions=` keyword. Pass an
-empty list (`[]`) to explicitly scan nothing.
 
-## Reading and writing
-Use the methods `read_process_memory` and `write_process_memory` to manipulate the process <br>
-memory. Numeric types (`int`, `float`, `bool`) infer the buffer length automatically; pass an
-explicit length only for `str`/`bytes` or when overriding the default width:
-```py
+---
+
+## 📚 Usage Guide
+
+### Reading and writing memory
+
+`read_process_memory` and `write_process_memory` are the building blocks. Numeric types
+(`int`, `float`, `bool`) infer the buffer length automatically; `str` and `bytes`
+need an explicit size.
+
+```python
 from PyMemoryEditor import OpenProcess, ProcessOperationsEnum
 
-title = "Window title of an example program"
-address = 0x0005000C
-
-# By default OpenProcess only requests read permission. To write, opt in explicitly:
+# By default OpenProcess only requests READ permission. Opt in to write:
 permission = (
     ProcessOperationsEnum.PROCESS_VM_READ.value
     | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION.value
@@ -84,100 +110,234 @@ permission = (
     | ProcessOperationsEnum.PROCESS_VM_OPERATION.value
 )
 
-with OpenProcess(window_title=title, permission=permission) as process:
+with OpenProcess(window_title="Window title", permission=permission) as process:
+    address = 0x0005000C
 
-    # Reading: bufflength is inferred (int → 4 bytes).
+    # Read: 4 bytes inferred for int.
     value = process.read_process_memory(address, int)
 
-    # Writing: same — pass None to use the default size.
+    # Write: same — pass None to use the default width.
     process.write_process_memory(address, int, None, value + 7)
 
     # Strings require an explicit size:
     name = process.read_process_memory(address, str, 32)
 ```
 
-## Selecting processes by name (case-insensitive)
-On Windows process names are case-insensitive — pass `case_sensitive=False` to match the
-OS convention:
-```py
-with OpenProcess(process_name="NOTEPAD.EXE", case_sensitive=False) as process:
+### Searching for a value
+
+Look up a value anywhere in memory and stream every match:
+
+```python
+for address in process.search_by_value(int, 4, target_value):
+    print(f"Found address: 0x{address:X}")
+```
+
+#### Comparison modes — pick one of eight
+
+The default is `EXACT_VALUE`, but you can swap in any `ScanTypesEnum` mode:
+
+| Mode | Description |
+| --- | --- |
+| `EXACT_VALUE` | Value equals the target. *(default)* |
+| `NOT_EXACT_VALUE` | Value is anything **but** the target. |
+| `BIGGER_THAN` | Value is strictly greater than the target. |
+| `SMALLER_THAN` | Value is strictly less than the target. |
+| `BIGGER_THAN_OR_EXACT_VALUE` | `value ≥ target` |
+| `SMALLER_THAN_OR_EXACT_VALUE` | `value ≤ target` |
+| `VALUE_BETWEEN` | `min ≤ value ≤ max` (use `search_by_value_between`) |
+| `NOT_VALUE_BETWEEN` | Value falls **outside** the given range. |
+
+```python
+from PyMemoryEditor import ScanTypesEnum
+
+for address in process.search_by_value(int, 4, target, scan_type=ScanTypesEnum.BIGGER_THAN):
+    ...
+
+for address in process.search_by_value_between(int, 4, min_value, max_value):
     ...
 ```
 
-> On Linux, `permission` is ignored. The library uses `process_vm_readv` /
-> `process_vm_writev`, which depend on `ptrace_scope` and process ownership. If
-> the target process is not a child of the caller and `ptrace_scope=1` (the
-> common default), you'll get a `PermissionError`. Run as root or adjust
-> `/proc/sys/kernel/yama/ptrace_scope`.
+All of these work with strings too — just remember that for `bytes` the comparison
+depends on your system's `byteorder`.
 
-> On macOS, `permission` is ignored. The library uses the Mach VM APIs
-> (`task_for_pid`, `mach_vm_read_overwrite`, `mach_vm_write`, `mach_vm_region`).
-> Opening **another** process requires the Python binary to be signed with the
-> `com.apple.security.cs.debugger` entitlement (or SIP disabled and running as
-> root). Opening the **current** process always works because the library calls
-> `mach_task_self_` directly — handy for self-inspection and tests.
+#### Progress information
 
-> ⚠️ **macOS write side effect.** `write_process_memory` on a read-only page
-> transparently elevates the page protection via `mach_vm_protect`, performs
-> the write, and tries to restore the original protection. **If the restore
-> step fails** (e.g. the target task disappears mid-call), the library emits
-> a `ResourceWarning` and the target page is left more permissive than it
-> started — a persistent side effect outside the library's process. Treat
-> the warning as a signal to investigate, not log noise. The Win32 and Linux
-> backends do not have this property: protection elevation is opt-in on
-> Windows (`PROCESS_VM_OPERATION`) and Linux does not need protection
+For long scans, the same methods can yield progress alongside each address:
+
+```python
+for address, info in process.search_by_value(int, 4, target, progress_information=True):
+    print(f"Address: 0x{address:<10X} | Progress: {info['progress'] * 100:.1f}%")
+```
+
+### The refine-scan workflow *(recommended)*
+
+For the classic Cheat-Engine loop — *"first scan → restrict → restrict"* — enumerate
+the memory regions **once** and reuse the snapshot across every subsequent call. On
+heavy targets (browsers, JVMs with 100 000+ regions) this is a huge win, because the
+per-call region enumeration is the dominant cost otherwise.
+
+```python
+with OpenProcess(pid=1234) as process:
+    regions = process.snapshot_memory_regions()
+
+    # First pass — every address holding 100.
+    candidates = list(process.search_by_value(int, None, 100, memory_regions=regions))
+
+    # Refine — keep only those that now hold 95.
+    refined = [
+        addr
+        for addr, value in process.search_by_addresses(int, None, candidates, memory_regions=regions)
+        if value == 95
+    ]
+```
+
+`snapshot_memory_regions()`, `search_by_value`, `search_by_value_between` and
+`search_by_addresses` all accept the same `memory_regions=` keyword. Pass an empty
+list (`[]`) to explicitly scan nothing.
+
+### Reading many addresses efficiently
+
+If you have a long list of addresses to read, `search_by_addresses` is *far* faster
+than calling `read_process_memory` in a loop — it reads each memory page only once
+and pulls every requested address out of it, slashing the number of syscalls.
+
+```python
+for address, value in process.search_by_addresses(int, 4, addresses_list):
+    print("Address", hex(address), "holds the value", value)
+```
+
+### Walking the memory map
+
+`get_memory_regions()` streams the address, size and metadata of every region the
+target owns:
+
+```python
+for region in process.get_memory_regions():
+    print(hex(region["address"]), region["size"], region["struct"])
+```
+
+---
+
+## Platform Notes
+
+PyMemoryEditor abstracts away the OS, but the OS still gets a say in **what you're allowed to touch**. Here's the short version per platform.
+
+<details>
+<summary><b>🪟 Windows</b> — works out of the box for most cases</summary>
+
+- Process names are matched case-insensitively in practice. Pass `case_sensitive=False`
+  to follow the OS convention.
+- The `permission=` kwarg maps directly to the `PROCESS_*` flags of `OpenProcess`.
+  As of v2.0, the default is read-only — request `PROCESS_VM_WRITE | PROCESS_VM_OPERATION`
+  to write.
+
+</details>
+
+<details>
+<summary><b>🐧 Linux</b> — governed by <code>ptrace_scope</code></summary>
+
+- The `permission` argument is ignored — the library uses `process_vm_readv` /
+  `process_vm_writev`.
+- Access depends on `ptrace_scope` and process ownership. If the target is **not**
+  a child of the caller and `ptrace_scope=1` (the common default), you'll see a
+  `PermissionError`. Run as root or relax
+  `/proc/sys/kernel/yama/ptrace_scope`.
+
+</details>
+
+<details>
+<summary><b>🍎 macOS</b> — governed by Mach entitlements</summary>
+
+- The `permission` argument is ignored — the library uses the Mach VM APIs
+  (`task_for_pid`, `mach_vm_read_overwrite`, `mach_vm_write`, `mach_vm_region`).
+- Opening **another** process requires the Python binary to be signed with the
+  `com.apple.security.cs.debugger` entitlement (or SIP disabled and running as root).
+- Opening the **current** process always works — handy for self-inspection and tests.
+
+> [!WARNING]
+> **macOS write side effect.** `write_process_memory` on a read-only page transparently
+> elevates the page protection via `mach_vm_protect`, performs the write, and tries to
+> restore the original protection. **If the restore step fails** (e.g. the target task
+> disappears mid-call), the library emits a `ResourceWarning` and the target page is
+> left more permissive than it started. Treat the warning as a signal to investigate.
+> The Win32 and Linux backends do not have this property: protection elevation is
+> opt-in on Windows (`PROCESS_VM_OPERATION`), and Linux does not need protection
 > changes for `process_vm_writev`.
 
-# Getting memory addresses by a target value:
-You can look up a value in memory and get the address of all matches, like this:
-```py
-for address in process.search_by_value(int, 4, target_value):
-    print("Found address:", address)
+</details>
+
+---
+
+## 🎁 Bonus: The PyMemoryEditor App
+
+> A **Cheat Engine-style** memory scanner, included for free with every install.
+
+PyMemoryEditor isn't just a library — it also ships with a polished cross-platform GUI built on **PySide6 (Qt for Python)**, so you can play with everything the library does without writing a single line of code. Launch it from any terminal:
+
+```bash
+$ pymemoryeditor
 ```
 
-## Choosing the comparison method used for scanning:
-There are many options to scan the memory. Check all available options in [`ScanTypesEnum`](https://github.com/JeanExtreme002/PyMemoryEditor/blob/main/PyMemoryEditor/enums.py).
+The app is a living demo of the library — it exercises every public surface (every `ScanTypesEnum` mode, every value type, scanning, refining, freezing values, the hex viewer, the memory map). If you're learning the API, it's the fastest way to see what's possible.
 
-The default option is `EXACT_VALUE`, but you can change it at `scan_type` parameter:
-```py
-for address in process.search_by_value(int, 4, target_value, scan_type = ScanTypesEnum.BIGGER_THAN):
-    print("Found address:", address)
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**What you get out of the box**
+
+- **Process picker** — list all running processes and pick by row, PID or name
+- **Live scanner** — eight scan modes, value-between ranges, typed inputs
+- **Refine workflow** — *First Scan → Next Scan → Next Scan…* like Cheat Engine
+- **Value freezing** — pin a value so the target can't change it back
+- **Memory map** — every region of the target, with R/W/X flags
+- **Hex viewer** — auto-refreshing dump, write bytes back
+- **Import/export** cheat tables as JSON
+
+</td>
+<td width="50%" valign="top">
+
+**Install the app extra** (adds PySide6):
+
+```bash
+$ pip install "PyMemoryEditor[app]"
 ```
 
-You can also search for a value within a range:
-```py
-for address in process.search_by_value_between(int, 4, min_value, max_value, ...):
-    print("Found address:", address)
-```
+Then launch the app by running `pymemoryeditor` from any terminal. The library itself stays dependency-free.
 
-All methods described above work even for strings, including the method `search_by_value_between` — however, `bytes` comparison may work differently than `str` comparison, depending on the `byteorder` of your system.
+> Cross-platform dark theme. Single-keystroke shortcuts. Works on Windows, Linux and macOS.
 
-## Progress information on searching:
-These methods has the `progress_information` parameter that returns a dictionary containing the search progress information.
-```py
-for address, info in process.search_by_value(..., progress_information = True):
-    template = "Address: 0x{:<10X} | Progress: {:.1f}%"
-    progress = info["progress"] * 100
-    
-    print(template.format(address, progress))
-```
+</td>
+</tr>
+</table>
 
-# Reading multiple addresses efficiently:
-If you have a large number of addresses where their values need to be read from memory, using the `search_by_addresses` method is much more efficient than reading the value of each address one by one.
-```py
-for address, value in process.search_by_addresses(int, 4, addresses_list):
-    print(f"Address", address, "holds the value", value)
-```
-The key advantage of this method is that it reads a memory page just once, obtaining the values of the addresses within the page. This approach reduces the frequency of system calls.
+---
 
-## Getting memory regions:
-Use the method `get_memory_regions()` to get the base address, size and more information of all memory regions used by the process.
+## What can I build with this?
 
-```py
-for memory_region in process.get_memory_regions():
-    base_address = memory_region["address"]
-    size = memory_region["size"]
-    information = memory_region["struct"]
-```
+- **Debugging & introspection** — inspect live state without attaching a debugger.
+- **Observability tooling** — sample variables in a running process for telemetry.
+- **Security & reverse-engineering research** — on systems you own or are authorized to test.
+- **Personal game modding & speedrunning tools** — the classic Cheat-Engine use case.
+- **Learning** — the bundled app is a great teaching tool for how memory scanning works.
 
+> [!NOTE]
+> **Responsible use.** PyMemoryEditor talks to other processes through OS-level APIs.
+> Only point it at processes you own or have explicit permission to inspect.
 
+---
+
+## 🤝 Contributing
+
+Pull requests, bug reports and feature ideas are very welcome. Read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the development setup, test layout and the
+small set of platform-specific quirks to be aware of.
+
+If PyMemoryEditor helped your project, please ⭐ the repo — it's the easiest way to
+support the work and to help others discover the library.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE) — free for personal and commercial use.

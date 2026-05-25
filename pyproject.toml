@@ -61,10 +61,6 @@ dev = [
   "twine",
   "PySide6>=6.5",
 ]
-docs = [
-  "sphinx>=7,<9",
-  "sphinx-rtd-theme",
-]
 
 [project.urls]
 "Homepage" = "https://github.com/JeanExtreme002/PyMemoryEditor"
