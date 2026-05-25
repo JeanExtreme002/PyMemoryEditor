@@ -59,14 +59,11 @@ class MemoryViewerDialog(QDialog):
         self._size_spin.setValue(length)
         self.refresh()
 
-    # ------------------------------------------------------------------ UI
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        # Address row
         top = QHBoxLayout()
         top.addWidget(QLabel("Address (hex):"))
         self._addr_edit = QLineEdit()
@@ -87,7 +84,6 @@ class MemoryViewerDialog(QDialog):
         top.addWidget(refresh_btn)
         layout.addLayout(top)
 
-        # Auto-refresh row
         auto_row = QHBoxLayout()
         self._auto_btn = QPushButton("Auto-refresh: Off")
         self._auto_btn.setCheckable(True)
@@ -109,14 +105,12 @@ class MemoryViewerDialog(QDialog):
         auto_row.addWidget(write_btn)
         layout.addLayout(auto_row)
 
-        # Hex dump
         self._dump = QPlainTextEdit()
         self._dump.setReadOnly(True)
         self._dump.setFont(QFont("Menlo, Consolas, Courier New", 11))
         self._dump.setLineWrapMode(QPlainTextEdit.NoWrap)
         layout.addWidget(self._dump, 1)
 
-        # Editable hex line
         edit_row = QHBoxLayout()
         edit_row.addWidget(
             QLabel("Write hex (space-separated, starts at the address above):")
@@ -133,8 +127,6 @@ class MemoryViewerDialog(QDialog):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
-
-    # ----------------------------------------------------------- behaviour
 
     def _parse_address(self) -> Optional[int]:
         text = self._addr_edit.text().strip()

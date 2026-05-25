@@ -39,8 +39,6 @@ class ResultsModel(QAbstractTableModel):
         self._index: Dict[int, int] = {}
         self._spec: Optional[ValueTypeSpec] = None
 
-    # ----------------------------------------------------------- Qt model API
-
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._addresses)
 
@@ -84,8 +82,6 @@ class ResultsModel(QAbstractTableModel):
             ):
                 return QColor(0x66, 0xE0, 0xAA)  # changed value highlight
         return None
-
-    # ----------------------------------------------------------- mutators
 
     def _format(self, value: Any) -> str:
         if value is None:
@@ -164,8 +160,6 @@ class ResultsModel(QAbstractTableModel):
         # Rebuild the index after a batch of removals to keep it consistent.
         self._index = {addr: idx for idx, addr in enumerate(self._addresses)}
 
-    # ----------------------------------------------------------- queries
-
     def address_at(self, row: int) -> Optional[int]:
         if 0 <= row < len(self._addresses):
             return self._addresses[row]
@@ -204,8 +198,6 @@ class ResultsView(QTableView):
         )
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
-
-    # ----------------------------------------------------------- context menu
 
     def _show_context_menu(self, pos) -> None:
         rows = sorted({idx.row() for idx in self.selectedIndexes()})

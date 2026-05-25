@@ -165,8 +165,6 @@ class MemoryMapDialog(QDialog):
         self._build_ui()
         self.refresh()
 
-    # ------------------------------------------------------------------ UI
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -183,7 +181,6 @@ class MemoryMapDialog(QDialog):
         self._count_label.setObjectName("hint")
         layout.addWidget(self._count_label)
 
-        # Toolbar
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
@@ -206,7 +203,6 @@ class MemoryMapDialog(QDialog):
         bar.addWidget(close_btn)
         layout.addLayout(bar)
 
-        # Table
         self._model = QStandardItemModel(0, 6, self)
         self._model.setHorizontalHeaderLabels(
             [
@@ -235,8 +231,6 @@ class MemoryMapDialog(QDialog):
         self._table.setColumnHidden(5, True)  # raw size column used only for sorting
         self._table.doubleClicked.connect(lambda _i: self._emit_hex_viewer_request())
         layout.addWidget(self._table, 1)
-
-    # ----------------------------------------------------------- behaviour
 
     def snapshot(self) -> List[Dict]:
         """Return the cached region snapshot so the scanner can reuse it."""

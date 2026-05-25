@@ -120,18 +120,18 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
     elif pytype is int:
 
         if length == 1:
-            return ctypes.c_int8()  # 1 Byte
+            return ctypes.c_int8()
         if length == 2:
-            return ctypes.c_int16()  # 2 Bytes
+            return ctypes.c_int16()
         if length <= 4:
-            return ctypes.c_int32()  # 4 Bytes
-        return ctypes.c_int64()  # 8 Bytes
+            return ctypes.c_int32()
+        return ctypes.c_int64()
 
     elif pytype is float:
 
         if length == 4:
-            return ctypes.c_float()  # 4 Bytes
-        return ctypes.c_double()  # 8 Bytes
+            return ctypes.c_float()
+        return ctypes.c_double()
 
     elif pytype is bool:
         return ctypes.c_bool()

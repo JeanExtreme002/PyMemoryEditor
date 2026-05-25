@@ -28,10 +28,8 @@ def test_iter_region_chunks_at_boundary():
         iter_region_chunks(region_size, target_size, max_chunk=max_chunk)
     )
 
-    # Reconstructed region size matches the input.
     assert sum(size for _, size in chunks) == region_size
 
-    # Chunks are contiguous.
     expected_offset = 0
     for offset, size in chunks:
         assert offset == expected_offset
@@ -64,7 +62,6 @@ def test_iter_region_chunks_slow_path_is_generator():
     """Region > max_chunk returns a lazy generator."""
     result = iter_region_chunks(10 * 1024 * 1024, 4, max_chunk=1024 * 1024)
     assert not isinstance(result, tuple)
-    # Materialize and verify
     chunks = list(result)
     assert len(chunks) == 10
 
@@ -79,7 +76,6 @@ def test_scan_memory_across_chunked_region_finds_all_matches():
     chunk_size = 64 * 1024  # 64 KB per chunk
     target = struct.pack("<I", 0xCAFE)
 
-    # Plant 0xCAFE at known offsets in each chunk.
     chunks_data = []
     expected_global_offsets = []
     for chunk_index in range(chunk_count):
@@ -90,7 +86,6 @@ def test_scan_memory_across_chunked_region_finds_all_matches():
             expected_global_offsets.append(chunk_index * chunk_size + local)
         chunks_data.append(bytes(buf))
 
-    # Run scan_memory on each chunk and collect global offsets.
     found = []
     for chunk_index, data in enumerate(chunks_data):
         for offset in scan_module.scan_memory_for_exact_value(

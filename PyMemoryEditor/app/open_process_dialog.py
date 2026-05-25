@@ -188,8 +188,6 @@ class OpenProcessDialog(QDialog):
         self._refresh_timer.timeout.connect(self._populate_processes)
         self._refresh_timer.start()
 
-    # ------------------------------------------------------------------ UI
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -208,7 +206,6 @@ class OpenProcessDialog(QDialog):
         hint.setObjectName("hint")
         layout.addWidget(hint)
 
-        # Filter bar
         filter_row = QHBoxLayout()
         self._filter_edit = QLineEdit()
         self._filter_edit.setPlaceholderText("Filter by name, PID or user…")
@@ -220,7 +217,6 @@ class OpenProcessDialog(QDialog):
         filter_row.addWidget(refresh_btn)
         layout.addLayout(filter_row)
 
-        # Process table
         self._model = QStandardItemModel(0, 4, self)
         self._model.setHorizontalHeaderLabels(
             ["PID", "Process Name", "Memory (RSS)", "User"]
@@ -249,7 +245,6 @@ class OpenProcessDialog(QDialog):
         )
         layout.addWidget(self._table, 1)
 
-        # Manual entry row
         manual_row = QHBoxLayout()
         manual_row.addWidget(QLabel("Process:"))
         self._entry = QLineEdit()
@@ -267,7 +262,6 @@ class OpenProcessDialog(QDialog):
         manual_row.addWidget(self._case_checkbox)
         layout.addLayout(manual_row)
 
-        # Buttons
         button_row = QHBoxLayout()
         button_row.addStretch(1)
 
@@ -283,8 +277,6 @@ class OpenProcessDialog(QDialog):
         button_row.addWidget(self._open_btn)
 
         layout.addLayout(button_row)
-
-    # ----------------------------------------------------------- behaviour
 
     def _populate_processes(self) -> None:
         """Start a background scan; skip if one is already in flight.

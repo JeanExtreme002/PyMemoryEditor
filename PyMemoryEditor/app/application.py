@@ -29,11 +29,6 @@ def _abort_if_qt_unavailable():
         sys.exit(2)
 
 
-# ---------------------------------------------------------------------------
-# Theme system
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Theme:
     """A flat palette describing every color the app's QSS and QPalette need.

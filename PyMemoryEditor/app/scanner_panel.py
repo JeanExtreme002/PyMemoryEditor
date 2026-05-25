@@ -68,8 +68,6 @@ class ScannerPanel(QWidget):
         self._build_ui()
         self._refresh_buttons()
 
-    # ------------------------------------------------------------------ UI
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         # Small right inset so the group boxes don't sit flush against the
@@ -77,7 +75,6 @@ class ScannerPanel(QWidget):
         layout.setContentsMargins(0, 0, 4, 0)
         layout.setSpacing(10)
 
-        # -- Value group ---------------------------------------------------
         value_box = QGroupBox("Value")
         value_form = QFormLayout(value_box)
         value_form.setHorizontalSpacing(10)
@@ -102,7 +99,6 @@ class ScannerPanel(QWidget):
 
         layout.addWidget(value_box)
 
-        # -- Scan settings group ------------------------------------------
         scan_box = QGroupBox("Scan Settings")
         scan_form = QFormLayout(scan_box)
         scan_form.setHorizontalSpacing(10)
@@ -140,7 +136,6 @@ class ScannerPanel(QWidget):
 
         layout.addWidget(scan_box)
 
-        # -- Action buttons -----------------------------------------------
         buttons_box = QFrame()
         buttons = QVBoxLayout(buttons_box)
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -179,8 +174,6 @@ class ScannerPanel(QWidget):
         self._on_type_changed(self._type_combo.currentText())
         self._on_scan_type_changed(0)
 
-    # ----------------------------------------------------------- state
-
     def set_has_results(self, has_results: bool) -> None:
         self._has_results = has_results
         self._refresh_buttons()
@@ -202,8 +195,6 @@ class ScannerPanel(QWidget):
         self._type_combo.setEnabled(not scanning and not self._has_results)
         self._scan_combo.setEnabled(not scanning)
         self._writable_check.setEnabled(not scanning and not self._has_results)
-
-    # ----------------------------------------------------------- events
 
     def _on_type_changed(self, label: str) -> None:
         spec = find_spec(label)
@@ -229,8 +220,6 @@ class ScannerPanel(QWidget):
         )
         self._second_value_edit.setVisible(ranged)
         self._second_value_label.setVisible(ranged)
-
-    # ----------------------------------------------------------- request builders
 
     def _build_request(self, *, with_value: bool = True) -> Optional[ScanRequest]:
         spec = find_spec(self._type_combo.currentText())
@@ -288,8 +277,6 @@ class ScannerPanel(QWidget):
         request = self._build_request()
         if request is not None:
             self.update_values_requested.emit(request)
-
-    # ----------------------------------------------------------- public helpers
 
     def current_spec_and_length(self):
         """Return the active (spec, length) pair for the Promote-to-Cheat-Table path."""

@@ -246,14 +246,11 @@ def scan_memory(
 
     fmt = None if is_string else _struct_format(byte_order, target_value_size, pytype)
 
-    # ──────────────────────────────────────────────────────────────────────
     # Fast path: numeric scan with a struct-supported size (1/2/4/8 bytes).
     # struct.iter_unpack runs in C; the inlined comparison loops avoid both
-    # generator and tuple-unpacking overhead in the hottest path.
-    #
-    # Use a memoryview to avoid materializing a copy of the (potentially
-    # multi-MB) region for iter_unpack.
-    # ──────────────────────────────────────────────────────────────────────
+    # generator and tuple-unpacking overhead in the hottest path. Use a
+    # memoryview to avoid materializing a copy of the (potentially multi-MB)
+    # region for iter_unpack.
     if fmt is not None:
         buffer = _as_buffer(memory_region_data)
         total = (len(buffer) // target_value_size) * target_value_size
@@ -305,11 +302,9 @@ def scan_memory(
                 offset += step
         return
 
-    # ──────────────────────────────────────────────────────────────────────
     # Fallback: strings (byte-by-byte) or numeric with unusual sizes (3/6/7).
     # Numerics here decode through int.from_bytes; the target was already
     # decoded above with the matching signedness via _decode_target.
-    # ──────────────────────────────────────────────────────────────────────
     data = _as_bytes(memory_region_data)
     step = 1 if is_string else target_value_size
     end = memory_region_data_size - target_value_size + 1

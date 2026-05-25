@@ -92,8 +92,6 @@ class CheatTable(QWidget):
         self._poller.wait(1000)
         super().closeEvent(event)
 
-    # ------------------------------------------------------------------ UI
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         # Small top inset so the toolbar buttons don't sit flush against the
@@ -101,7 +99,6 @@ class CheatTable(QWidget):
         layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(8)
 
-        # Toolbar
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
@@ -129,7 +126,6 @@ class CheatTable(QWidget):
 
         layout.addLayout(bar)
 
-        # Table
         self._table = QTableWidget(0, 5, self)
         self._table.setHorizontalHeaderLabels(
             ["Active", "Description", "Address", "Type", "Value"]
@@ -157,8 +153,6 @@ class CheatTable(QWidget):
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._table, 1)
-
-    # ----------------------------------------------------------- API
 
     def add_entry(self, entry: CheatEntry) -> None:
         # If the address already exists, just refresh its description/type.
@@ -193,8 +187,6 @@ class CheatTable(QWidget):
 
     def entries(self) -> List[CheatEntry]:
         return list(self._entries)
-
-    # ----------------------------------------------------------- table sync
 
     def _rebuild(self) -> None:
         self._suspend_signals = True
@@ -300,8 +292,6 @@ class CheatTable(QWidget):
             if entry.frozen:
                 entry.frozen_value = value
 
-    # ----------------------------------------------------------- ticking
-
     def _publish_snapshot_to_worker(self) -> None:
         """Hand the worker a fresh immutable snapshot of every entry."""
         snapshot = [
@@ -357,8 +347,6 @@ class CheatTable(QWidget):
             return -1
         index = self._table.currentIndex()
         return index.row() if index.isValid() else -1
-
-    # ----------------------------------------------------------- toolbar
 
     def _on_add_manually(self) -> None:
         entry = prompt_for_manual_entry(self)
@@ -577,8 +565,6 @@ class CheatTable(QWidget):
         self._entries[row].length = int(new)
         self._rebuild()
 
-    # ----------------------------------------------------------- import / export
-
     def _on_export(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -619,9 +605,6 @@ class CheatTable(QWidget):
             except (KeyError, ValueError) as exc:
                 # Surface but don't abort the whole import on one bad row.
                 QMessageBox.warning(self, "Import", f"Skipped a bad entry: {exc}")
-
-
-# --------------------------------------------------------------------------- manual-add helper
 
 
 def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
@@ -724,14 +707,12 @@ class _BulkEditDialog(QDialog):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        # --- Description row
         self._desc_chk = QCheckBox("Set description")
         self._desc_edit = QLineEdit(first.description)
         self._desc_edit.setEnabled(False)
         self._desc_chk.toggled.connect(self._desc_edit.setEnabled)
         form.addRow(self._desc_chk, self._desc_edit)
 
-        # --- Type row
         self._type_chk = QCheckBox("Set value type")
         self._type_combo = QComboBox()
         for s in VALUE_TYPES:
@@ -742,7 +723,6 @@ class _BulkEditDialog(QDialog):
         self._type_chk.toggled.connect(self._type_combo.setEnabled)
         form.addRow(self._type_chk, self._type_combo)
 
-        # --- Value row
         self._value_chk = QCheckBox("Set value")
         self._value_edit = QLineEdit()
         if first.last_value is not None:

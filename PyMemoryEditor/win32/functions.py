@@ -90,7 +90,6 @@ kernel32.IsWow64Process.argtypes = (
 kernel32.IsWow64Process.restype = ctypes.wintypes.BOOL
 
 
-# Get the user's system information.
 system_information = SYSTEM_INFO()
 kernel32.GetSystemInfo(ctypes.byref(system_information))
 

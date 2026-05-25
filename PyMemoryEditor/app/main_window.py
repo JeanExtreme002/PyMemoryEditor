@@ -90,15 +90,12 @@ class MainWindow(QMainWindow):
         self._heartbeat.timeout.connect(self._check_process_alive)
         self._heartbeat.start()
 
-    # ------------------------------------------------------------------ UI
-
     def _build_ui(self) -> None:
         central = QWidget(self)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(10)
 
-        # Process badge bar
         bar = QHBoxLayout()
         bar.setSpacing(10)
 
@@ -121,12 +118,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(change_btn)
         outer.addLayout(bar)
 
-        # Splitter for scanner + (results / cheat table)
         outer_splitter = QSplitter(Qt.Horizontal)
         outer_splitter.setHandleWidth(4)
         outer_splitter.setChildrenCollapsible(False)
 
-        # Left: scanner panel
         self._scanner = ScannerPanel()
         self._scanner.first_scan_requested.connect(self._on_first_scan)
         self._scanner.next_scan_requested.connect(self._on_next_scan)
@@ -174,7 +169,6 @@ class MainWindow(QMainWindow):
 
         right_splitter.addWidget(results_wrap)
 
-        # Cheat table
         self._cheat = CheatTable(self._process)
         right_splitter.addWidget(self._cheat)
         right_splitter.setSizes([520, 260])
@@ -183,7 +177,6 @@ class MainWindow(QMainWindow):
         outer_splitter.setSizes([320, 1040])
         outer.addWidget(outer_splitter, 1)
 
-        # Progress + status
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
@@ -192,7 +185,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        # Menu bar and toolbar
         self._build_menu_and_toolbar()
 
         self._status = QStatusBar()
@@ -285,8 +277,6 @@ class MainWindow(QMainWindow):
     def _on_theme_changed(self, theme_id: str) -> None:
         apply_theme(QApplication.instance(), theme_id)
         QSettings().setValue("theme", theme_id)
-
-    # ----------------------------------------------------------- scanner glue
 
     def _on_first_scan(self, request: ScanRequest) -> None:
         if self._worker is not None:
@@ -459,16 +449,12 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         self._scanner.set_busy(busy)
 
-    # ----------------------------------------------------------- cheat table
-
     def _promote_to_cheat_table(self, addresses: List[int]) -> None:
         if not addresses:
             return
         spec, length = self._scanner.current_spec_and_length()
         self._cheat.add_addresses(addresses, spec, length, description="")
         self._status.showMessage(f"Added {len(addresses)} address(es) to cheat table.")
-
-    # ----------------------------------------------------------- dialogs
 
     def _open_memory_map(self) -> None:
         if self._memory_map is None:
@@ -516,8 +502,6 @@ class MainWindow(QMainWindow):
             f"Cached {len(self._region_snapshot):,} memory regions."
         )
 
-    # ----------------------------------------------------------- file ops
-
     def _export_results(self) -> None:
         if self._results_model.count() == 0:
             QMessageBox.information(
@@ -557,8 +541,6 @@ class MainWindow(QMainWindow):
             f"Exported {self._results_model.count():,} addresses to {filename}."
         )
 
-    # ----------------------------------------------------------- about / process info
-
     def _show_about(self) -> None:
         QMessageBox.about(
             self,
@@ -586,15 +568,13 @@ class MainWindow(QMainWindow):
     def _check_process_alive(self) -> None:
         if not psutil.pid_exists(self._process.pid):
             self._heartbeat.stop()
-            self._scanner.set_busy(True)  # disable scan controls
+            self._scanner.set_busy(True)
             self._status.showMessage("Target process exited — operations disabled.")
             QMessageBox.warning(
                 self,
                 "Process exited",
                 "The target process has exited. Open another process via File → Change Process…",
             )
-
-    # ----------------------------------------------------------- change / close
 
     def _change_process(self) -> None:
         from .open_process_dialog import OpenProcessDialog

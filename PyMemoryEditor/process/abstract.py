@@ -41,7 +41,6 @@ class AbstractProcess(ABC):
         """
         self._process_info = ProcessInfo()
 
-        # Set the attributes to the process.
         if pid is not None:
             self._process_info.pid = pid
 

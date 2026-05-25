@@ -22,10 +22,6 @@ import sys
 import pytest
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Linux
-# ──────────────────────────────────────────────────────────────────────
-
 linux_only = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="process_vm_readv / process_vm_writev are Linux-only",
@@ -116,10 +112,6 @@ def test_linux_partial_read_is_classified_transient_in_scan(monkeypatch):
 
     assert is_transient(exc) is True
 
-
-# ──────────────────────────────────────────────────────────────────────
-# macOS
-# ──────────────────────────────────────────────────────────────────────
 
 macos_only = pytest.mark.skipif(
     sys.platform != "darwin",
