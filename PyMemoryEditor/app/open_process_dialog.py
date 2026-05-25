@@ -12,7 +12,7 @@ from typing import Callable, List, Optional, Tuple
 
 import psutil
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -143,6 +143,24 @@ class _ProcessListWorker(QThread):
         self.rows_ready.emit(rows)
 
 
+class _ProcessSortProxy(QSortFilterProxyModel):
+    """Proxy that defers comparison to the source items' ``__lt__``.
+
+    Why: the default ``QSortFilterProxyModel.lessThan`` compares
+    ``Qt.DisplayRole`` strings, which sorts numeric columns
+    lexicographically ("10" < "2"). Delegating to the source item lets
+    [[NumericItem]] sort by its underlying int payload.
+    """
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:  # noqa: N802 — Qt naming
+        source = self.sourceModel()
+        left_item = source.itemFromIndex(left) if source is not None else None
+        right_item = source.itemFromIndex(right) if source is not None else None
+        if left_item is None or right_item is None:
+            return super().lessThan(left, right)
+        return left_item < right_item
+
+
 class OpenProcessDialog(QDialog):
     """Process picker. Returns the opened ``AbstractProcess`` via ``.process``."""
 
@@ -208,7 +226,7 @@ class OpenProcessDialog(QDialog):
             ["PID", "Process Name", "Memory (RSS)", "User"]
         )
 
-        self._proxy = QSortFilterProxyModel(self)
+        self._proxy = _ProcessSortProxy(self)
         self._proxy.setSourceModel(self._model)
         self._proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self._proxy.setFilterKeyColumn(-1)  # search every column
