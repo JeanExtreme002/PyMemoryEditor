@@ -12,7 +12,7 @@ reading, writing and searching values in the process memory.
 ---
 
 <p align="center">
-  <img src="PyMemoryEditor/app/assets/icon.svg" alt="PyMemoryEditor logo" width="120" />
+  <img src="https://raw.githubusercontent.com/JeanExtreme002/PyMemoryEditor/main/PyMemoryEditor/app/assets/icon.svg" alt="PyMemoryEditor logo" width="120" />
 </p>
 
 <p align="center">
@@ -278,6 +278,10 @@ $ pymemoryeditor
 ```
 
 The app is a living demo of the library — it exercises every public surface (every `ScanTypesEnum` mode, every value type, scanning, refining, freezing values, the hex viewer, the memory map). If you're learning the API, it's the fastest way to see what's possible.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/JeanExtreme002/PyMemoryEditor/main/assets/screenshots/app.png" alt="PyMemoryEditor app attached to a running process" width="820" />
+</p>
 
 <table>
 <tr>
