@@ -25,6 +25,8 @@ help:
 	@echo "Available targets:"
 	@echo "  $(YELLOW)install$(NC)          - Install package in development mode"
 	@echo "  $(YELLOW)install-deps$(NC)     - Install dependencies"
+	@echo "  $(YELLOW)install-app$(NC)      - Install dependencies to run the PyMemoryEditor App"
+	@echo "  $(YELLOW)run-app$(NC)          - Run the PyMemoryEditor App"
 	@echo "  $(YELLOW)install-dev$(NC)      - Install development dependencies"
 	@echo "  $(YELLOW)test$(NC)             - Run tests"
 	@echo "  $(YELLOW)test-verbose$(NC)     - Run tests with verbose output"
@@ -67,6 +69,20 @@ install-deps:
 	@echo "$(GREEN)Installing runtime dependencies...$(NC)"
 	$(PIP) install -e .
 	@echo "$(GREEN)Dependencies installed successfully!$(NC)"
+
+# Install dependencies to run the PyMemoryEditor App (Qt GUI)
+.PHONY: install-app
+install-app:
+	@echo "$(GREEN)Installing PyMemoryEditor App dependencies...$(NC)"
+	$(PIP) install -e ".[app]"
+	@echo "$(GREEN)App dependencies installed successfully!$(NC)"
+	@echo "$(YELLOW)Launch the app with: pymemoryeditor$(NC)"
+
+# Run the PyMemoryEditor App (Qt GUI)
+.PHONY: run-app
+run-app:
+	@echo "$(GREEN)Starting PyMemoryEditor App...$(NC)"
+	$(PYTHON) -m PyMemoryEditor
 
 # Install development dependencies
 .PHONY: install-dev
