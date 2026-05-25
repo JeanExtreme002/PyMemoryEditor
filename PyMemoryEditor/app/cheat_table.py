@@ -113,11 +113,6 @@ class CheatTable(QWidget):
         self._edit_btn.clicked.connect(self._on_edit_selected)
         bar.addWidget(self._edit_btn)
 
-        self._remove_btn = QPushButton("Remove Selected")
-        self._remove_btn.setObjectName("danger")
-        self._remove_btn.clicked.connect(self._on_remove_selected)
-        bar.addWidget(self._remove_btn)
-
         self._clear_btn = QPushButton("Clear Table")
         self._clear_btn.clicked.connect(self._on_clear)
         bar.addWidget(self._clear_btn)

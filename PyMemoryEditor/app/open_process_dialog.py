@@ -197,7 +197,7 @@ class OpenProcessDialog(QDialog):
 
         header = QLabel(
             f"<span style='font-size:18px;font-weight:700;'>Open Process</span>"
-            f" &nbsp;<span style='color:#9A9DB4;'>PyMemoryEditor v{__version__}</span>"
+            f" &nbsp;<span style='color:#6E7681;'>PyMemoryEditor v{__version__}</span>"
         )
         header.setTextFormat(Qt.RichText)
         layout.addWidget(header)

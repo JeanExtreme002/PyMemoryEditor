@@ -174,7 +174,7 @@ class MemoryMapDialog(QDialog):
 
         header = QLabel(
             f"<span style='font-size:16px;font-weight:700;'>Memory Map</span>"
-            f" &nbsp;<span style='color:#9A9DB4;'>PID {self._process.pid}</span>"
+            f" &nbsp;<span style='color:#6E7681;'>PID {self._process.pid}</span>"
         )
         header.setTextFormat(Qt.RichText)
         layout.addWidget(header)

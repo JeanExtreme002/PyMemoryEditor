@@ -153,6 +153,7 @@ class ScannerPanel(QWidget):
 
         row = QHBoxLayout()
         self._next_scan_btn = QPushButton("Next Scan")
+        self._next_scan_btn.setObjectName("secondary")
         self._next_scan_btn.clicked.connect(self._on_next_scan)
         row.addWidget(self._next_scan_btn)
 
@@ -167,6 +168,7 @@ class ScannerPanel(QWidget):
         buttons.addWidget(self._update_btn)
 
         self._cancel_btn = QPushButton("Cancel scan")
+        self._cancel_btn.setObjectName("danger")
         self._cancel_btn.clicked.connect(self.cancel_requested.emit)
         buttons.addWidget(self._cancel_btn)
 

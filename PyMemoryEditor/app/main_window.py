@@ -270,7 +270,12 @@ class MainWindow(QMainWindow):
         self._status.showMessage("Scanning…")
 
         worker = FirstScanWorker(self._process, request, self)
-        worker.chunk_ready.connect(self._on_first_chunk)
+        # Block the worker on each chunk so the UI event loop has room to
+        # service the Cancel button click between chunks — otherwise the
+        # queued chunk_ready signals can starve mouse events.
+        worker.chunk_ready.connect(
+            self._on_first_chunk, Qt.ConnectionType.BlockingQueuedConnection
+        )
         worker.progress.connect(self._progress.setValue)
         worker.status.connect(self._status.showMessage)
         worker.error.connect(self._on_worker_error)
@@ -308,7 +313,10 @@ class MainWindow(QMainWindow):
             filter_only=True,
             parent=self,
         )
-        worker.chunk_ready.connect(self._results_model.patch_values)
+        worker.chunk_ready.connect(
+            self._results_model.patch_values,
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
         worker.progress.connect(self._progress.setValue)
         worker.status.connect(self._status.showMessage)
         worker.error.connect(self._on_worker_error)
@@ -339,7 +347,10 @@ class MainWindow(QMainWindow):
             filter_only=False,
             parent=self,
         )
-        worker.chunk_ready.connect(self._results_model.patch_values)
+        worker.chunk_ready.connect(
+            self._results_model.patch_values,
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
         worker.progress.connect(self._progress.setValue)
         worker.status.connect(self._status.showMessage)
         worker.error.connect(self._on_worker_error)

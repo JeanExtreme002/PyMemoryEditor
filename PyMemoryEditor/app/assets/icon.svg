@@ -4,9 +4,9 @@
 
   Concept: a QFP-style memory chip with the interlocking Python snakes
   (blue + yellow) sitting on the silkscreen face. The chip background
-  uses the same dark slate as the app's Fusion dark theme and the chip
-  outline uses the app's accent blue, so the icon reads consistently
-  inside the window chrome on every platform.
+  uses the same near-black graphite as the app's Fusion dark theme and
+  the chip outline uses the app's Kali-teal accent, so the icon reads
+  consistently inside the window chrome on every platform.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <!-- Chip leads (QFP package, 8 per side) -->
@@ -51,10 +51,10 @@
 
   <!-- Chip body -->
   <rect x="96" y="96" width="320" height="320" rx="26"
-        fill="#1E1F29" stroke="#6AA9FF" stroke-width="3"/>
+        fill="#0F1419" stroke="#2DD4BF" stroke-width="3"/>
 
   <!-- Pin-1 indicator dot -->
-  <circle cx="120" cy="120" r="6" fill="#6AA9FF" opacity="0.75"/>
+  <circle cx="120" cy="120" r="6" fill="#2DD4BF" opacity="0.75"/>
 
   <!-- Python logo (interlocking L-shapes), centered on the chip face -->
   <g transform="translate(141, 141)">
@@ -91,6 +91,6 @@
     <!-- Blue snake eye -->
     <circle cx="128" cy="42" r="9" fill="#FFFFFF"/>
     <!-- Yellow snake eye -->
-    <circle cx="102" cy="188" r="9" fill="#1E1F29"/>
+    <circle cx="102" cy="188" r="9" fill="#0F1419"/>
   </g>
 </svg>

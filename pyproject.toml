@@ -46,12 +46,14 @@ dependencies = ["psutil>=5.9,<7"]
 [project.optional-dependencies]
 tests = [
   "pytest",
+  "pytest-xdist",
 ]
 app = [
   "PySide6>=6.5",
 ]
 dev = [
   "pytest",
+  "pytest-xdist",
   "pytest-cov",
   "pytest-qt",
   "hypothesis",
@@ -115,3 +117,10 @@ omit = ["PyMemoryEditor/app/*", "PyMemoryEditor/__main__.py"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+
+# Parallelize the suite with pytest-xdist. ``--dist=loadfile`` keeps each
+# ``test_*.py`` together on a single worker (module-scoped fixtures stay
+# valid), and ``-n auto`` picks one worker per available CPU. Override with
+# ``pytest -n 0`` for serial debugging.
+[tool.pytest.ini_options]
+addopts = "-n auto --dist=loadfile"
