@@ -81,5 +81,4 @@ Please include:
 
 ## Security
 
-If you find a security issue, please open a private security advisory on GitHub
-rather than a public issue.
+If you find a security issue, please see [`SECURITY.md`](SECURITY.md). **Do not** report via GitHub issues.
