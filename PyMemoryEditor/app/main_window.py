@@ -557,7 +557,9 @@ class MainWindow(QMainWindow):
         return f"PID {self._process.pid}  ·  {self._proc_name}"
 
     def _window_title(self) -> str:
-        return f"PyMemoryEditor App — (PID {self._process.pid} · {self._proc_name})"
+        # Qt prepends QGuiApplication.applicationDisplayName to the window
+        # title on Windows/Linux; including it here would duplicate it.
+        return f"PID {self._process.pid} · {self._proc_name}"
 
     def _read_proc_name(self) -> str:
         try:
