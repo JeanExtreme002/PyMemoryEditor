@@ -53,6 +53,7 @@ reading, writing and searching values in the process memory.
 | **Scan modes** | Exact, not-exact, bigger / smaller (±equal), in-range, out-of-range. |
 | **Pattern scan** | Byte signatures or regex — `grep` for process memory. |
 | **Pointer chains** | Walk multi-level pointers (`[[base+0x10]+0x20]+0x30`) in one call. |
+| **Module enumeration** | List loaded executables & libraries with their base address — `base + offset` beats ASLR. |
 | **Snapshot caching** | The Cheat-Engine "scan → refine → refine" loop, accelerated. |
 | **Bundled GUI app** | A full memory scanner ships in the box — just type `pymemoryeditor`. |
 
@@ -256,6 +257,25 @@ address, size and metadata of every region the target owns:
 for region in process.get_memory_regions():
     print(hex(region["address"]), region["size"], region["struct"])
 ```
+
+### 📦 Listing the loaded modules
+
+A *module* is a file mapped into the process — the main executable plus every
+shared library it loaded (`.exe`/`.dll` on Windows, the binary and `.so` files
+on Linux, the Mach-O image and `.dylib` files on macOS). `get_modules()` yields
+a `ModuleInfo` for each one:
+
+```python
+for module in process.get_modules():
+    print(
+        module.name,
+        hex(module.base_address), 
+        module.size,
+        module.path
+    )
+    ...
+```
+
 
 ### 🧵 Listing the process threads
 

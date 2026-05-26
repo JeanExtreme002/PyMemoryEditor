@@ -107,6 +107,20 @@ libsystem.mach_vm_protect.restype = kern_return_t
 libsystem.mach_port_deallocate.argtypes = (mach_port_t, mach_port_t)
 libsystem.mach_port_deallocate.restype = kern_return_t
 
+# kern_return_t task_info(
+#     task_name_t              target_task,
+#     task_flavor_t            flavor,
+#     task_info_t              task_info_out,    /* out buffer */
+#     mach_msg_type_number_t  *task_info_outCnt);
+# Used with TASK_DYLD_INFO to locate dyld's image list for get_modules().
+libsystem.task_info.argtypes = (
+    task_t,
+    ctypes.c_uint,  # task_flavor_t
+    ctypes.c_void_p,  # task_info_t (caller-sized out buffer)
+    POINTER(mach_msg_type_number_t),
+)
+libsystem.task_info.restype = kern_return_t
+
 # kern_return_t task_threads(
 #     task_inspect_t           target_task,
 #     thread_act_array_t      *act_list,         /* out: kernel-allocated array of thread ports */

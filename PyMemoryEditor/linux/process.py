@@ -7,9 +7,11 @@ from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
 from ..util import resolve_bufflength
+from ..process.module_info import ModuleInfo
 from ..process.thread_info import ThreadInfo
 from .functions import (
     get_memory_regions,
+    get_modules,
     get_threads,
     read_process_memory,
     search_addresses_by_pattern,
@@ -83,6 +85,10 @@ class LinuxProcess(AbstractProcess):
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         self.__require_open()
         return get_threads(self.pid)
+
+    def get_modules(self) -> Generator[ModuleInfo, None, None]:
+        self.__require_open()
+        return get_modules(self.pid)
 
     def read_process_memory(
         self,

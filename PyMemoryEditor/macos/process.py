@@ -6,11 +6,13 @@ from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Un
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
+from ..process.module_info import ModuleInfo
 from ..process.thread_info import ThreadInfo
 from ..util import resolve_bufflength
 
 from .functions import (
     get_memory_regions,
+    get_modules,
     get_task_for_pid,
     get_threads,
     read_process_memory,
@@ -122,6 +124,10 @@ class MacProcess(AbstractProcess):
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         self.__require_open()
         return get_threads(self.__task)
+
+    def get_modules(self) -> Generator[ModuleInfo, None, None]:
+        self.__require_open()
+        return get_modules(self.__task)
 
     def search_by_addresses(
         self,

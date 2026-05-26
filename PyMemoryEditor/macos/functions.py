@@ -12,6 +12,7 @@ import warnings
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.module_info import ModuleInfo
 from ..process.region import enrich_region
 from ..process.scanning import (
     iter_pattern_results,
@@ -34,6 +35,8 @@ from .types import (
     KERN_PROTECTION_FAILURE,
     KERN_SUCCESS,
     MEMORY_BASIC_INFORMATION,
+    TASK_DYLD_INFO,
+    TASK_DYLD_INFO_COUNT,
     VM_PROT_COPY,
     VM_PROT_READ,
     VM_PROT_WRITE,
@@ -43,6 +46,7 @@ from .types import (
     mach_port_t,
     mach_vm_address_t,
     mach_vm_size_t,
+    task_dyld_info_data_t,
     vm_region_basic_info_64,
 )
 
@@ -453,6 +457,169 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
                 ctypes.cast(thread_list, ctypes.c_void_p),
                 count.value * ctypes.sizeof(ctypes.c_uint),
             )
+
+
+# Mach-O constants for sizing an image from its load commands.
+_MH_MAGIC_64 = 0xFEEDFACF
+_LC_SEGMENT_64 = 0x19
+_MACH_HEADER_64_SIZE = 32  # sizeof(struct mach_header_64)
+
+
+def _read_cstring(task: int, address: int, *, max_length: int = 4096) -> str:
+    """
+    Read a NUL-terminated UTF-8 string from the target task starting at
+    ``address``. Reads in small chunks and shrinks the chunk near an unmapped
+    boundary so a path that ends close to the edge of a mapping still comes
+    back intact. Returns the decoded text (``errors="replace"``).
+    """
+    data = bytearray()
+    chunk = 256
+
+    while len(data) < max_length:
+        try:
+            piece = read_process_memory(task, address + len(data), bytes, chunk)
+        except MachReadError:
+            # The read crossed into an unmapped page; retry with a smaller
+            # window. Give up only once even a single byte can't be read.
+            if chunk == 1:
+                break
+            chunk = max(1, chunk // 4)
+            continue
+
+        nul = piece.find(b"\x00")
+        if nul != -1:
+            data.extend(piece[:nul])
+            break
+        data.extend(piece)
+
+    return bytes(data[:max_length]).decode("utf-8", errors="replace")
+
+
+def _macho_image_size(task: int, load_address: int) -> int:
+    """
+    Return the size of the ``__TEXT`` segment of the Mach-O image at
+    ``load_address`` (its read-only code/constants), parsed from the load
+    commands. Returns 0 when the header is unreadable or not a 64-bit Mach-O.
+
+    macOS makes a single whole-module size hard to define: dylibs in the dyld
+    *shared cache* have their segments scattered across the cache (so a span
+    measurement is multi-gigabyte garbage), and several segments — ``__LINKEDIT``
+    and the ``__OBJC_RO`` / ``__OBJC_RW`` runtime tables — are *merged blobs
+    shared by every dylib*, so summing them double-counts hundreds of MB onto
+    each module. ``__TEXT`` is the one segment that is always private to the
+    image and accurately sized on and off the cache, and it is the region a
+    code/AOB scan cares about — so it is the most useful, stable choice here.
+    """
+    try:
+        header = read_process_memory(task, load_address, bytes, _MACH_HEADER_64_SIZE)
+    except MachReadError:
+        return 0
+
+    if int.from_bytes(header[:4], "little") != _MH_MAGIC_64:
+        return 0
+
+    ncmds = int.from_bytes(header[16:20], "little")
+    cmd_address = load_address + _MACH_HEADER_64_SIZE
+
+    for _ in range(ncmds):
+        try:
+            cmd_header = read_process_memory(task, cmd_address, bytes, 8)
+        except MachReadError:
+            break
+
+        cmd = int.from_bytes(cmd_header[:4], "little")
+        cmd_size = int.from_bytes(cmd_header[4:8], "little")
+        if cmd_size == 0:
+            break  # malformed — avoid an infinite loop
+
+        if cmd == _LC_SEGMENT_64:
+            # struct segment_command_64: cmd, cmdsize, segname[16],
+            # vmaddr (u64 @ offset 24), vmsize (u64 @ offset 32), ...
+            try:
+                seg = read_process_memory(task, cmd_address, bytes, 40)
+            except MachReadError:
+                break
+
+            if seg[8:24].split(b"\x00", 1)[0] == b"__TEXT":
+                return int.from_bytes(seg[32:40], "little")
+
+        cmd_address += cmd_size
+
+    return 0
+
+
+def get_modules(task: int) -> Generator[ModuleInfo, None, None]:
+    """
+    Yield a :class:`ModuleInfo` for every Mach-O image loaded in the task — the
+    main executable plus every linked dylib.
+
+    Walks dyld's image table: ``task_info(TASK_DYLD_INFO)`` returns the address
+    of ``dyld_all_image_infos`` inside the target, then the image array is read
+    out of the target's memory. Pointer-sized fields are read as 8 bytes (the
+    macOS backend targets 64-bit tasks). ``size`` is derived from each image's
+    Mach-O load commands (see :func:`_macho_image_size`); it falls back to 0 if
+    the header can't be parsed.
+    """
+    info = task_dyld_info_data_t()
+    count = mach_msg_type_number_t(TASK_DYLD_INFO_COUNT)
+
+    kr = libsystem.task_info(
+        task, TASK_DYLD_INFO, ctypes.byref(info), ctypes.byref(count)
+    )
+    if kr != KERN_SUCCESS:
+        raise OSError(
+            "task_info(TASK_DYLD_INFO) failed: %s (kr=%d)"
+            % (mach_error_message(kr), kr)
+        )
+
+    all_infos_address = info.all_image_info_addr
+    if not all_infos_address:
+        return
+
+    pointer_size = 8  # 64-bit task
+
+    def read_pointer(address: int) -> int:
+        return int.from_bytes(
+            read_process_memory(task, address, bytes, pointer_size), "little"
+        )
+
+    def read_u32(address: int) -> int:
+        return int.from_bytes(read_process_memory(task, address, bytes, 4), "little")
+
+    # struct dyld_all_image_infos { uint32 version; uint32 infoArrayCount;
+    #     const struct dyld_image_info* infoArray; ... }
+    try:
+        image_count = read_u32(all_infos_address + 4)
+        info_array_address = read_pointer(all_infos_address + 8)
+    except MachReadError as exc:
+        raise OSError("could not read dyld_all_image_infos: %s" % exc)
+
+    if not info_array_address or image_count == 0:
+        return
+
+    # struct dyld_image_info { const mach_header* imageLoadAddress;
+    #     const char* imageFilePath; uintptr_t imageFileModDate; } — 3 pointers.
+    entry_size = pointer_size * 3
+
+    for index in range(image_count):
+        entry_address = info_array_address + index * entry_size
+        try:
+            load_address = read_pointer(entry_address)
+            path_address = read_pointer(entry_address + pointer_size)
+        except MachReadError as exc:
+            _logger.debug("get_modules: skipping image %d: %s", index, exc)
+            continue
+
+        path = _read_cstring(task, path_address) if path_address else ""
+        name = os.path.basename(path) if path else ""
+
+        yield ModuleInfo(
+            name=name,
+            path=path,
+            base_address=load_address,
+            size=_macho_image_size(task, load_address),
+            raw=load_address,
+        )
 
 
 def search_addresses_by_pattern(

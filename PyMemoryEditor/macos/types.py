@@ -34,6 +34,9 @@ memory_object_offset_t = c_uint64
 # Region info flavors
 VM_REGION_BASIC_INFO_64 = 9
 
+# task_info() flavor that returns dyld's image-list pointer (mach/task_info.h).
+TASK_DYLD_INFO = 17
+
 # VM protection flags
 VM_PROT_NONE = 0x00
 VM_PROT_READ = 0x01
@@ -68,6 +71,26 @@ class vm_region_basic_info_64(Structure):
 # Number of mach_msg_type_number_t units in vm_region_basic_info_64.
 # Used as the in/out `info_count` parameter to mach_vm_region.
 VM_REGION_BASIC_INFO_COUNT_64 = sizeof(vm_region_basic_info_64) // _NATURAL_T_SIZE
+
+
+class task_dyld_info_data_t(Structure):
+    """Layout of struct task_dyld_info from <mach/task_info.h>.
+
+    ``all_image_info_addr`` is the address, *inside the target task*, of dyld's
+    ``dyld_all_image_infos`` structure — the entry point for enumerating the
+    Mach-O images loaded in the process.
+    """
+
+    _fields_ = [
+        ("all_image_info_addr", mach_vm_address_t),
+        ("all_image_info_size", mach_vm_size_t),
+        ("all_image_info_format", c_int),
+    ]
+
+
+# task_info() reports the buffer length in natural_t (4-byte) units, like
+# mach_vm_region's info_count.
+TASK_DYLD_INFO_COUNT = sizeof(task_dyld_info_data_t) // _NATURAL_T_SIZE
 
 
 class MEMORY_BASIC_INFORMATION(Structure):
