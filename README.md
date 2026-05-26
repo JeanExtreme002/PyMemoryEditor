@@ -23,8 +23,8 @@ reading, writing and searching values in the process memory.
 <p align="center">
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-usage-guide">Usage Guide</a> ·
-  <a href="#-pattern-scan-aob--find-code-or-data-by-signature">Pattern Scan</a> ·
-  <a href="#-pointer-chains--survive-a-process-restart">Pointer Chains</a> ·
+  <a href="#-pattern-scan--grep-for-process-memory">Pattern Scan</a> ·
+  <a href="#-pointer-chains--resolve-addresses-that-change-every-run">Pointer Chains</a> ·
   <a href="#platform-notes">Platform Notes</a> ·
   <a href="#-bonus-the-pymemoryeditor-app">The App</a> ·
   <a href="#-contributing">Contributing</a>
@@ -43,7 +43,7 @@ reading, writing and searching values in the process memory.
 | **Read & write memory** | Change live values on the fly — just like Cheat Engine, but in a few lines of Python. |
 | **Pure-Python via `ctypes`** | No compilation, no native wheels — `pip install` and you're done. |
 | **Scan modes** | Exact, not-exact, bigger / smaller (±equal), in-range, out-of-range. |
-| **Pattern scan (AOB)** | Find code or data by byte signature with `?` wildcards — IDA / Cheat-Engine style. |
+| **Pattern scan** | Byte signatures or regex — `grep` for process memory. |
 | **Pointer chains** | Walk multi-level pointers (`[[base+0x10]+0x20]+0x30`) in one call. |
 | **Snapshot caching** | The Cheat-Engine "scan → refine → refine" loop, accelerated. |
 | **Bundled GUI app** | A full memory scanner ships in the box — just type `pymemoryeditor`. |
@@ -76,9 +76,7 @@ plain Python types. Everything fits in a handful of lines:
 from PyMemoryEditor import OpenProcess
 
 with OpenProcess(process_name="example.exe") as process:
-    # Read a 4-byte int at a known address.
-    value = process.read_process_memory(0x0005000C, int)
-    print("Current value:", value)
+    value = 120
 
     # Scan the whole process for every address holding that value.
     for address in process.search_by_value(int, 4, value):
@@ -120,7 +118,7 @@ with OpenProcess(process_name="notepad.exe") as process:
     name = process.read_process_memory(address, str, 32)
 ```
 
-### Searching for a value
+### 🔍 Searching for a value
 
 Look up a value anywhere in memory and stream every match:
 
@@ -208,41 +206,50 @@ for address, value in process.search_by_addresses(int, 4, addresses_list):
     print("Address", hex(address), "holds the value", value)
 ```
 
-### Walking the memory map
+### 🗺️ Exploring the memory regions
 
-`get_memory_regions()` streams the address, size and metadata of every region the
-target owns:
+A process's address space is split into regions — contiguous blocks of memory,
+each with its own size and permissions. `get_memory_regions()` streams the
+address, size and metadata of every region the target owns:
 
 ```python
 for region in process.get_memory_regions():
     print(hex(region["address"]), region["size"], region["struct"])
 ```
 
-### 🎯 Pattern scan (AOB) — find code or data by signature
+### 🎯 Pattern scan — grep for process memory
 
-When addresses move between builds, **byte patterns don't**. Drop in an IDA-style
-hex string with `?` wildcards and PyMemoryEditor will find every match — the same
-trick Cheat Engine, IDA and Ghidra use to anchor onto a moving target.
+Pass a raw `bytes` regular expression and the scanner applies it directly to
+memory, letting you locate *data* by its shape. The example below extracts
+every email address held in the target's memory.
+
+```python
+email = rb"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
+
+# byte_length is the maximum length of a single match (used to span chunk reads).
+for address in process.search_by_pattern(email, byte_length=128):
+    raw = process.read_process_memory(address, bytes, 128)
+    print(address, raw.split(b"\x00", 1)[0].decode("ascii", "replace"))
+```
+
+Patterns also work the other way — for *code*. Absolute addresses shift between
+builds, but **byte signatures remain stable**: provide an IDA-style hex string
+with `?` wildcards and `search_by_pattern` returns every match, the same
+technique Cheat Engine, IDA and Ghidra use to locate code that has moved.
 
 ```python
 for address in process.search_by_pattern("48 8B ? ? 00 00 89 ?"):
     print(f"Match at 0x{address:X}")
 ```
 
-Prefer a raw bytes regex? Pass it through — just tell us how many bytes one
-match consumes:
+### 🔗 Pointer chains — resolve addresses that change every run
+
+A multi-level pointer is a static base plus a series of offsets —
+`module + offset → [+x] → [+y] → …`. Walk the whole chain in one line, then
+read or write the final address as usual:
 
 ```python
-process.search_by_pattern(rb"\x48\x8B..\x00\x00", byte_length=6)
-```
-
-### 🔗 Pointer chains — survive a process restart
-
-Cheat Engine cheat tables describe pointers as `module + offset → [+x] → [+y] → …`.
-Walk the whole chain in one line, then read or write the final address as usual:
-
-```python
-# "game.exe"+0x10F4F4 -> [+0x0] -> [+0x158]   (HP, from a cheat-table dump)
+# module + 0x10F4F4 -> [+0x0] -> [+0x158]   (a value behind a two-level pointer)
 hp_address = process.resolve_pointer_chain(base + 0x10F4F4, [0x0, 0x158])
 hp = process.read_process_memory(hp_address, int, 4)
 ```
