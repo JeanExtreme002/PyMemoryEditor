@@ -8,12 +8,14 @@ from ..util import resolve_bufflength
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
+from ..process.module_info import ModuleInfo
 from ..process.thread_info import ThreadInfo
 from .enums import ProcessOperationsEnum
 
 from .functions import (
     CloseProcessHandle,
     GetMemoryRegions,
+    GetModules,
     GetProcessHandle,
     GetThreads,
     ReadProcessMemory,
@@ -161,6 +163,11 @@ class WindowsProcess(AbstractProcess):
         self.__require_open()
         # Toolhelp32 takes a PID, not a handle — no PROCESS_* right needed.
         return GetThreads(self.pid)
+
+    def get_modules(self) -> Generator[ModuleInfo, None, None]:
+        self.__require_open()
+        # The Toolhelp32 module snapshot takes a PID, not a handle.
+        return GetModules(self.pid)
 
     def search_by_addresses(
         self,

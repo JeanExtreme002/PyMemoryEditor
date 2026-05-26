@@ -14,6 +14,7 @@ from ctypes import addressof, sizeof
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.module_info import ModuleInfo
 from ..process.region import enrich_region
 from ..process.scanning import (
     iter_pattern_results,
@@ -168,6 +169,55 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
                     "struct": region,
                 }
             )
+
+
+def get_modules(pid: int) -> Generator[ModuleInfo, None, None]:
+    """
+    Yield a :class:`ModuleInfo` for every file-backed module mapped by the
+    process, derived from ``/proc/<pid>/maps``.
+
+    A single library spans several consecutive mappings (its ``.text``,
+    ``.rodata``, ``.data`` / ``.bss`` segments), all sharing the same backing
+    path. Mappings are grouped by path: the module's ``base_address`` is the
+    lowest mapping start and its ``size`` reaches the highest mapping end.
+
+    Pseudo-mappings without a real backing file (``[heap]``, ``[stack]``,
+    ``[vvar]``, anonymous memory) are not modules and are skipped — only paths
+    beginning with ``/`` are considered. Modules are yielded in ascending
+    ``base_address`` order, which is the order ``/proc/<pid>/maps`` lists them.
+    """
+    # path -> [min_start, max_end]; first_seen preserves the maps order, which
+    # is already ascending by address, so we don't need to sort afterwards.
+    bounds: Dict[str, list] = {}
+    first_seen = []
+
+    for region in get_memory_regions(pid):
+        path = region["path"]
+        if not path.startswith("/"):
+            continue
+
+        start = region["address"]
+        end = start + region["size"]
+
+        entry = bounds.get(path)
+        if entry is None:
+            bounds[path] = [start, end]
+            first_seen.append(path)
+        else:
+            if start < entry[0]:
+                entry[0] = start
+            if end > entry[1]:
+                entry[1] = end
+
+    for path in first_seen:
+        start, end = bounds[path]
+        yield ModuleInfo(
+            name=os.path.basename(path),
+            path=path,
+            base_address=start,
+            size=end - start,
+            raw=path,
+        )
 
 
 def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int) -> T:

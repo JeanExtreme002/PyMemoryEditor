@@ -12,6 +12,7 @@ import logging
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.module_info import ModuleInfo
 from ..process.region import enrich_region
 from ..process.scanning import (
     iter_pattern_results,
@@ -31,7 +32,10 @@ from .types import (
     MEMORY_BASIC_INFORMATION,
     MEMORY_BASIC_INFORMATION_32,
     MEMORY_BASIC_INFORMATION_64,
+    MODULEENTRY32,
     SYSTEM_INFO,
+    TH32CS_SNAPMODULE,
+    TH32CS_SNAPMODULE32,
     TH32CS_SNAPTHREAD,
     THREADENTRY32,
 )
@@ -121,6 +125,18 @@ kernel32.Thread32Next.argtypes = (
     ctypes.POINTER(THREADENTRY32),
 )
 kernel32.Thread32Next.restype = ctypes.wintypes.BOOL
+
+kernel32.Module32First.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(MODULEENTRY32),
+)
+kernel32.Module32First.restype = ctypes.wintypes.BOOL
+
+kernel32.Module32Next.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(MODULEENTRY32),
+)
+kernel32.Module32Next.restype = ctypes.wintypes.BOOL
 
 
 system_information = SYSTEM_INFO()
@@ -512,6 +528,58 @@ def GetThreads(pid: int) -> Generator[ThreadInfo, None, None]:
             # time per Microsoft's sample code.
             entry.dwSize = ctypes.sizeof(entry)
             if not kernel32.Thread32Next(snapshot, ctypes.byref(entry)):
+                break
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
+    """
+    Yield a :class:`ModuleInfo` for every module loaded in the target process.
+
+    Uses ``CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32)``
+    followed by Module32First/Next — the documented user-mode way to enumerate
+    modules without an extra dependency. Unlike the thread snapshot, the module
+    snapshot is per-process, so the pid is passed through and honored.
+    ``TH32CS_SNAPMODULE32`` is OR-ed in so a 64-bit Python can still see the
+    32-bit modules of a WOW64 target.
+
+    Module enumeration needs no ``PROCESS_*`` right on the handle — the caller
+    only supplies the pid here.
+    """
+    snapshot = kernel32.CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid
+    )
+    # CreateToolhelp32Snapshot returns INVALID_HANDLE_VALUE (-1 cast to HANDLE)
+    # on failure — same check the thread snapshot uses.
+    if not snapshot or snapshot == ctypes.wintypes.HANDLE(-1).value:
+        _raise_last_error("CreateToolhelp32Snapshot")
+
+    entry = MODULEENTRY32()
+    entry.dwSize = ctypes.sizeof(entry)
+
+    try:
+        if not kernel32.Module32First(snapshot, ctypes.byref(entry)):
+            # Empty snapshot is legal (target exited / not yet initialized).
+            _logger.debug(
+                "GetModules: Module32First returned 0 (snapshot empty for pid=%d)",
+                pid,
+            )
+            return
+
+        while True:
+            # szModule / szExePath are c_char arrays — accessing them returns
+            # the NUL-terminated bytes directly.
+            name = entry.szModule.decode("utf-8", errors="replace")
+            path = entry.szExePath.decode("utf-8", errors="replace")
+            yield ModuleInfo(
+                name=name,
+                path=path or name,
+                base_address=int(entry.modBaseAddr or 0),
+                size=int(entry.modBaseSize),
+                raw=int(entry.hModule or 0),
+            )
+            if not kernel32.Module32Next(snapshot, ctypes.byref(entry)):
                 break
     finally:
         kernel32.CloseHandle(snapshot)

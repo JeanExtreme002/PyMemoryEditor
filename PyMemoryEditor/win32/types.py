@@ -2,6 +2,7 @@
 
 from ctypes import (
     Structure,
+    c_char,
     c_ulonglong,
     c_void_p,
     sizeof,
@@ -78,4 +79,38 @@ class THREADENTRY32(Structure):
         ("tpBasePri", wintypes.LONG),
         ("tpDeltaPri", wintypes.LONG),
         ("dwFlags", wintypes.DWORD),
+    ]
+
+
+# CreateToolhelp32Snapshot flags for module enumeration — used by get_modules().
+# TH32CS_SNAPMODULE32 is OR-ed in so a 64-bit caller can also see the 32-bit
+# modules of a WOW64 target.
+TH32CS_SNAPMODULE = 0x00000008
+TH32CS_SNAPMODULE32 = 0x00000010
+
+# Fixed buffer sizes from <tlhelp32.h> / <minwindef.h>.
+MAX_MODULE_NAME32 = 255
+MAX_PATH = 260
+
+
+class MODULEENTRY32(Structure):
+    """Layout matching the ANSI Win32 ``MODULEENTRY32`` (Module32First/Next).
+
+    ``modBaseAddr`` is declared as a void pointer so it stays pointer-sized on
+    both 32- and 64-bit builds; read it as an int via ``entry.modBaseAddr``.
+    ``szModule`` / ``szExePath`` are ``c_char`` arrays — accessing them yields
+    the NUL-terminated bytes directly.
+    """
+
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("th32ModuleID", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("GlblcntUsage", wintypes.DWORD),
+        ("ProccntUsage", wintypes.DWORD),
+        ("modBaseAddr", c_void_p),
+        ("modBaseSize", wintypes.DWORD),
+        ("hModule", wintypes.HMODULE),
+        ("szModule", c_char * (MAX_MODULE_NAME32 + 1)),
+        ("szExePath", c_char * MAX_PATH),
     ]

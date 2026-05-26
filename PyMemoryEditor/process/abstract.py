@@ -15,6 +15,7 @@ from typing import (
 
 from ..enums import ScanTypesEnum
 from .info import ProcessInfo
+from .module_info import ModuleInfo
 from .scanning import _PRESORTED_KEY
 from .thread_info import ThreadInfo
 
@@ -100,6 +101,24 @@ class AbstractProcess(ABC):
         Linux, DWORD TID on Windows, Mach port name on macOS).
 
         Use :attr:`main_thread` for the conventional "main thread" shortcut.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def get_modules(self) -> Generator[ModuleInfo, None, None]:
+        """
+        Yield a :class:`~PyMemoryEditor.ModuleInfo` for every module loaded in
+        the target process — the main executable plus each shared library
+        (``.dll`` / ``.so`` / ``.dylib``).
+
+        A module's ``base_address`` is the load address the OS chose for this
+        run; combine it with a static offset (``base_address + offset``) to
+        reach a known location despite ASLR. That sum is the typical
+        ``base_address`` argument to :meth:`resolve_pointer_chain`.
+
+        Each backend fills the ``ModuleInfo`` fields with what its OS surfaces
+        cheaply — see :class:`~PyMemoryEditor.ModuleInfo` for the per-platform
+        meaning of ``raw`` and for when ``size`` may be ``0``.
         """
         raise NotImplementedError()
 

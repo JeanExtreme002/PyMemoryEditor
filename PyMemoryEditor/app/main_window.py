@@ -52,6 +52,7 @@ from .cheat_table import CheatTable
 from .log_console_dialog import LogConsoleDialog
 from .memory_map_dialog import MemoryMapDialog
 from .memory_viewer_dialog import MemoryViewerDialog
+from .modules_dialog import ModulesDialog
 from .pointer_chain_dialog import PointerChainDialog
 from .results_view import ResultsModel, ResultsView
 from .scan_worker import FirstScanWorker, RefineScanWorker, ScanRequest
@@ -92,6 +93,7 @@ class MainWindow(QMainWindow):
         # cached so subsequent opens reuse the same window (matches the
         # behavior of the existing memory_map dialog).
         self._threads_dialog: Optional[ThreadsDialog] = None
+        self._modules_dialog: Optional[ModulesDialog] = None
         self._pointer_chain_dialog: Optional[PointerChainDialog] = None
         self._log_console_dialog: Optional[LogConsoleDialog] = None
 
@@ -241,6 +243,11 @@ class MainWindow(QMainWindow):
         threads_action.triggered.connect(self._open_threads_dialog)
         tools_menu.addAction(threads_action)
 
+        modules_action = QAction("Modules…", self)
+        modules_action.setShortcut(QKeySequence("Ctrl+Shift+M"))
+        modules_action.triggered.connect(self._open_modules_dialog)
+        tools_menu.addAction(modules_action)
+
         pointer_chain_action = QAction("Resolve Pointer Chain…", self)
         pointer_chain_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
         pointer_chain_action.triggered.connect(self._open_pointer_chain_dialog)
@@ -265,6 +272,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main", self)
         toolbar.setMovable(False)
         toolbar.addAction(memory_map_action)
+        toolbar.addAction(modules_action)
         toolbar.addAction(hex_viewer_action)
         toolbar.addAction(pointer_chain_action)
         toolbar.addSeparator()
@@ -531,6 +539,22 @@ class MainWindow(QMainWindow):
     def _on_threads_dialog_closed(self, _result: int) -> None:
         self._threads_dialog = None
 
+    def _open_modules_dialog(self) -> None:
+        if self._modules_dialog is None:
+            self._modules_dialog = ModulesDialog(self._process, self)
+            self._modules_dialog.open_hex_viewer.connect(
+                self._open_hex_viewer_with_size
+            )
+            self._modules_dialog.finished.connect(self._on_modules_dialog_closed)
+        else:
+            self._modules_dialog.refresh()
+        self._modules_dialog.show()
+        self._modules_dialog.raise_()
+        self._modules_dialog.activateWindow()
+
+    def _on_modules_dialog_closed(self, _result: int) -> None:
+        self._modules_dialog = None
+
     def _open_pointer_chain_dialog(self) -> None:
         if self._pointer_chain_dialog is None:
             self._pointer_chain_dialog = PointerChainDialog(self._process, self)
@@ -707,6 +731,7 @@ class MainWindow(QMainWindow):
         # process — reopening them rebuilds against the new target.
         for dialog_attr in (
             "_threads_dialog",
+            "_modules_dialog",
             "_pointer_chain_dialog",
         ):
             existing = getattr(self, dialog_attr, None)

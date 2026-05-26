@@ -64,6 +64,7 @@ def test_app_modules_import_cleanly():
     import PyMemoryEditor.app.cheat_table  # noqa: F401
     import PyMemoryEditor.app.memory_viewer_dialog  # noqa: F401
     import PyMemoryEditor.app.memory_map_dialog  # noqa: F401
+    import PyMemoryEditor.app.modules_dialog  # noqa: F401
     import PyMemoryEditor.app.open_process_dialog  # noqa: F401
     import PyMemoryEditor.app.main_window  # noqa: F401
     import PyMemoryEditor.app.application  # noqa: F401

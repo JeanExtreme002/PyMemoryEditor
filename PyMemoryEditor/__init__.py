@@ -23,6 +23,7 @@ from .process.errors import (
     ProcessNotFoundError,
     PyMemoryEditorError,
 )
+from .process.module_info import ModuleInfo
 from .process.thread_info import ThreadInfo
 
 
@@ -81,6 +82,7 @@ __all__ = (
     "AbstractProcess",
     "AmbiguousProcessNameError",
     "ClosedProcess",
+    "ModuleInfo",
     "OpenProcess",
     "ProcessIDNotExistsError",
     "ProcessNotFoundError",
