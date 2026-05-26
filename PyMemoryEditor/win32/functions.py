@@ -8,16 +8,23 @@
 
 import ctypes
 import ctypes.wintypes
+import logging
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.region import enrich_region
-from ..process.scanning import iter_search_results, iter_values_for_addresses
+from ..process.scanning import (
+    iter_pattern_results,
+    iter_search_results,
+    iter_values_for_addresses,
+)
+from ..process.thread_info import ThreadInfo
 from ..util import (
     _validate_pytype,
     get_c_type_of,
     values_to_bytes,
 )
+from ..util.pattern import PatternLike, compile_pattern
 
 from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum
 from .types import (
@@ -25,7 +32,12 @@ from .types import (
     MEMORY_BASIC_INFORMATION_32,
     MEMORY_BASIC_INFORMATION_64,
     SYSTEM_INFO,
+    TH32CS_SNAPTHREAD,
+    THREADENTRY32,
 )
+
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 
 # Load the libraries with `use_last_error=True` so that `ctypes.get_last_error()`
@@ -88,6 +100,27 @@ kernel32.IsWow64Process.argtypes = (
     ctypes.POINTER(ctypes.wintypes.BOOL),
 )
 kernel32.IsWow64Process.restype = ctypes.wintypes.BOOL
+
+# HANDLE CreateToolhelp32Snapshot(DWORD dwFlags, DWORD th32ProcessID);
+# Snapshot of system threads (with TH32CS_SNAPTHREAD); per the docs, the
+# ProcessID arg is ignored when SNAPTHREAD is set — the snapshot is global.
+kernel32.CreateToolhelp32Snapshot.argtypes = (
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.DWORD,
+)
+kernel32.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
+
+kernel32.Thread32First.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(THREADENTRY32),
+)
+kernel32.Thread32First.restype = ctypes.wintypes.BOOL
+
+kernel32.Thread32Next.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(THREADENTRY32),
+)
+kernel32.Thread32Next.restype = ctypes.wintypes.BOOL
 
 
 system_information = SYSTEM_INFO()
@@ -332,6 +365,47 @@ def SearchAddressesByValue(
     )
 
 
+def SearchAddressesByPattern(
+    process_handle: int,
+    pattern: PatternLike,
+    *,
+    byte_length: int = 0,
+    progress_information: bool = False,
+    memory_regions: Optional[Sequence[Dict]] = None,
+) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+    """
+    AOB scan against every scannable region of the target process. See
+    :meth:`AbstractProcess.search_by_pattern`.
+    """
+    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+
+    source_regions = (
+        memory_regions
+        if memory_regions is not None
+        else GetMemoryRegions(process_handle)
+    )
+    filtered_regions = [
+        region
+        for region in source_regions
+        if _is_region_scannable(region, writeable_only=False)
+    ]
+    filtered_regions.sort(key=lambda region: region["address"])
+
+    def read_chunk(address: int, size: int):
+        # ``_read_region`` returns None on transient failures (page unmapped /
+        # made inaccessible mid-scan); the helper accepts None directly and
+        # skips the chunk — no exception classification needed here.
+        return _read_region(process_handle, address, size)
+
+    yield from iter_pattern_results(
+        filtered_regions,
+        compiled,
+        length,
+        read_chunk,
+        progress_information=progress_information,
+    )
+
+
 class _Win32ChunkReadError(OSError):
     """Raised internally when ReadProcessMemory returns 0 during chunked reads."""
 
@@ -395,6 +469,52 @@ def SearchValuesByAddresses(
         raise_error=raise_error,
         transient_error_check=is_transient,
     )
+
+
+def GetThreads(pid: int) -> Generator[ThreadInfo, None, None]:
+    """
+    Yield a :class:`ThreadInfo` for every thread of the target process.
+
+    Uses ``CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)`` followed by
+    Thread32First/Next; this is the documented user-mode way to enumerate
+    threads on Windows without an extra dependency. Caller does not need a
+    process handle (and therefore no PROCESS_* permission) — the snapshot is
+    system-wide and we filter by ``th32OwnerProcessID``.
+    """
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+    # Per the docs the function returns INVALID_HANDLE_VALUE (-1 cast to HANDLE)
+    # on failure; in ctypes that comes back as a falsy value once we read it.
+    if not snapshot or snapshot == ctypes.wintypes.HANDLE(-1).value:
+        _raise_last_error("CreateToolhelp32Snapshot")
+
+    entry = THREADENTRY32()
+    entry.dwSize = ctypes.sizeof(entry)
+
+    try:
+        if not kernel32.Thread32First(snapshot, ctypes.byref(entry)):
+            # Empty snapshot is legal (no threads visible). Log and bail.
+            _logger.debug(
+                "GetThreads: Thread32First returned 0 (snapshot empty for pid=%d)",
+                pid,
+            )
+            return
+
+        while True:
+            if entry.th32OwnerProcessID == pid:
+                yield ThreadInfo(
+                    tid=entry.th32ThreadID,
+                    start_address=None,
+                    state=None,
+                    priority=int(entry.tpBasePri),
+                    raw=entry.th32ThreadID,
+                )
+            # THREADENTRY32 is reused across iterations — reset dwSize each
+            # time per Microsoft's sample code.
+            entry.dwSize = ctypes.sizeof(entry)
+            if not kernel32.Thread32Next(snapshot, ctypes.byref(entry)):
+                break
+    finally:
+        kernel32.CloseHandle(snapshot)
 
 
 def WriteProcessMemory(

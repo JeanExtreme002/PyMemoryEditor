@@ -22,6 +22,7 @@ in three places. This module owns it once:
 """
 
 import ctypes
+import logging
 from typing import (
     Any,
     Callable,
@@ -29,6 +30,7 @@ from typing import (
     Generator,
     Iterable,
     Optional,
+    Pattern,
     Sequence,
     Tuple,
     Type,
@@ -44,6 +46,9 @@ from ..util import (
     scan_memory,
     scan_memory_for_exact_value,
 )
+
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 
 # Shared type for the in-region search callable. ``scan_memory`` accepts a
@@ -176,6 +181,12 @@ def iter_values_for_addresses(
                 transient = transient_error_check(exc)
                 if not transient and raise_error:
                     raise
+                _logger.debug(
+                    "iter_values_for_addresses: skipping chunk at 0x%X (%d bytes): %s",
+                    chunk_address,
+                    read_size,
+                    exc,
+                )
                 while (
                     address_index < len(sorted_addresses)
                     and sorted_addresses[address_index] < chunk_end
@@ -297,6 +308,12 @@ def iter_search_results(
                 chunk_data = read_chunk(chunk_address, read_size)
             except Exception as exc:  # noqa: BLE001 — backend errors vary
                 if transient_error_check(exc):
+                    _logger.debug(
+                        "iter_search_results: skipping chunk at 0x%X (%d bytes): %s",
+                        chunk_address,
+                        read_size,
+                        exc,
+                    )
                     continue
                 raise
 
@@ -337,4 +354,104 @@ def iter_search_results(
         checked_memory_size += size
 
 
-__all__ = ("iter_search_results", "iter_values_for_addresses")
+def iter_pattern_results(
+    memory_regions: Sequence[Dict],
+    compiled_pattern: "Pattern[bytes]",
+    pattern_length: int,
+    read_chunk: Callable[[int, int], Any],
+    *,
+    progress_information: bool = False,
+    transient_error_check: Optional[Callable[[BaseException], bool]] = None,
+) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+    """
+    Walk every chunk of every region and yield the addresses where
+    ``compiled_pattern`` matches. Implements AOB (Array Of Bytes) scanning,
+    the technique used by Cheat Engine / IDA to locate code or data that
+    moves between builds.
+
+    Mirrors :func:`iter_search_results` for the regex case: same chunking
+    strategy, same transient-error classification, same optional
+    ``progress_information`` shape. ``pattern_length`` is the number of
+    bytes each match consumes — needed because the regex source length is
+    not a reliable proxy (an IDA-style ``"48 ? ? 00"`` matches 4 bytes but
+    its escaped source is longer). The chunk overlap reads
+    ``pattern_length - 1`` extra bytes from the next chunk so matches
+    straddling a chunk boundary are still detected; matches that fall in
+    the overlap region are clamped so each address is attributed to
+    exactly one chunk.
+    """
+    if transient_error_check is None:
+        transient_error_check = _always_false
+
+    pattern_length = max(1, pattern_length)
+
+    memory_total = 0
+    for region in memory_regions:
+        memory_total += region["size"]
+
+    if memory_total == 0:
+        return
+
+    checked_memory_size = 0
+
+    for region in memory_regions:
+        address, size = region["address"], region["size"]
+
+        for chunk_offset, chunk_size in iter_region_chunks(size, pattern_length):
+            chunk_address = address + chunk_offset
+
+            is_last_chunk = chunk_offset + chunk_size >= size
+            overlap = 0 if is_last_chunk else pattern_length - 1
+            read_size = chunk_size + overlap
+
+            try:
+                chunk_data = read_chunk(chunk_address, read_size)
+            except Exception as exc:  # noqa: BLE001 — backend errors vary
+                if transient_error_check(exc):
+                    _logger.debug(
+                        "iter_pattern_results: skipping chunk at 0x%X (%d bytes): %s",
+                        chunk_address,
+                        read_size,
+                        exc,
+                    )
+                    continue
+                raise
+
+            if chunk_data is None:
+                continue
+
+            # ``compiled_pattern.finditer`` needs a real bytes object. Convert
+            # once per chunk; ctypes arrays expose the buffer protocol so this
+            # is a single memcpy.
+            data_bytes = bytes(chunk_data)
+
+            for match in compiled_pattern.finditer(data_bytes):
+                offset = match.start()
+                # Same clamping rule as iter_search_results: matches in the
+                # overlap belong to the *next* chunk's emission slot.
+                if offset >= chunk_size:
+                    continue
+                found_address = chunk_address + offset
+
+                if progress_information:
+                    yield (
+                        found_address,
+                        {
+                            "memory_total": memory_total,
+                            "progress": (
+                                checked_memory_size + chunk_offset + offset
+                            )
+                            / memory_total,
+                        },
+                    )
+                else:
+                    yield found_address
+
+        checked_memory_size += size
+
+
+__all__ = (
+    "iter_pattern_results",
+    "iter_search_results",
+    "iter_values_for_addresses",
+)

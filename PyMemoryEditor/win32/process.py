@@ -8,13 +8,16 @@ from ..util import resolve_bufflength
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
+from ..process.thread_info import ThreadInfo
 from .enums import ProcessOperationsEnum
 
 from .functions import (
     CloseProcessHandle,
     GetMemoryRegions,
     GetProcessHandle,
+    GetThreads,
     ReadProcessMemory,
+    SearchAddressesByPattern,
     SearchAddressesByValue,
     SearchValuesByAddresses,
     WriteProcessMemory,
@@ -78,6 +81,7 @@ class WindowsProcess(AbstractProcess):
         pid: Optional[int] = None,
         permission: Union[ProcessOperationsEnum, int] = DEFAULT_PERMISSION,
         case_sensitive: bool = False,
+        exact_match: bool = True,
     ):
         """
         :param process_name: name of the target process.
@@ -90,11 +94,14 @@ class WindowsProcess(AbstractProcess):
             a read-only handle, or pass PROCESS_ALL_ACCESS for full control.
         :param case_sensitive: when False (default on Windows), process_name
             matching ignores case to align with the OS convention.
+        :param exact_match: when False, ``process_name`` is matched as a
+            substring (e.g. ``"chrome"`` finds ``"chrome.exe"``).
         """
         super().__init__(
             process_name=process_name,
             pid=pid,
             case_sensitive=case_sensitive,
+            exact_match=exact_match,
         )
         self.__closed = False
 
@@ -150,6 +157,11 @@ class WindowsProcess(AbstractProcess):
         self.__require_open()
         return GetMemoryRegions(self.__process_handle)
 
+    def get_threads(self) -> Generator[ThreadInfo, None, None]:
+        self.__require_open()
+        # Toolhelp32 takes a PID, not a handle — no PROCESS_* right needed.
+        return GetThreads(self.pid)
+
     def search_by_addresses(
         self,
         pytype: Type[T],
@@ -197,6 +209,24 @@ class WindowsProcess(AbstractProcess):
             scan_type,
             progress_information,
             writeable_only,
+            memory_regions=memory_regions,
+        )
+
+    def search_by_pattern(
+        self,
+        pattern,
+        *,
+        byte_length: int = 0,
+        progress_information: bool = False,
+        memory_regions: Optional[Sequence[Dict]] = None,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        self.__require_open()
+        self.__require_read()
+        return SearchAddressesByPattern(
+            self.__process_handle,
+            pattern,
+            byte_length=byte_length,
+            progress_information=progress_information,
             memory_regions=memory_regions,
         )
 

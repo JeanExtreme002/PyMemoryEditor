@@ -8,6 +8,7 @@ from .convert import (
     value_to_bytes,
     values_to_bytes,
 )
+from .pattern import PatternLike, compile_pattern
 from .scan import (
     DEFAULT_MAX_REGION_CHUNK,
     iter_region_chunks,

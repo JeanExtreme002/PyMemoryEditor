@@ -107,6 +107,29 @@ libsystem.mach_vm_protect.restype = kern_return_t
 libsystem.mach_port_deallocate.argtypes = (mach_port_t, mach_port_t)
 libsystem.mach_port_deallocate.restype = kern_return_t
 
+# kern_return_t task_threads(
+#     task_inspect_t           target_task,
+#     thread_act_array_t      *act_list,         /* out: kernel-allocated array of thread ports */
+#     mach_msg_type_number_t  *act_listCnt);
+libsystem.task_threads.argtypes = (
+    task_t,
+    POINTER(POINTER(mach_port_t)),
+    POINTER(mach_msg_type_number_t),
+)
+libsystem.task_threads.restype = kern_return_t
+
+# kern_return_t vm_deallocate(
+#     vm_map_t   target_task,
+#     vm_address_t address,
+#     vm_size_t  size);
+# Used to free the thread_act_array_t returned by task_threads.
+libsystem.vm_deallocate.argtypes = (
+    vm_map_t,
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+)
+libsystem.vm_deallocate.restype = kern_return_t
+
 
 # struct rusage_info_v0 — first slice of rusage_info_t. ri_phys_footprint is
 # the number Activity Monitor's "Memory" column shows (anonymous + compressed

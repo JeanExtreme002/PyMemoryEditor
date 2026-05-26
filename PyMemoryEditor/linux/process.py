@@ -7,9 +7,12 @@ from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
 from ..util import resolve_bufflength
+from ..process.thread_info import ThreadInfo
 from .functions import (
     get_memory_regions,
+    get_threads,
     read_process_memory,
+    search_addresses_by_pattern,
     search_addresses_by_value,
     search_values_by_addresses,
     write_process_memory,
@@ -31,6 +34,7 @@ class LinuxProcess(AbstractProcess):
         pid: Optional[int] = None,
         permission=None,
         case_sensitive: bool = True,
+        exact_match: bool = True,
     ):
         """
         :param process_name: name of the target process.
@@ -41,11 +45,14 @@ class LinuxProcess(AbstractProcess):
             mask doesn't disappear silently here — pass ``None`` (or omit) on
             non-Windows platforms.
         :param case_sensitive: when False, process_name matching ignores case.
+        :param exact_match: when False, ``process_name`` is matched as a
+            substring (e.g. ``"chrome"`` finds ``"chromium-browser"``).
         """
         super().__init__(
             process_name=process_name,
             pid=pid,
             case_sensitive=case_sensitive,
+            exact_match=exact_match,
         )
         self.__closed = False
 
@@ -72,6 +79,10 @@ class LinuxProcess(AbstractProcess):
     def get_memory_regions(self) -> Generator[dict, None, None]:
         self.__require_open()
         return get_memory_regions(self.pid)
+
+    def get_threads(self) -> Generator[ThreadInfo, None, None]:
+        self.__require_open()
+        return get_threads(self.pid)
 
     def read_process_memory(
         self,
@@ -129,6 +140,23 @@ class LinuxProcess(AbstractProcess):
             scan_type,
             progress_information,
             writeable_only,
+            memory_regions=memory_regions,
+        )
+
+    def search_by_pattern(
+        self,
+        pattern,
+        *,
+        byte_length: int = 0,
+        progress_information: bool = False,
+        memory_regions: Optional[Sequence[Dict]] = None,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        self.__require_open()
+        return search_addresses_by_pattern(
+            self.pid,
+            pattern,
+            byte_length=byte_length,
+            progress_information=progress_information,
             memory_regions=memory_regions,
         )
 

@@ -23,6 +23,8 @@ reading, writing and searching values in the process memory.
 <p align="center">
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-usage-guide">Usage Guide</a> ·
+  <a href="#-pattern-scan-aob--find-code-or-data-by-signature">Pattern Scan</a> ·
+  <a href="#-pointer-chains--survive-a-process-restart">Pointer Chains</a> ·
   <a href="#platform-notes">Platform Notes</a> ·
   <a href="#-bonus-the-pymemoryeditor-app">The App</a> ·
   <a href="#-contributing">Contributing</a>
@@ -41,6 +43,8 @@ reading, writing and searching values in the process memory.
 | **Read & write memory** | Change live values on the fly — just like Cheat Engine, but in a few lines of Python. |
 | **Pure-Python via `ctypes`** | No compilation, no native wheels — `pip install` and you're done. |
 | **Scan modes** | Exact, not-exact, bigger / smaller (±equal), in-range, out-of-range. |
+| **Pattern scan (AOB)** | Find code or data by byte signature with `?` wildcards — IDA / Cheat-Engine style. |
+| **Pointer chains** | Walk multi-level pointers (`[[base+0x10]+0x20]+0x30`) in one call. |
 | **Snapshot caching** | The Cheat-Engine "scan → refine → refine" loop, accelerated. |
 | **Bundled GUI app** | A full memory scanner ships in the box — just type `pymemoryeditor`. |
 
@@ -213,6 +217,37 @@ target owns:
 for region in process.get_memory_regions():
     print(hex(region["address"]), region["size"], region["struct"])
 ```
+
+### 🎯 Pattern scan (AOB) — find code or data by signature
+
+When addresses move between builds, **byte patterns don't**. Drop in an IDA-style
+hex string with `?` wildcards and PyMemoryEditor will find every match — the same
+trick Cheat Engine, IDA and Ghidra use to anchor onto a moving target.
+
+```python
+for address in process.search_by_pattern("48 8B ? ? 00 00 89 ?"):
+    print(f"Match at 0x{address:X}")
+```
+
+Prefer a raw bytes regex? Pass it through — just tell us how many bytes one
+match consumes:
+
+```python
+process.search_by_pattern(rb"\x48\x8B..\x00\x00", byte_length=6)
+```
+
+### 🔗 Pointer chains — survive a process restart
+
+Cheat Engine cheat tables describe pointers as `module + offset → [+x] → [+y] → …`.
+Walk the whole chain in one line, then read or write the final address as usual:
+
+```python
+# "game.exe"+0x10F4F4 -> [+0x0] -> [+0x158]   (HP, from a cheat-table dump)
+hp_address = process.resolve_pointer_chain(base + 0x10F4F4, [0x0, 0x158])
+hp = process.read_process_memory(hp_address, int, 4)
+```
+
+`ptr_size=4` for 32-bit targets, `ptr_size=8` (default) for 64-bit.
 
 ---
 

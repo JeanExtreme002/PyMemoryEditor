@@ -61,3 +61,21 @@ MEMORY_BASIC_INFORMATION = (
     if sizeof(c_void_p) == 8
     else MEMORY_BASIC_INFORMATION_32
 )
+
+
+# TH32CS_SNAPTHREAD flag for CreateToolhelp32Snapshot — used by get_threads().
+TH32CS_SNAPTHREAD = 0x00000004
+
+
+class THREADENTRY32(Structure):
+    """Layout matching the Win32 ``THREADENTRY32`` returned by Thread32First/Next."""
+
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ThreadID", wintypes.DWORD),
+        ("th32OwnerProcessID", wintypes.DWORD),
+        ("tpBasePri", wintypes.LONG),
+        ("tpDeltaPri", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+    ]
