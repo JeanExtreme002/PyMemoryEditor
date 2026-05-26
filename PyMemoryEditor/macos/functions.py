@@ -6,18 +6,25 @@ linux/functions.py and win32/functions.py.
 """
 
 import ctypes
+import logging
 import os
 import warnings
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.region import enrich_region
-from ..process.scanning import iter_search_results, iter_values_for_addresses
+from ..process.scanning import (
+    iter_pattern_results,
+    iter_search_results,
+    iter_values_for_addresses,
+)
+from ..process.thread_info import ThreadInfo
 from ..util import (
     _validate_pytype,
     get_c_type_of,
     values_to_bytes,
 )
+from ..util.pattern import PatternLike, compile_pattern
 
 from .libsystem import libsystem, mach_error_message, mach_task_self_
 from .types import (
@@ -45,6 +52,9 @@ from .types import (
 # macOS returns it (instead of KERN_PROTECTION_FAILURE) when mach_vm_write
 # refuses a write to a non-writable page even though the address is valid.
 _WRITE_RETRY_CODES = (KERN_PROTECTION_FAILURE, KERN_INVALID_ADDRESS)
+
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 
 T = TypeVar("T")
@@ -251,7 +261,7 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
             task, address, size, 0, original_protection
         )
         if restore_kr != KERN_SUCCESS:
-            warnings.warn(
+            message = (
                 "mach_vm_protect could not restore the original protection "
                 "(0x%x) on the target page at 0x%x after a write-via-protect-flip; "
                 "the page is left more permissive than before (kr=%d, %s)."
@@ -260,10 +270,10 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
                     address,
                     restore_kr,
                     mach_error_message(restore_kr),
-                ),
-                ResourceWarning,
-                stacklevel=2,
+                )
             )
+            _logger.warning(message)
+            warnings.warn(message, ResourceWarning, stacklevel=2)
 
 
 def _query_region(task: int, address: int):
@@ -396,6 +406,91 @@ def search_addresses_by_value(
         bufflength,
         target_value_bytes,
         scan_type,
+        read_chunk,
+        progress_information=progress_information,
+        transient_error_check=is_transient,
+    )
+
+
+def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
+    """
+    Yield a :class:`ThreadInfo` for every thread of the target task using
+    Mach's ``task_threads``.
+
+    .. note::
+       ``tid`` here is the **Mach thread port name**, not the BSD/POSIX
+       pthread id. Looking up the POSIX tid would require an extra
+       ``thread_info(THREAD_IDENTIFIER_INFO)`` call per thread; the Mach port
+       is sufficient for any further Mach-level operation and is what the
+       kernel hands us cheaply.
+    """
+    thread_list = ctypes.POINTER(ctypes.c_uint)()
+    count = ctypes.c_uint(0)
+
+    kr = libsystem.task_threads(task, ctypes.byref(thread_list), ctypes.byref(count))
+    if kr != KERN_SUCCESS:
+        raise OSError(
+            "task_threads failed: %s (kr=%d)" % (mach_error_message(kr), kr)
+        )
+
+    try:
+        for index in range(count.value):
+            yield ThreadInfo(
+                tid=int(thread_list[index]),
+                start_address=None,
+                state=None,
+                priority=None,
+                raw=int(thread_list[index]),
+            )
+    finally:
+        # The kernel out-allocates ``thread_list`` in the caller's address
+        # space; freeing it back is the caller's responsibility, otherwise we
+        # leak VM in *our own* task each enumeration. The deallocation size is
+        # ``count * sizeof(mach_port_t)``.
+        if count.value:
+            libsystem.vm_deallocate(
+                mach_task_self_.value,
+                ctypes.cast(thread_list, ctypes.c_void_p),
+                count.value * ctypes.sizeof(ctypes.c_uint),
+            )
+
+
+def search_addresses_by_pattern(
+    task: int,
+    pattern: PatternLike,
+    *,
+    byte_length: int = 0,
+    progress_information: bool = False,
+    memory_regions: Optional[Sequence[Dict]] = None,
+) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+    """
+    AOB scan against every readable region of the target task. See
+    :meth:`AbstractProcess.search_by_pattern`.
+    """
+    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+
+    source_regions = (
+        memory_regions if memory_regions is not None else get_memory_regions(task)
+    )
+
+    def is_scannable(region) -> bool:
+        return (region["struct"].Protection & VM_PROT_READ) != 0
+
+    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions.sort(key=lambda region: region["address"])
+
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _mach_read(task, address, ctypes.addressof(buffer), size)
+        return buffer
+
+    def is_transient(exc: BaseException) -> bool:
+        return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
+
+    yield from iter_pattern_results(
+        filtered_regions,
+        compiled,
+        length,
         read_chunk,
         progress_information=progress_information,
         transient_error_check=is_transient,

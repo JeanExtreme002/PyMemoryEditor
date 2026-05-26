@@ -5,6 +5,7 @@ Hex viewer over ``process.read_process_memory(addr, bytes, length)``.
 Polls the chosen address range at a configurable interval (Cheat Engine-style
 "auto-refresh") so the user can watch values change live.
 """
+import logging
 from typing import Optional
 
 from PySide6.QtCore import QTimer
@@ -25,6 +26,10 @@ from PyMemoryEditor import AbstractProcess
 
 from ._widgets import parse_hex_address
 
+
+# Child of the "PyMemoryEditor" logger, so the Log Console (which attaches a
+# handler to "PyMemoryEditor") picks these up via propagation.
+_LOG = logging.getLogger(__name__)
 
 _BYTES_PER_LINE = 16
 
@@ -153,6 +158,13 @@ class MemoryViewerDialog(QDialog):
         except Exception as exc:  # noqa: BLE001 — surface every backend error
             self._dump.setPlainText("")
             self._status.setText(f"Read failed: {type(exc).__name__}: {exc}")
+            _LOG.warning(
+                "Hex viewer read failed at 0x%X (%d bytes): %s: %s",
+                addr,
+                size,
+                type(exc).__name__,
+                exc,
+            )
             return
 
         if not isinstance(data, (bytes, bytearray)):
@@ -201,6 +213,13 @@ class MemoryViewerDialog(QDialog):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(
                 self, "Memory Viewer", f"Write failed:\n\n{type(exc).__name__}: {exc}"
+            )
+            _LOG.warning(
+                "Hex viewer write failed at 0x%X (%d bytes): %s: %s",
+                addr,
+                len(data),
+                type(exc).__name__,
+                exc,
             )
             return
         self._status.setText(f"Wrote {len(data)} bytes to 0x{addr:X}.")

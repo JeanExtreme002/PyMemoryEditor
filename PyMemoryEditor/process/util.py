@@ -8,13 +8,20 @@ from .errors import AmbiguousProcessNameError
 
 
 def get_process_ids_by_process_name(
-    process_name: str, *, case_sensitive: bool = True
+    process_name: str,
+    *,
+    case_sensitive: bool = True,
+    exact_match: bool = True,
 ) -> List[int]:
     """
     Return a list of all process IDs matching the provided name.
 
     :param process_name: process name to search.
     :param case_sensitive: when False, comparison ignores case (useful on Windows).
+    :param exact_match: when False, returns every process whose name *contains*
+        ``process_name`` as a substring — handy when you don't know the exact
+        executable name (``"chrome"`` matches ``"chrome.exe"``, ``"Google Chrome"``,
+        ``"Chromium"``, ...). Often combined with ``case_sensitive=False``.
     """
     if not case_sensitive:
         process_name_cmp = process_name.casefold()
@@ -29,14 +36,24 @@ def get_process_ids_by_process_name(
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-        if (name if case_sensitive else name.casefold()) == process_name_cmp:
+        name_cmp = name if case_sensitive else name.casefold()
+
+        if exact_match:
+            hit = name_cmp == process_name_cmp
+        else:
+            hit = process_name_cmp in name_cmp
+
+        if hit:
             matches.append(process.info["pid"])
 
     return matches
 
 
 def get_process_id_by_process_name(
-    process_name: str, *, case_sensitive: bool = True
+    process_name: str,
+    *,
+    case_sensitive: bool = True,
+    exact_match: bool = True,
 ) -> Optional[int]:
     """
     Return the PID of the process matching the provided name.
@@ -45,7 +62,9 @@ def get_process_id_by_process_name(
     Returns None when no process matches (callers should handle this).
     """
     matches = get_process_ids_by_process_name(
-        process_name, case_sensitive=case_sensitive
+        process_name,
+        case_sensitive=case_sensitive,
+        exact_match=exact_match,
     )
 
     if len(matches) > 1:

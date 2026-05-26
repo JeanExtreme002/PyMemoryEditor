@@ -8,20 +8,30 @@
 
 import ctypes
 import errno as errno_mod
+import logging
 import os
 from ctypes import addressof, sizeof
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.region import enrich_region
-from ..process.scanning import iter_search_results, iter_values_for_addresses
+from ..process.scanning import (
+    iter_pattern_results,
+    iter_search_results,
+    iter_values_for_addresses,
+)
+from ..process.thread_info import ThreadInfo
 from ..util import (
     _validate_pytype,
     get_c_type_of,
     values_to_bytes,
 )
+from ..util.pattern import PatternLike, compile_pattern
 from .libc import libc
 from .types import MEMORY_BASIC_INFORMATION, PATH_SIZE, PRIVILEGES_SIZE, iovec
+
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 
 T = TypeVar("T")
@@ -243,6 +253,57 @@ def search_addresses_by_value(
     )
 
 
+def search_addresses_by_pattern(
+    pid: int,
+    pattern: PatternLike,
+    *,
+    byte_length: int = 0,
+    progress_information: bool = False,
+    memory_regions: Optional[Sequence[Dict]] = None,
+) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+    """
+    AOB scan against every readable, non-shared region of the target. See
+    :meth:`AbstractProcess.search_by_pattern`.
+    """
+    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+
+    source_regions = (
+        memory_regions if memory_regions is not None else get_memory_regions(pid)
+    )
+
+    def is_scannable(region) -> bool:
+        privileges = region["struct"].Privileges
+        if b"r" not in privileges:
+            return False
+        # Mirror search_addresses_by_value: skip shared mappings (libc text
+        # etc.) — they bloat scans with noise.
+        if b"s" in privileges:
+            return False
+        return True
+
+    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions.sort(key=lambda region: region["address"])
+
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
+        return buffer
+
+    def is_transient(exc: BaseException) -> bool:
+        if isinstance(exc, _LinuxPartialIOError):
+            return True
+        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
+
+    yield from iter_pattern_results(
+        filtered_regions,
+        compiled,
+        length,
+        read_chunk,
+        progress_information=progress_information,
+        transient_error_check=is_transient,
+    )
+
+
 def search_values_by_addresses(
     pid: int,
     pytype: Type[T],
@@ -315,3 +376,63 @@ def write_process_memory(
 
     _process_vm_writev(pid, addressof(data), address, sizeof(data))
     return value
+
+
+def get_threads(pid: int) -> Generator[ThreadInfo, None, None]:
+    """
+    Yield a :class:`ThreadInfo` for every thread of the target process by
+    listing ``/proc/<pid>/task/`` — each subdirectory there is a TID.
+
+    State and priority come from ``/proc/<pid>/task/<tid>/stat`` when readable;
+    silent on permission/race errors (a thread may exit between listing the
+    directory and reading its stat file) but logged at DEBUG so observers can
+    see it.
+    """
+    task_dir = "/proc/{}/task".format(pid)
+
+    try:
+        entries = os.listdir(task_dir)
+    except OSError as exc:
+        _logger.debug("get_threads: could not list %s: %s", task_dir, exc)
+        return
+
+    for entry in entries:
+        try:
+            tid = int(entry)
+        except ValueError:
+            continue
+
+        state: Optional[str] = None
+        priority: Optional[int] = None
+        try:
+            with open("{}/{}/stat".format(task_dir, entry), "r") as fh:
+                raw_stat = fh.read()
+            # /proc/<pid>/task/<tid>/stat layout (man 5 proc):
+            #   pid (comm) state ppid pgrp session tty_nr tpgid flags minflt
+            #   cminflt majflt cmajflt utime stime cutime cstime priority ...
+            # ``comm`` is wrapped in parens and *may itself contain whitespace
+            # or parentheses*, so the only safe split point is the last ')'.
+            close_paren = raw_stat.rfind(")")
+            if close_paren != -1:
+                rest = raw_stat[close_paren + 1 :].split()
+                # rest[0] = state, rest[15] = priority (field 18 in the man
+                # page, with the first two fields already consumed).
+                if rest:
+                    state = rest[0]
+                if len(rest) > 15:
+                    try:
+                        priority = int(rest[15])
+                    except ValueError:
+                        priority = None
+        except OSError as exc:
+            _logger.debug(
+                "get_threads: could not read stat for tid=%s: %s", entry, exc
+            )
+
+        yield ThreadInfo(
+            tid=tid,
+            start_address=None,
+            state=state,
+            priority=priority,
+            raw=entry,
+        )

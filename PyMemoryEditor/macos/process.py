@@ -6,13 +6,16 @@ from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Un
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
+from ..process.thread_info import ThreadInfo
 from ..util import resolve_bufflength
 
 from .functions import (
     get_memory_regions,
     get_task_for_pid,
+    get_threads,
     read_process_memory,
     release_task,
+    search_addresses_by_pattern,
     search_addresses_by_value,
     search_values_by_addresses,
     write_process_memory,
@@ -39,6 +42,7 @@ class MacProcess(AbstractProcess):
         pid: Optional[int] = None,
         permission=None,
         case_sensitive: bool = True,
+        exact_match: bool = True,
     ):
         """
         :param process_name: name of the target process.
@@ -49,11 +53,14 @@ class MacProcess(AbstractProcess):
             mask doesn't disappear silently here — pass ``None`` (or omit) on
             non-Windows platforms.
         :param case_sensitive: when False, process_name matching ignores case.
+        :param exact_match: when False, ``process_name`` is matched as a
+            substring (e.g. ``"chrome"`` finds ``"Google Chrome"``).
         """
         super().__init__(
             process_name=process_name,
             pid=pid,
             case_sensitive=case_sensitive,
+            exact_match=exact_match,
         )
 
         # `permission` is accepted for cross-platform parity but has no effect
@@ -112,6 +119,10 @@ class MacProcess(AbstractProcess):
         self.__require_open()
         return get_memory_regions(self.__task)
 
+    def get_threads(self) -> Generator[ThreadInfo, None, None]:
+        self.__require_open()
+        return get_threads(self.__task)
+
     def search_by_addresses(
         self,
         pytype: Type[T],
@@ -157,6 +168,23 @@ class MacProcess(AbstractProcess):
             scan_type,
             progress_information,
             writeable_only,
+            memory_regions=memory_regions,
+        )
+
+    def search_by_pattern(
+        self,
+        pattern,
+        *,
+        byte_length: int = 0,
+        progress_information: bool = False,
+        memory_regions: Optional[Sequence[Dict]] = None,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        self.__require_open()
+        return search_addresses_by_pattern(
+            self.__task,
+            pattern,
+            byte_length=byte_length,
+            progress_information=progress_information,
             memory_regions=memory_regions,
         )
 

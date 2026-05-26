@@ -100,6 +100,11 @@ packages = ["PyMemoryEditor"]
 "PyMemoryEditor/py.typed" = "PyMemoryEditor/py.typed"
 "PyMemoryEditor/app/assets/icon.svg" = "PyMemoryEditor/app/assets/icon.svg"
 
+# Maintainer-only tooling lives under scripts/ — keep it out of the source
+# distribution (the wheel already only ships the PyMemoryEditor package).
+[tool.hatch.build.targets.sdist]
+exclude = ["scripts"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

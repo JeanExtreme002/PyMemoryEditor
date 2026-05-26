@@ -16,6 +16,7 @@ Layout:
     +------------------------------------------------------------+
 """
 import json
+import logging
 import sys
 from typing import List, Optional, Union
 
@@ -46,13 +47,20 @@ from PyMemoryEditor import AbstractProcess, __version__
 
 from ._icon import app_icon
 from .application import DEFAULT_THEME_ID, THEMES, apply_theme
+from .cheat_entry import CheatEntry
 from .cheat_table import CheatTable
+from .log_console_dialog import LogConsoleDialog
 from .memory_map_dialog import MemoryMapDialog
 from .memory_viewer_dialog import MemoryViewerDialog
+from .pointer_chain_dialog import PointerChainDialog
 from .results_view import ResultsModel, ResultsView
 from .scan_worker import FirstScanWorker, RefineScanWorker, ScanRequest
 from .scanner_panel import ScannerPanel
+from .threads_dialog import ThreadsDialog
 
+
+# Child of "PyMemoryEditor" — the Log Console captures these via propagation.
+_LOG = logging.getLogger(__name__)
 
 # Cadence at which we poll psutil to check the target process is still alive.
 # 2 s is brisk enough that a dead target's cleanup happens before the user
@@ -79,6 +87,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self._window_title())
         self.setWindowIcon(app_icon())
         self.resize(1280, 780)
+
+        # Lazy slots for the new dialogs — instantiated on first open,
+        # cached so subsequent opens reuse the same window (matches the
+        # behavior of the existing memory_map dialog).
+        self._threads_dialog: Optional[ThreadsDialog] = None
+        self._pointer_chain_dialog: Optional[PointerChainDialog] = None
+        self._log_console_dialog: Optional[LogConsoleDialog] = None
 
         self._build_ui()
 
@@ -221,6 +236,23 @@ class MainWindow(QMainWindow):
         hex_viewer_action.triggered.connect(lambda: self._open_hex_viewer(0))
         tools_menu.addAction(hex_viewer_action)
 
+        threads_action = QAction("Threads…", self)
+        threads_action.setShortcut(QKeySequence("Ctrl+T"))
+        threads_action.triggered.connect(self._open_threads_dialog)
+        tools_menu.addAction(threads_action)
+
+        pointer_chain_action = QAction("Resolve Pointer Chain…", self)
+        pointer_chain_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        pointer_chain_action.triggered.connect(self._open_pointer_chain_dialog)
+        tools_menu.addAction(pointer_chain_action)
+
+        tools_menu.addSeparator()
+
+        log_console_action = QAction("Log Console…", self)
+        log_console_action.setShortcut(QKeySequence("Ctrl+L"))
+        log_console_action.triggered.connect(self._open_log_console)
+        tools_menu.addAction(log_console_action)
+
         refresh_snapshot = QAction("Refresh Region Snapshot", self)
         refresh_snapshot.triggered.connect(self._refresh_region_snapshot)
         tools_menu.addAction(refresh_snapshot)
@@ -234,6 +266,7 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         toolbar.addAction(memory_map_action)
         toolbar.addAction(hex_viewer_action)
+        toolbar.addAction(pointer_chain_action)
         toolbar.addSeparator()
         toolbar.addAction(export_results)
 
@@ -401,6 +434,14 @@ class MainWindow(QMainWindow):
         # Don't recurse into another scan if the user has already triggered one.
         if self._worker is not None:
             return
+        # AOB pattern matches don't have a "current value" the way a numeric
+        # scan does — read_process_memory with the spec's (bytes, length=0)
+        # would error, and even with a non-zero length the bytes are the same
+        # ones the pattern already located. Skip the auto-refresh and leave
+        # the value column empty — the user can promote rows to the cheat
+        # table for a live preview there.
+        if request.spec.is_pattern:
+            return
         self._on_update_values(request)
 
     def _on_new_scan(self) -> None:
@@ -439,6 +480,7 @@ class MainWindow(QMainWindow):
         self._scanner.set_has_results(self._results_model.count() > 0)
 
     def _on_worker_error(self, message: str) -> None:
+        _LOG.error("Scan worker error: %s", message)
         QMessageBox.critical(self, "Scan error", message)
         self._status.showMessage(message)
 
@@ -475,6 +517,63 @@ class MainWindow(QMainWindow):
             if snap:
                 self._region_snapshot = snap
         self._memory_map = None
+
+    def _open_threads_dialog(self) -> None:
+        if self._threads_dialog is None:
+            self._threads_dialog = ThreadsDialog(self._process, self)
+            self._threads_dialog.finished.connect(self._on_threads_dialog_closed)
+        else:
+            self._threads_dialog.refresh()
+        self._threads_dialog.show()
+        self._threads_dialog.raise_()
+        self._threads_dialog.activateWindow()
+
+    def _on_threads_dialog_closed(self, _result: int) -> None:
+        self._threads_dialog = None
+
+    def _open_pointer_chain_dialog(self) -> None:
+        if self._pointer_chain_dialog is None:
+            self._pointer_chain_dialog = PointerChainDialog(self._process, self)
+            self._pointer_chain_dialog.add_to_cheat_table.connect(
+                self._on_pointer_chain_promote
+            )
+            self._pointer_chain_dialog.finished.connect(
+                self._on_pointer_chain_dialog_closed
+            )
+        self._pointer_chain_dialog.show()
+        self._pointer_chain_dialog.raise_()
+        self._pointer_chain_dialog.activateWindow()
+
+    def _on_pointer_chain_dialog_closed(self, _result: int) -> None:
+        self._pointer_chain_dialog = None
+
+    def _on_pointer_chain_promote(
+        self, address: int, spec_label: str, length: int
+    ) -> None:
+        """Promote a resolved pointer-chain address into the cheat table."""
+        entry = CheatEntry(
+            description="",
+            address=int(address),
+            spec_label=spec_label,
+            length=int(length),
+        )
+        self._cheat.add_entry(entry)
+        self._status.showMessage(
+            f"Added 0x{address:X} to cheat table (from pointer chain)."
+        )
+
+    def _open_log_console(self) -> None:
+        if self._log_console_dialog is None:
+            self._log_console_dialog = LogConsoleDialog(self)
+            self._log_console_dialog.finished.connect(
+                self._on_log_console_closed
+            )
+        self._log_console_dialog.show()
+        self._log_console_dialog.raise_()
+        self._log_console_dialog.activateWindow()
+
+    def _on_log_console_closed(self, _result: int) -> None:
+        self._log_console_dialog = None
 
     def _open_hex_viewer(self, address: int) -> None:
         self._open_hex_viewer_with_size(address, 256)
@@ -603,6 +702,17 @@ class MainWindow(QMainWindow):
         self._region_snapshot = None
         self._results_model.clear()
         self._scanner.set_has_results(False)
+
+        # Tear down auxiliary dialogs that hold a reference to the old
+        # process — reopening them rebuilds against the new target.
+        for dialog_attr in (
+            "_threads_dialog",
+            "_pointer_chain_dialog",
+        ):
+            existing = getattr(self, dialog_attr, None)
+            if existing is not None:
+                existing.close()
+                setattr(self, dialog_attr, None)
         # Replace the cheat table — old entries point at the previous process.
         # QSplitter has no QLayout, so we use its native replaceWidget(index).
         old_cheat = self._cheat

@@ -10,6 +10,7 @@ Supported platforms: Windows, Linux and macOS (32-bit and 64-bit).
 __author__ = "Jean Loui Bernard Silva de Jesus"
 __version__ = "2.0.0"
 
+import logging
 import sys
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,16 @@ from .process.errors import (
     ProcessNotFoundError,
     PyMemoryEditorError,
 )
+from .process.thread_info import ThreadInfo
+
+
+# Package-wide logger. Silent by default (NullHandler) — embedding apps opt in
+# with `logging.basicConfig(level=logging.DEBUG)` or by attaching a handler to
+# the "PyMemoryEditor" logger. Backends emit DEBUG for transient skips (pages
+# vanished mid-scan) and WARNING for surprising-but-recovered conditions
+# (partial reads, mach_vm_protect restore failure).
+logger = logging.getLogger("PyMemoryEditor")
+logger.addHandler(logging.NullHandler())
 
 
 if sys.platform == "win32":
@@ -75,6 +86,8 @@ __all__ = (
     "ProcessNotFoundError",
     "PyMemoryEditorError",
     "ScanTypesEnum",
+    "ThreadInfo",
     "__author__",
     "__version__",
+    "logger",
 ) + _PLATFORM_EXPORTS

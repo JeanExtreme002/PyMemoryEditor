@@ -39,10 +39,16 @@ class ProcessInfo(object):
         self.set_process_name(process_name)
 
     def set_process_name(
-        self, process_name: str, *, case_sensitive: bool = True
+        self,
+        process_name: str,
+        *,
+        case_sensitive: bool = True,
+        exact_match: bool = True,
     ) -> None:
         pid = get_process_id_by_process_name(
-            process_name, case_sensitive=case_sensitive
+            process_name,
+            case_sensitive=case_sensitive,
+            exact_match=exact_match,
         )
         if pid is None:
             raise ProcessNotFoundError(process_name)

@@ -187,21 +187,51 @@ class ScannerPanel(QWidget):
 
     def _refresh_buttons(self) -> None:
         scanning = self._busy
+        spec = find_spec(self._type_combo.currentText())
+        is_pattern = bool(spec and spec.is_pattern)
+
         self._first_scan_btn.setEnabled(not scanning and not self._has_results)
-        self._next_scan_btn.setEnabled(not scanning and self._has_results)
+        # "Next Scan" refines by re-checking the value at each address — that
+        # concept doesn't apply to a pattern (re-scanning the pattern would
+        # just re-emit the same addresses), so we hide that path in AOB mode.
+        self._next_scan_btn.setEnabled(
+            not scanning and self._has_results and not is_pattern
+        )
         self._update_btn.setEnabled(not scanning and self._has_results)
         self._new_scan_btn.setEnabled(self._has_results and not scanning)
         self._cancel_btn.setEnabled(scanning)
         self._type_combo.setEnabled(not scanning and not self._has_results)
-        self._scan_combo.setEnabled(not scanning)
+        # Scan-type combo is *always* disabled in pattern mode (forced to EXACT).
+        self._scan_combo.setEnabled(not scanning and not is_pattern)
         self._writable_check.setEnabled(not scanning and not self._has_results)
 
     def _on_type_changed(self, label: str) -> None:
         spec = find_spec(label)
         if spec is None:
             return
-        self._length_spin.setEnabled(spec.accepts_length_override)
-        if spec.accepts_length_override:
+
+        is_pattern = spec.is_pattern
+
+        # AOB pattern mode reuses the "Value" line for the pattern string and
+        # hides / forces the rest of the value-shape controls (length,
+        # second value, scan-type combo) because none of them apply to
+        # pattern matching.
+        self._length_spin.setEnabled(
+            spec.accepts_length_override and not is_pattern
+        )
+
+        if is_pattern:
+            self._value_edit.setPlaceholderText(
+                'e.g. "48 8B ? ? 00 00" (IDA-style hex with ? wildcards)'
+            )
+        else:
+            self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
+
+        if is_pattern:
+            # No meaningful length for an AOB pattern; the scanner derives it.
+            self._length_spin.setValue(1)
+            self._length_spin.setSuffix("  bytes")
+        elif spec.accepts_length_override:
             if spec.pytype is bytes:
                 self._length_spin.setValue(max(4, self._length_spin.value()))
                 self._length_spin.setSuffix("  bytes")
@@ -211,6 +241,23 @@ class ScannerPanel(QWidget):
         else:
             self._length_spin.setValue(spec.length)
             self._length_spin.setSuffix("  bytes")
+
+        # Force EXACT_VALUE on pattern mode and disable the scan-type combo
+        # (Bigger Than / Smaller Than / Between are meaningless for patterns).
+        if is_pattern:
+            for index, (_, scan_type) in enumerate(SCAN_TYPE_CHOICES):
+                if scan_type is ScanTypesEnum.EXACT_VALUE:
+                    self._scan_combo.setCurrentIndex(index)
+                    break
+            # Ranges + pattern don't mix — make sure the "second value" is
+            # hidden if a range type was selected before switching to pattern.
+            self._second_value_edit.hide()
+            self._second_value_label.hide()
+        self._scan_combo.setEnabled(not is_pattern and not self._busy)
+
+        # The pattern/non-pattern flag also drives Next-Scan availability, so
+        # let _refresh_buttons re-evaluate now that the type has flipped.
+        self._refresh_buttons()
 
     def _on_scan_type_changed(self, index: int) -> None:
         _, scan_type = SCAN_TYPE_CHOICES[index]
@@ -227,6 +274,23 @@ class ScannerPanel(QWidget):
             return None
 
         _, scan_type = SCAN_TYPE_CHOICES[self._scan_combo.currentIndex()]
+
+        # AOB pattern path — value is the pattern string, scan_type is always
+        # EXACT (the combo was forced + disabled by _on_type_changed), and
+        # length is irrelevant (the scanner derives it from the pattern).
+        if spec.is_pattern:
+            try:
+                value, length = parse_value(spec, self._value_edit.text())
+            except ValueError as exc:
+                QMessageBox.warning(self, "Invalid pattern", str(exc))
+                return None
+            return ScanRequest(
+                spec=spec,
+                length=int(length),
+                scan_type=ScanTypesEnum.EXACT_VALUE,
+                value=None if not with_value else value,
+                writeable_only=self._writable_check.isChecked(),
+            )
 
         length_override = (
             self._length_spin.value() if spec.accepts_length_override else None

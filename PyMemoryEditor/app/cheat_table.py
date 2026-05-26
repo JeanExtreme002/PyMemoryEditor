@@ -17,6 +17,7 @@ module before the split.
 """
 import copy
 import json
+import logging
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer
@@ -54,6 +55,9 @@ from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec, parse_value
 # Re-exported for backward compatibility with callers that imported the
 # poll-interval constant from this module before the split.
 _TICK_INTERVAL_MS = TICK_INTERVAL_MS
+
+# Child of "PyMemoryEditor" — the Log Console captures these via propagation.
+_LOG = logging.getLogger(__name__)
 
 
 class CheatTable(QWidget):
@@ -285,6 +289,14 @@ class CheatTable(QWidget):
             except Exception as exc:  # noqa: BLE001
                 QMessageBox.critical(
                     self, "Write Failed", f"{type(exc).__name__}: {exc}"
+                )
+                _LOG.warning(
+                    "Cheat-table write failed at 0x%X (%s, %dB): %s: %s",
+                    entry.address,
+                    entry.spec.pytype.__name__,
+                    entry.length,
+                    type(exc).__name__,
+                    exc,
                 )
                 return
 
