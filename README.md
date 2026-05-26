@@ -331,17 +331,12 @@ The app is a living demo of the library — it exercises every public surface (e
 
 **✨ What you get out of the box**
 
-- **Process picker** — list all running processes and pick by row, PID or name
-- **Live scanner** — eight scan modes, value-between ranges, typed inputs
-- **Pattern scan** — find code or data by byte signature or regex, right in the scanner
+- **Scanner** — eight scan modes, ranges, byte-signature or regex search
 - **Refine workflow** — *First Scan → Next Scan → Next Scan…* like Cheat Engine
-- **Value freezing** — pin a value so the target can't change it back
-- **Pointer chains** — resolve multi-level pointers and send the result to the cheat table
-- **Memory map** — every region of the target, with R/W/X flags
-- **Threads** — enumerate the target's threads, with live auto-refresh
-- **Hex viewer** — auto-refreshing dump, write bytes back
-- **Log console** — live view of the library's log output
-- **Import/export** cheat tables as JSON
+- **Cheat table** — freeze / write values, import/export as JSON
+- **Pointer chains** — resolve multi-level pointers
+- **Memory map** — regions with R/W/X flags
+- **Hex viewer** — live dump with write-back
 
 </td>
 <td width="50%" valign="top">
