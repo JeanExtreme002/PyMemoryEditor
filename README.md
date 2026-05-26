@@ -21,13 +21,21 @@ reading, writing and searching values in the process memory.
 </p>
 
 <p align="center">
+  Tweak a value in a running game · inspect a live program's state ·
+  harvest data straight from RAM — <b>on Windows, Linux and macOS</b>.
+</p>
+
+<p align="center">
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-usage-guide">Usage Guide</a> ·
-  <a href="#-pattern-scan--grep-for-process-memory">Pattern Scan</a> ·
-  <a href="#-pointer-chains--resolve-addresses-that-change-every-run">Pointer Chains</a> ·
+  <a href="#-troubleshooting">Troubleshooting</a> ·
   <a href="#platform-notes">Platform Notes</a> ·
   <a href="#-bonus-the-pymemoryeditor-app">The App</a> ·
   <a href="#-contributing">Contributing</a>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/JeanExtreme002/PyMemoryEditor/main/assets/screenshots/app.png" alt="PyMemoryEditor app attached to a running process" width="820" />
 </p>
 
 <p align="center">
@@ -89,6 +97,38 @@ Open a process by **process name** or **PID** — whichever you have:
 OpenProcess(process_name="notepad.exe")   # by process name
 OpenProcess(pid=1234)                     # by PID
 ```
+
+### How it works in practice
+
+You rarely know the address of a value up front — you **find it by scanning**.
+The typical loop is the same one Cheat Engine made famous:
+
+1. **Scan** for a value you can see (e.g. your health is `100`) — you get back
+   many candidate addresses.
+2. **Let the value change** in the target (you take damage → `95`).
+3. **Refine**: keep only the addresses that now hold the new value. Repeat until
+   one address remains — that's your value.
+4. **Read, write or freeze** it.
+
+```python
+with OpenProcess(process_name="game.exe") as process:
+    # 1. First scan — every address currently holding 100.
+    candidates = list(process.search_by_value(int, 4, 100))
+
+    # 3. After the value drops to 95 in-game, keep only the matches that agree.
+    survivors = [
+        address
+        for address, value in process.search_by_addresses(int, 4, candidates)
+        if value == 95
+    ]
+
+    # 4. Overwrite the survivors back to a high value.
+    for address in survivors:
+        process.write_process_memory(address, int, 4, 9999)
+```
+
+> For big targets, cache the region map once and reuse it across scans — see
+> [the refine-scan workflow](#the-refine-scan-workflow-recommended).
 
 ---
 
@@ -217,6 +257,23 @@ for region in process.get_memory_regions():
     print(hex(region["address"]), region["size"], region["struct"])
 ```
 
+### 🧵 Listing the process threads
+
+`get_threads()` yields a `ThreadInfo` for every thread running inside the
+target — useful for introspection (how many workers does it spawn? is the
+main thread still alive?). `main_thread` is a shortcut to the lowest-id one.
+
+```python
+for thread in process.get_threads():
+    print(thread.tid, thread.state, thread.priority)
+
+print("Main thread:", process.main_thread.tid)
+```
+
+> `tid` is the OS-native thread id (POSIX TID on Linux, thread id on Windows,
+> Mach port on macOS); `state` and `priority` are filled in where the platform
+> exposes them and are `None` otherwise.
+
 ### 🎯 Pattern scan — grep for process memory
 
 Pass a raw `bytes` regular expression and the scanner applies it directly to
@@ -321,10 +378,6 @@ $ pymemoryeditor
 
 The app is a living demo of the library — it exercises every public surface (every `ScanTypesEnum` mode, every value type, scanning, refining, freezing values, the hex viewer, the memory map). If you're learning the API, it's the fastest way to see what's possible.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/JeanExtreme002/PyMemoryEditor/main/assets/screenshots/app.png" alt="PyMemoryEditor app attached to a running process" width="820" />
-</p>
-
 <table>
 <tr>
 <td width="50%" valign="top">
@@ -368,6 +421,47 @@ Then launch the app by running `pymemoryeditor` from any terminal. The library i
 > [!NOTE]
 > **Responsible use.** PyMemoryEditor talks to other processes through OS-level APIs.
 > Only point it at processes you own or have explicit permission to inspect.
+
+---
+
+## 🛟 Troubleshooting
+
+<b>`PermissionError` when opening another process</b> — the OS is denying access.
+This is the most common first hurdle:
+- **Windows:** run your terminal **as Administrator** for protected targets.
+- **Linux:** run as root, or relax `ptrace_scope`
+  (`sudo sysctl kernel.yama.ptrace_scope=0`). Opening your own process always works.
+- **macOS:** the Python binary must be signed with the
+  `com.apple.security.cs.debugger` entitlement (or SIP off + root). Opening the
+  *current* process always works — great for trying things out.
+
+<b>`ProcessNotFoundError`</b> — the name didn't match. Names are case-sensitive by
+default; try `OpenProcess(process_name="chrome", exact_match=False, case_sensitive=False)`
+for a fuzzy match, or pass the `pid=` directly.
+
+<b>`AmbiguousProcessNameError`</b> — more than one process matches. Pick one from the
+listed PIDs and pass `pid=` instead.
+
+<b>A scan returns nothing on Windows</b> — region enumeration needs
+`PROCESS_QUERY_INFORMATION`, which the default permission already includes. If you
+passed a custom `permission=` mask, make sure that flag is in it.
+
+<b>Reading an address gives garbage or raises `OSError`</b> — the page may have been
+freed between scan and read (normal during a live scan), or the value type / size
+is wrong. Wrap one-off reads in `try/except OSError` and double-check the byte width.
+
+Need more detail? The library logs to a standard `logging` logger named
+`"PyMemoryEditor"` (silent by default). Turn it on to see exactly which pages
+the library skips during a scan and why:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("PyMemoryEditor").setLevel(logging.DEBUG)
+```
+
+> The bundled app exposes the same stream in its **Log Console** (Tools → Log Console).
 
 ---
 
