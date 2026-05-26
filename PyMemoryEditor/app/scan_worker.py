@@ -84,7 +84,18 @@ class FirstScanWorker(_BaseWorker):
     def run(self) -> None:
         req = self._request
         try:
-            if req.scan_type in (
+            # AOB pattern path: req.value is the IDA-style pattern string,
+            # routed through search_by_pattern. writeable_only doesn't apply
+            # (pattern scan filters by readability internally; restricting to
+            # writable-only would silently miss code-section signatures, which
+            # is the most common AOB use case).
+            if req.spec.is_pattern:
+                generator = self._process.search_by_pattern(
+                    req.value,
+                    progress_information=True,
+                    memory_regions=req.memory_regions,
+                )
+            elif req.scan_type in (
                 ScanTypesEnum.VALUE_BETWEEN,
                 ScanTypesEnum.NOT_VALUE_BETWEEN,
             ):
@@ -140,6 +151,7 @@ class FirstScanWorker(_BaseWorker):
             self.progress.emit(100.0)
             self.finished_ok.emit(count)
         except Exception as exc:  # noqa: BLE001 — surface every backend error to the UI
+            _LOG.warning("First scan failed: %s: %s", type(exc).__name__, exc)
             self.error.emit(f"{type(exc).__name__}: {exc}")
 
 
@@ -235,4 +247,5 @@ class RefineScanWorker(_BaseWorker):
             self.progress.emit(100.0)
             self.finished_ok.emit(kept)
         except Exception as exc:  # noqa: BLE001 — surface every backend error to the UI
+            _LOG.warning("Refine scan failed: %s: %s", type(exc).__name__, exc)
             self.error.emit(f"{type(exc).__name__}: {exc}")
