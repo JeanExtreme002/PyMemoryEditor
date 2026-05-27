@@ -70,7 +70,7 @@ def populate_results(window):
         model._values[i] = cur
     model.layoutChanged.emit()
 
-    window._results_label.setText(f"Found {len(rows)} addresses (showing all).")
+    window._results_label.setText(f"Found {len(rows)} addresses.")
     window._scanner.set_has_results(True)
 
 

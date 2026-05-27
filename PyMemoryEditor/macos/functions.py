@@ -37,6 +37,7 @@ from .types import (
     MEMORY_BASIC_INFORMATION,
     TASK_DYLD_INFO,
     TASK_DYLD_INFO_COUNT,
+    VM_FLAGS_ANYWHERE,
     VM_PROT_COPY,
     VM_PROT_READ,
     VM_PROT_WRITE,
@@ -358,6 +359,62 @@ def write_process_memory(
 
     _mach_write(task, address, ctypes.addressof(data), bufflength)
     return value
+
+
+def allocate_memory(task: int, size: int, permission=None) -> int:
+    """
+    Allocate ``size`` bytes in the task via mach_vm_allocate and return the
+    base address. The kernel chooses the address (VM_FLAGS_ANYWHERE) and the
+    region starts as read+write.
+
+    :param permission: optional VM_PROT_* bitmask. When given, the region's
+        protection is set with mach_vm_protect after allocation; on failure the
+        allocation is rolled back so it is not leaked. Requesting execute may be
+        refused by the hardened runtime (e.g. RWX on Apple Silicon).
+    """
+    if size <= 0:
+        raise ValueError("size must be a positive number of bytes.")
+
+    address = mach_vm_address_t(0)
+    kr = libsystem.mach_vm_allocate(
+        task, ctypes.byref(address), size, VM_FLAGS_ANYWHERE
+    )
+    if kr != KERN_SUCCESS:
+        raise OSError(
+            "mach_vm_allocate failed: %s (kr=%d)" % (mach_error_message(kr), kr)
+        )
+
+    if permission is not None:
+        kr = libsystem.mach_vm_protect(task, address.value, size, 0, int(permission))
+        if kr != KERN_SUCCESS:
+            # Don't leak the region we just created if we can't honor the
+            # requested protection.
+            libsystem.mach_vm_deallocate(task, address.value, size)
+            raise OSError(
+                "mach_vm_protect failed after allocate: %s (kr=%d)"
+                % (mach_error_message(kr), kr)
+            )
+
+    return int(address.value)
+
+
+def free_memory(task: int, address: int, size: int) -> bool:
+    """
+    Release a region previously returned by :func:`allocate_memory` via
+    mach_vm_deallocate. Unlike Windows' MEM_RELEASE, Mach requires the exact
+    size, so the caller must pass it (the process wrapper tracks it).
+    """
+    if size <= 0:
+        raise ValueError(
+            "macOS requires the allocation size to free a region (got %r)." % (size,)
+        )
+
+    kr = libsystem.mach_vm_deallocate(task, address, size)
+    if kr != KERN_SUCCESS:
+        raise OSError(
+            "mach_vm_deallocate failed: %s (kr=%d)" % (mach_error_message(kr), kr)
+        )
+    return True
 
 
 def search_addresses_by_value(

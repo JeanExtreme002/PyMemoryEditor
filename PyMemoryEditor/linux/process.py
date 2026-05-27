@@ -207,3 +207,21 @@ class LinuxProcess(AbstractProcess):
         return write_process_memory(
             self.pid, address, pytype, resolve_bufflength(pytype, bufflength), value
         )
+
+    def allocate_memory(self, size: int, *, permission=None) -> int:
+        self.__require_open()
+        raise NotImplementedError(
+            "allocate_memory is not supported on Linux: there is no syscall to "
+            "allocate memory in another process's address space (mmap only "
+            "affects the calling process). Doing so would require a ptrace-based "
+            "engine to make the target call mmap itself. Use the Windows or "
+            "macOS backend for cross-process allocation."
+        )
+
+    def free_memory(self, address: int, size: int = 0) -> bool:
+        self.__require_open()
+        raise NotImplementedError(
+            "free_memory is not supported on Linux (see allocate_memory): "
+            "releasing memory in another process would require a ptrace-based "
+            "engine to make the target call munmap itself."
+        )

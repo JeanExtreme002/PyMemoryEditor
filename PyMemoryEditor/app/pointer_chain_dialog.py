@@ -2,10 +2,10 @@
 """
 Pointer-chain dialog — exposes ``process.resolve_pointer_chain()``.
 
-The intent is to be a *direct paste path* from a Cheat-Engine cheat table.
-Cheat-Engine writes chains like::
+It resolves a multi-level pointer — a static base plus a series of bracketed
+offsets — written like::
 
-    "game.exe" + 0x10F4F4 -> [+0x0] -> [+0x158]   ; HP
+    "game.exe" + 0x10F4F4 -> [+0x0] -> [+0x158]
 
 This dialog asks for:
 
@@ -57,9 +57,9 @@ _LOG = logging.getLogger(__name__)
 class _OffsetField(QWidget):
     """One slot in the offsets chain — visually ``[+ <hex> ]``.
 
-    Cheat-Engine notation uses ``[+0x10] -> [+0x20]`` to show a pointer
-    walk; we mirror that with a label-input-label triple per offset so the
-    "list of offsets" reads as a chain instead of as a free-form text field.
+    A pointer walk is written ``[+0x10] -> [+0x20]``; we mirror that with a
+    label-input-label triple per offset so the "list of offsets" reads as a
+    chain instead of as a free-form text field.
     The trailing ``×`` removes this field; the parent dialog hides the
     button when only one slot remains.
     """
@@ -127,9 +127,9 @@ class PointerChainDialog(QDialog):
         layout.addWidget(header)
 
         hint = QLabel(
-            "Paste a Cheat Engine-style chain. The base address can be a static "
-            "offset inside the executable (module base + offset) or a known "
-            "pointer in memory."
+            "Enter a pointer chain. The base address can be a static offset "
+            "inside the executable (module base + offset) or a known pointer "
+            "in memory."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -143,7 +143,7 @@ class PointerChainDialog(QDialog):
         self._base_edit.setPlaceholderText("e.g. 0x14010F4F4 (hex)")
         form.addRow("Base address:", self._base_edit)
 
-        # Offsets row — Cheat-Engine style chain of "[+ hex ]" slots with a
+        # Offsets row — a chain of "[+ hex ]" slots with a
         # trailing "+" button to add another hop. Wrapped in a horizontal
         # scroll area so deep chains (10+ levels) don't blow up the dialog
         # width.
@@ -181,9 +181,9 @@ class PointerChainDialog(QDialog):
         self._ptr_size_combo.addItem("4 bytes (32-bit)", 4)
         form.addRow("Pointer size:", self._ptr_size_combo)
 
-        # The CE-style chain assumes ``base`` is a *static slot* in the
+        # By default the chain assumes ``base`` is a *static slot* in the
         # executable that holds a pointer (so we dereference once before
-        # walking offsets). Users who paste a *direct* address (e.g. from
+        # walking offsets). Users who pass a *direct* address (e.g. from
         # the Memory Map or a fresh scan) want ``base`` to be the final
         # address itself — offsets in that case are struct-field offsets,
         # added without any extra dereference.
@@ -192,9 +192,8 @@ class PointerChainDialog(QDialog):
         )
         self._deref_check.setChecked(True)
         self._deref_check.setToolTip(
-            "Checked (Cheat-Engine style): base address holds a pointer; "
-            "the resolver reads that pointer, then dereferences again on each "
-            "offset.\n\n"
+            "Checked: base address holds a pointer; the resolver reads that "
+            "pointer, then dereferences again on each offset.\n\n"
             "Unchecked: base is the final address itself. Offsets are added "
             "without dereferencing — useful when you pasted an address from "
             "the Memory Map or want a struct field at base+offset."
@@ -316,7 +315,7 @@ class PointerChainDialog(QDialog):
                 # parse_hex_address only handles full hex addresses with or
                 # without ``0x``; try a plain hex int as a fallback for tokens
                 # like ``"10"`` that look ambiguous (decimal vs hex). The
-                # whole dialog treats offsets as hex, matching Cheat Engine.
+                # whole dialog treats offsets as hex.
                 try:
                     parsed = int(text, 16)
                 except ValueError:

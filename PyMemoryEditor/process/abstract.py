@@ -302,6 +302,53 @@ class AbstractProcess(ABC):
         """
         raise NotImplementedError()
 
+    @abstractmethod
+    def allocate_memory(self, size: int, *, permission=None) -> int:
+        """
+        Reserve and commit ``size`` bytes inside the target process's address
+        space and return the base address of the new region.
+
+        The returned address is owned by the target and survives until you pass
+        it to :meth:`free_memory`. Write to it with :meth:`write_process_memory`
+        like any other address. The library remembers the size of each
+        allocation, so ``free_memory(address)`` works without you tracking it.
+
+        :param size: number of bytes to allocate (rounded up to the OS page
+            size by the kernel).
+        :param permission: optional, **platform-specific** protection for the
+            new region — same spirit as ``OpenProcess(permission=...)``:
+
+            * **Windows**: a ``MemoryProtectionsEnum`` / ``PAGE_*`` value.
+              Defaults to ``PAGE_EXECUTE_READWRITE`` (read/write/execute) so the
+              region is usable for both data and injected code.
+            * **macOS**: a ``VM_PROT_*`` bitmask. ``None`` leaves the Mach
+              default (read+write). Requesting execute may fail under the
+              hardened runtime (notably RWX on Apple Silicon).
+            * **Linux**: not supported — see below.
+
+        :raises NotImplementedError: on Linux, which has no cross-process
+            allocation syscall (it would require a ptrace-based code-injection
+            engine to make the target call ``mmap`` itself).
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def free_memory(self, address: int, size: int = 0) -> bool:
+        """
+        Release a region previously returned by :meth:`allocate_memory`.
+
+        :param address: base address returned by :meth:`allocate_memory`.
+        :param size: size of the region in bytes. May be left ``0`` to reuse
+            the size recorded when the region was allocated (required on macOS,
+            ignored on Windows where ``MEM_RELEASE`` frees the whole
+            allocation). Pass an explicit size only to free a region this
+            object did not allocate.
+        :return: ``True`` on success.
+
+        :raises NotImplementedError: on Linux (see :meth:`allocate_memory`).
+        """
+        raise NotImplementedError()
+
     def resolve_pointer_chain(
         self,
         base_address: int,

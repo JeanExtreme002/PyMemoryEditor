@@ -107,6 +107,30 @@ libsystem.mach_vm_protect.restype = kern_return_t
 libsystem.mach_port_deallocate.argtypes = (mach_port_t, mach_port_t)
 libsystem.mach_port_deallocate.restype = kern_return_t
 
+# kern_return_t mach_vm_allocate(
+#     vm_map_t            target,
+#     mach_vm_address_t  *address,    /* in/out: requested / chosen address */
+#     mach_vm_size_t      size,
+#     int                 flags);
+libsystem.mach_vm_allocate.argtypes = (
+    vm_map_t,
+    POINTER(mach_vm_address_t),
+    mach_vm_size_t,
+    ctypes.c_int,
+)
+libsystem.mach_vm_allocate.restype = kern_return_t
+
+# kern_return_t mach_vm_deallocate(
+#     vm_map_t           target,
+#     mach_vm_address_t  address,
+#     mach_vm_size_t     size);
+libsystem.mach_vm_deallocate.argtypes = (
+    vm_map_t,
+    mach_vm_address_t,
+    mach_vm_size_t,
+)
+libsystem.mach_vm_deallocate.restype = kern_return_t
+
 # kern_return_t task_info(
 #     task_name_t              target_task,
 #     task_flavor_t            flavor,

@@ -18,14 +18,12 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QTableView,
     QVBoxLayout,
 )
@@ -67,14 +65,15 @@ class ThreadsDialog(QDialog):
         self.resize(640, 520)
 
         self._build_ui()
-
-        # Auto-refresh timer; off by default. The interval is matched to the
-        # main window's heartbeat so the user only sees consistent data even
-        # if both fire on the same tick.
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self.refresh)
-
         self.refresh()
+
+        # Auto-refresh at a fixed 300ms — threads spawn and exit often, so a
+        # brisk cadence lets the user watch the churn live. The refresh() guard
+        # self-throttles if an enumeration takes longer than this interval.
+        self._timer = QTimer(self)
+        self._timer.setInterval(300)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -95,27 +94,7 @@ class ThreadsDialog(QDialog):
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
-        self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.clicked.connect(self.refresh)
-        bar.addWidget(self._refresh_btn)
-
         bar.addStretch(1)
-
-        self._auto_check = QCheckBox("Auto-refresh")
-        self._auto_check.setToolTip(
-            "Poll get_threads() at the interval below. Threads die and "
-            "spawn often — leaving this on lets you watch the churn."
-        )
-        self._auto_check.toggled.connect(self._toggle_auto_refresh)
-        bar.addWidget(self._auto_check)
-
-        bar.addWidget(QLabel("ms:"))
-        self._interval_spin = QSpinBox()
-        self._interval_spin.setRange(200, 10000)
-        self._interval_spin.setSingleStep(100)
-        self._interval_spin.setValue(1000)
-        self._interval_spin.valueChanged.connect(self._sync_timer)
-        bar.addWidget(self._interval_spin)
 
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
@@ -148,11 +127,15 @@ class ThreadsDialog(QDialog):
         layout.addWidget(self._table, 1)
 
     def refresh(self) -> None:
+        # Skip if an enumeration is in flight — the 300ms timer would otherwise
+        # stack workers; this self-throttles to however long get_threads() takes.
         if self._worker is not None and self._worker.isRunning():
             return
 
-        self._set_busy(True)
-        self._count_label.setText("Enumerating threads…")
+        # Loading hint only before the first list; the periodic refresh updates
+        # the count silently to avoid flicker.
+        if not self._threads:
+            self._count_label.setText("Enumerating threads…")
 
         worker = _ThreadsWorker(self._process, self)
         worker.threads_ready.connect(self._on_threads_ready)
@@ -161,11 +144,19 @@ class ThreadsDialog(QDialog):
         self._worker = worker
         worker.start()
 
-    def _set_busy(self, busy: bool) -> None:
-        self._refresh_btn.setEnabled(not busy)
-
     def _on_threads_ready(self, threads) -> None:
         self._threads = list(threads)
+
+        # Preserve selection + scroll across the rebuild (the list refreshes
+        # every 300ms; losing them would make the table unusable).
+        prior_tid = None
+        selected_rows = self._table.selectionModel().selectedRows()
+        if selected_rows:
+            item = self._model.item(selected_rows[0].row(), 0)
+            if item is not None:
+                prior_tid = item.data(Qt.UserRole)
+        scroll_value = self._table.verticalScrollBar().value()
+
         self._model.setRowCount(0)
         for info in self._threads:
             tid_item = NumericItem(str(info.tid))
@@ -195,6 +186,19 @@ class ThreadsDialog(QDialog):
             f"{len(self._threads):,} thread(s){main_str}"
         )
 
+        # Restore the user's selection + scroll so the periodic refresh doesn't
+        # clear what they had highlighted or jump the table around.
+        if prior_tid is not None:
+            self._select_tid(prior_tid)
+        self._table.verticalScrollBar().setValue(scroll_value)
+
+    def _select_tid(self, tid: int) -> None:
+        """Re-select the row whose TID matches (no scrolling)."""
+        for row in range(self._model.rowCount()):
+            if self._model.item(row, 0).data(Qt.UserRole) == tid:
+                self._table.selectRow(row)
+                return
+
     def _on_threads_failed(self, message: str) -> None:
         self._count_label.setText("Failed to enumerate threads.")
         QMessageBox.critical(
@@ -202,22 +206,10 @@ class ThreadsDialog(QDialog):
         )
 
     def _on_worker_finished(self) -> None:
-        self._set_busy(False)
         worker = self._worker
         self._worker = None
         if worker is not None:
             worker.deleteLater()
-
-    def _toggle_auto_refresh(self, on: bool) -> None:
-        if on:
-            self._sync_timer()
-        else:
-            self._timer.stop()
-
-    def _sync_timer(self) -> None:
-        self._timer.setInterval(int(self._interval_spin.value()))
-        if self._auto_check.isChecked() and not self._timer.isActive():
-            self._timer.start()
 
     def closeEvent(self, event):  # noqa: N802 — Qt naming
         self._timer.stop()

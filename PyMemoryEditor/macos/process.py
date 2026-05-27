@@ -11,6 +11,8 @@ from ..process.thread_info import ThreadInfo
 from ..util import resolve_bufflength
 
 from .functions import (
+    allocate_memory,
+    free_memory,
     get_memory_regions,
     get_modules,
     get_task_for_pid,
@@ -80,6 +82,10 @@ class MacProcess(AbstractProcess):
 
         self.__closed = False
         self.__task = get_task_for_pid(self.pid)
+
+        # Base address -> allocated size; lets free_memory(address) work without
+        # the caller tracking sizes (Mach's mach_vm_deallocate needs the size).
+        self.__allocations: Dict[int, int] = {}
 
     def __require_open(self) -> None:
         if self.__closed:
@@ -267,3 +273,23 @@ class MacProcess(AbstractProcess):
         return write_process_memory(
             self.__task, address, pytype, resolve_bufflength(pytype, bufflength), value
         )
+
+    def allocate_memory(self, size: int, *, permission=None) -> int:
+        self.__require_open()
+        address = allocate_memory(self.__task, size, permission)
+        self.__allocations[address] = size
+        return address
+
+    def free_memory(self, address: int, size: int = 0) -> bool:
+        self.__require_open()
+        # mach_vm_deallocate needs the exact size. Reuse the tracked size when
+        # the caller doesn't supply one.
+        actual_size = size or self.__allocations.get(address, 0)
+        if actual_size <= 0:
+            raise ValueError(
+                "Unknown allocation at 0x%X — pass an explicit size= to free a "
+                "region this object did not allocate." % address
+            )
+        free_memory(self.__task, address, actual_size)
+        self.__allocations.pop(address, None)
+        return True

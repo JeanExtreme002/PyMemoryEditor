@@ -44,6 +44,9 @@ VM_PROT_WRITE = 0x02
 VM_PROT_EXECUTE = 0x04
 VM_PROT_COPY = 0x10  # Used with mach_vm_protect on read-only/mapped pages.
 
+# mach_vm_allocate flag: let the kernel pick the address (anywhere it fits).
+VM_FLAGS_ANYWHERE = 0x0001
+
 # Selected kern_return_t values
 KERN_SUCCESS = 0
 KERN_INVALID_ADDRESS = 1
