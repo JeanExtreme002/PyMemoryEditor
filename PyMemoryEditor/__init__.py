@@ -24,6 +24,7 @@ from .process.errors import (
     PyMemoryEditorError,
 )
 from .process.module_info import ModuleInfo
+from .process.remote_pointer import RemotePointer
 from .process.thread_info import ThreadInfo
 
 
@@ -87,6 +88,7 @@ __all__ = (
     "ProcessIDNotExistsError",
     "ProcessNotFoundError",
     "PyMemoryEditorError",
+    "RemotePointer",
     "ScanTypesEnum",
     "ThreadInfo",
     "__author__",
