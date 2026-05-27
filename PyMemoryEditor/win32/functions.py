@@ -138,6 +138,42 @@ kernel32.Module32Next.argtypes = (
 )
 kernel32.Module32Next.restype = ctypes.wintypes.BOOL
 
+# LPVOID VirtualAllocEx(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize,
+#                       DWORD flAllocationType, DWORD flProtect);
+kernel32.VirtualAllocEx.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPVOID,
+    ctypes.c_size_t,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.DWORD,
+)
+kernel32.VirtualAllocEx.restype = ctypes.wintypes.LPVOID
+
+# BOOL VirtualFreeEx(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize,
+#                    DWORD dwFreeType);
+kernel32.VirtualFreeEx.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPVOID,
+    ctypes.c_size_t,
+    ctypes.wintypes.DWORD,
+)
+kernel32.VirtualFreeEx.restype = ctypes.wintypes.BOOL
+
+
+# VirtualAllocEx flAllocationType: reserve address space *and* back it with
+# physical storage in one call.
+_MEM_COMMIT_RESERVE = (
+    MemoryAllocationStatesEnum.MEM_COMMIT.value
+    | MemoryAllocationStatesEnum.MEM_RESERVE.value
+)
+# VirtualFreeEx dwFreeType. MEM_RELEASE frees the entire allocation and
+# requires dwSize == 0. Not in MemoryAllocationStatesEnum (that enum models
+# MBI.State / allocation-time flags), so it is defined locally.
+_MEM_RELEASE = 0x8000
+# Default protection for a fresh allocation: read/write/execute, so the region
+# works for both data and injected code (matches the common tooling default).
+_DEFAULT_ALLOC_PROTECT = MemoryProtectionsEnum.PAGE_EXECUTE_READWRITE.value
+
 
 system_information = SYSTEM_INFO()
 kernel32.GetSystemInfo(ctypes.byref(system_information))
@@ -583,6 +619,45 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
                 break
     finally:
         kernel32.CloseHandle(snapshot)
+
+
+def AllocateMemory(process_handle: int, size: int, permission=None) -> int:
+    """
+    Commit ``size`` bytes in the target process via VirtualAllocEx and return
+    the base address. Raises OSError if the allocation fails.
+
+    :param permission: PAGE_* protection (``MemoryProtectionsEnum`` or int).
+        Defaults to PAGE_EXECUTE_READWRITE.
+    """
+    if size <= 0:
+        raise ValueError("size must be a positive number of bytes.")
+
+    protect = _DEFAULT_ALLOC_PROTECT if permission is None else int(permission)
+
+    ctypes.set_last_error(0)
+    address = kernel32.VirtualAllocEx(
+        process_handle, None, size, _MEM_COMMIT_RESERVE, protect
+    )
+    if not address:
+        _raise_last_error("VirtualAllocEx")
+    return int(address)
+
+
+def FreeMemory(process_handle: int, address: int, size: int = 0) -> bool:
+    """
+    Release a region previously returned by :func:`AllocateMemory` via
+    VirtualFreeEx with MEM_RELEASE. Raises OSError if the free fails.
+
+    ``size`` is ignored — MEM_RELEASE requires it to be 0 and frees the whole
+    allocation — but is accepted for a uniform cross-platform signature.
+    """
+    ctypes.set_last_error(0)
+    ok = kernel32.VirtualFreeEx(
+        process_handle, ctypes.c_void_p(address), 0, _MEM_RELEASE
+    )
+    if not ok:
+        _raise_last_error("VirtualFreeEx")
+    return True
 
 
 def WriteProcessMemory(

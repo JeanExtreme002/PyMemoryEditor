@@ -13,7 +13,9 @@ from ..process.thread_info import ThreadInfo
 from .enums import ProcessOperationsEnum
 
 from .functions import (
+    AllocateMemory,
     CloseProcessHandle,
+    FreeMemory,
     GetMemoryRegions,
     GetModules,
     GetProcessHandle,
@@ -107,6 +109,10 @@ class WindowsProcess(AbstractProcess):
         )
         self.__closed = False
 
+        # Base address -> allocated size, so free_memory(address) can be called
+        # without the caller tracking sizes.
+        self.__allocations: Dict[int, int] = {}
+
         self.__permission_value = _permission_value(permission)
 
         self.__process_handle = GetProcessHandle(
@@ -116,6 +122,15 @@ class WindowsProcess(AbstractProcess):
     def __require_open(self) -> None:
         if self.__closed:
             raise ClosedProcess()
+
+    def __require_operation(self) -> None:
+        # VirtualAllocEx / VirtualFreeEx need PROCESS_VM_OPERATION.
+        has_op = bool(self.__permission_value & _PROCESS_VM_OPERATION)
+        if not (has_op or _has_all_access(self.__permission_value)):
+            raise PermissionError(
+                "The handle does not have permission to allocate or free memory. "
+                "Open the process with PROCESS_VM_OPERATION (or PROCESS_ALL_ACCESS)."
+            )
 
     def __require_read(self) -> None:
         if not _can_read(self.__permission_value):
@@ -299,3 +314,19 @@ class WindowsProcess(AbstractProcess):
             resolve_bufflength(pytype, bufflength),
             value,
         )
+
+    def allocate_memory(self, size: int, *, permission=None) -> int:
+        self.__require_open()
+        self.__require_operation()
+        address = AllocateMemory(self.__process_handle, size, permission)
+        self.__allocations[address] = size
+        return address
+
+    def free_memory(self, address: int, size: int = 0) -> bool:
+        self.__require_open()
+        self.__require_operation()
+        # MEM_RELEASE frees the whole allocation regardless of size; the
+        # tracked size is dropped on success for bookkeeping parity.
+        FreeMemory(self.__process_handle, address)
+        self.__allocations.pop(address, None)
+        return True

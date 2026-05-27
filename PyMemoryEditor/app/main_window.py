@@ -483,7 +483,7 @@ class MainWindow(QMainWindow):
 
     def _on_refresh_done(self, _kept: int) -> None:
         self._results_label.setText(
-            f"{self._results_model.count():,} addresses — values refreshed."
+            f"{self._results_model.count():,} addresses found."
         )
         self._scanner.set_has_results(self._results_model.count() > 0)
 
@@ -669,7 +669,7 @@ class MainWindow(QMainWindow):
             self,
             "About PyMemoryEditor",
             f"<b>PyMemoryEditor</b> v{__version__}<br>"
-            f"App — Cheat Engine-style memory scanner.<br><br>"
+            f"PyMemoryEditor App — Cheat Engine-style memory scanner.<br><br>"
             f"<b>Platform:</b> {sys.platform}<br>"
             f"<b>Target process:</b> PID {self._process.pid} ({self._proc_name})<br><br>"
             "Source: <a href='https://github.com/JeanExtreme002/PyMemoryEditor'>"

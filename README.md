@@ -54,6 +54,7 @@ reading, writing and searching values in the process memory.
 | **Pattern scan** | Byte signatures or regex — `grep` for process memory. |
 | **Pointer chains** | Walk multi-level pointers (`[[base+0x10]+0x20]+0x30`) in one call. |
 | **Module enumeration** | List loaded executables & libraries with their base address — `base + offset` beats ASLR. |
+| **Allocate / free memory** | Reserve and release memory inside the target (Windows & macOS). |
 | **Snapshot caching** | The Cheat-Engine "scan → refine → refine" loop, accelerated. |
 | **Bundled GUI app** | A full memory scanner ships in the box — just type `pymemoryeditor`. |
 
@@ -332,6 +333,30 @@ hp = process.read_process_memory(hp_address, int, 4)
 ```
 
 `ptr_size=4` for 32-bit targets, `ptr_size=8` (default) for 64-bit.
+
+### 🧱 Allocating memory in the target
+
+Reserve a fresh block inside the target process, write to it like any other
+address, then release it. The library remembers each allocation's size, so
+`free_memory(address)` works without you tracking it:
+
+```python
+address = process.allocate_memory(64)             # base of a new 64-byte region
+process.write_process_memory(address, int, 4, 1337)
+process.free_memory(address)                       # release it
+```
+
+`allocate_memory` takes an optional, platform-specific `permission` (a `PAGE_*`
+value on Windows — default `PAGE_EXECUTE_READWRITE`; a `VM_PROT_*` bitmask on
+macOS — default read+write), mirroring `OpenProcess(permission=...)`.
+
+> [!NOTE]
+> **Linux is not supported here.** It has no syscall to allocate memory in
+> another process's address space (`mmap` only affects the calling process);
+> doing so would require a ptrace-based engine to make the target call `mmap`
+> itself. Both methods raise `NotImplementedError` on Linux. Windows
+> (`VirtualAllocEx`/`VirtualFreeEx`) and macOS
+> (`mach_vm_allocate`/`mach_vm_deallocate`) are fully supported.
 
 ---
 

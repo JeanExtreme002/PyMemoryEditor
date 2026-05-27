@@ -4,12 +4,14 @@ Modules dialog — exposes ``process.get_modules()``.
 
 Lists every module (the main executable plus each loaded shared library) the
 target process has mapped, with its name, base address, size and backing path.
-The toolbar lets the user:
+The dialog lets the user:
 
-* refresh the list,
 * filter by name / path (a real process loads hundreds of modules),
-* copy a module's base address,
+* right-click a module to copy its name, base address or path,
 * jump straight into the hex viewer at the module base.
+
+The list auto-refreshes every 1000 ms, so modules loaded/unloaded at runtime
+appear without a manual refresh.
 
 The base address is the most useful field here: combined with a static offset
 (``base + offset``) it survives ASLR, which is exactly what the Pointer Chain
@@ -18,7 +20,7 @@ same patterns (background worker, sortable table, Close button).
 """
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -27,6 +29,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTableView,
@@ -76,6 +79,14 @@ class ModulesDialog(QDialog):
         self._build_ui()
         self.refresh()
 
+        # Auto-refresh so modules loaded/unloaded at runtime appear without a
+        # manual refresh. The refresh() guard self-throttles if an enumeration
+        # takes longer than this interval.
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(1000)
+        self._auto_timer.timeout.connect(self.refresh)
+        self._auto_timer.start()
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -94,14 +105,6 @@ class ModulesDialog(QDialog):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
-
-        self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.clicked.connect(self.refresh)
-        bar.addWidget(self._refresh_btn)
-
-        self._copy_btn = QPushButton("Copy Base Address")
-        self._copy_btn.clicked.connect(self._copy_selected_address)
-        bar.addWidget(self._copy_btn)
 
         self._hex_btn = QPushButton("Open in Hex Viewer")
         self._hex_btn.clicked.connect(self._emit_hex_viewer_request)
@@ -146,15 +149,21 @@ class ModulesDialog(QDialog):
         self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self._table.setColumnHidden(4, True)
         self._table.doubleClicked.connect(lambda _i: self._emit_hex_viewer_request())
+        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._table, 1)
 
     def refresh(self) -> None:
-        # Don't stack workers — if a refresh is in flight, ignore the click.
+        # Skip if an enumeration is already in flight — the 1000ms auto-refresh
+        # timer would otherwise stack workers. This self-throttles to however
+        # long get_modules() actually takes.
         if self._worker is not None and self._worker.isRunning():
             return
 
-        self._count_label.setText("Enumerating modules…")
-        self._set_busy(True)
+        # Loading hint only before the first list; on the periodic refresh the
+        # count updates silently to avoid flicker.
+        if not self._modules:
+            self._count_label.setText("Enumerating modules…")
 
         worker = _ModulesWorker(self._process, self)
         worker.modules_ready.connect(self._on_modules_ready)
@@ -163,11 +172,6 @@ class ModulesDialog(QDialog):
         self._worker = worker
         worker.start()
 
-    def _set_busy(self, busy: bool) -> None:
-        self._refresh_btn.setEnabled(not busy)
-        self._copy_btn.setEnabled(not busy)
-        self._hex_btn.setEnabled(not busy)
-
     def _on_modules_ready(self, modules) -> None:
         self._modules = list(modules)
         self._apply_filter()
@@ -175,6 +179,16 @@ class ModulesDialog(QDialog):
     def _apply_filter(self) -> None:
         """Repopulate the table from the cached module list, honoring the filter."""
         needle = self._filter_edit.text().strip().lower()
+
+        # Preserve selection + scroll across the rebuild (the list auto-refreshes
+        # every 1000ms; losing them would make the table unusable).
+        prior_selection = None
+        selected_rows = self._table.selectionModel().selectedRows()
+        if selected_rows:
+            item = self._model.item(selected_rows[0].row(), 1)
+            if item is not None:
+                prior_selection = item.data(Qt.UserRole)
+        scroll_value = self._table.verticalScrollBar().value()
 
         # Sorting is re-applied by the view; disable it while we rebuild so the
         # model isn't re-sorted on every appendRow (also avoids row shuffling).
@@ -215,6 +229,19 @@ class ModulesDialog(QDialog):
         else:
             self._count_label.setText(f"{total:,} module(s)")
 
+        # Restore the user's selection + scroll, so the periodic refresh doesn't
+        # clear what they had highlighted or jump the table around.
+        if prior_selection is not None:
+            self._select_address(prior_selection)
+        self._table.verticalScrollBar().setValue(scroll_value)
+
+    def _select_address(self, address: int) -> None:
+        """Re-select the row whose base address matches (no scrolling)."""
+        for row in range(self._model.rowCount()):
+            if self._model.item(row, 1).data(Qt.UserRole) == address:
+                self._table.selectRow(row)
+                return
+
     def _on_modules_failed(self, message: str) -> None:
         self._count_label.setText("Failed to enumerate modules.")
         QMessageBox.critical(
@@ -222,7 +249,6 @@ class ModulesDialog(QDialog):
         )
 
     def _on_worker_finished(self) -> None:
-        self._set_busy(False)
         worker = self._worker
         self._worker = None
         if worker is not None:
@@ -237,12 +263,43 @@ class ModulesDialog(QDialog):
         size = self._model.item(row, 2).data(Qt.UserRole)
         return {"base_address": int(base), "size": int(size)}
 
-    def _copy_selected_address(self) -> None:
-        module = self._selected_module()
-        if module is None:
-            QMessageBox.information(self, "Modules", "Select a module first.")
+    def _show_context_menu(self, pos) -> None:
+        """Right-click menu on a module row: copy its name, address or path."""
+        index = self._table.indexAt(pos)
+        if not index.isValid():
             return
-        QGuiApplication.clipboard().setText(f"{module['base_address']:X}")
+        self._table.selectRow(index.row())  # operate on the clicked row
+        menu = self._build_context_menu(index.row())
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _build_context_menu(self, row: int) -> QMenu:
+        """Build the row's right-click menu (Copy Name / Address / Path).
+
+        Each action copies via ``triggered`` so the behavior is identical
+        whether the menu is shown or driven programmatically.
+        """
+        name = self._model.item(row, 0).text()
+        address = int(self._model.item(row, 1).data(Qt.UserRole))
+        path = self._model.item(row, 3).text()
+
+        menu = QMenu(self)
+
+        copy_name = menu.addAction("Copy Name")
+        copy_name.setEnabled(bool(name) and name != "—")
+        copy_name.triggered.connect(lambda: self._copy_text(name))
+
+        copy_address = menu.addAction("Copy Address")
+        copy_address.triggered.connect(lambda: self._copy_text(f"{address:X}"))
+
+        copy_path = menu.addAction("Copy Path")
+        # Modules usually have a path; keep the entry visible but disabled when
+        # the backend couldn't resolve one.
+        copy_path.setEnabled(bool(path))
+        copy_path.triggered.connect(lambda: self._copy_text(path))
+        return menu
+
+    def _copy_text(self, text: str) -> None:
+        QGuiApplication.clipboard().setText(text)
 
     def _emit_hex_viewer_request(self) -> None:
         module = self._selected_module()
@@ -254,6 +311,7 @@ class ModulesDialog(QDialog):
         self.open_hex_viewer.emit(module["base_address"], size)
 
     def closeEvent(self, event):  # noqa: N802 — Qt naming
+        self._auto_timer.stop()
         # If the enumeration is still in flight, let it finish but unhook our
         # slots so a late emit doesn't touch a destroyed dialog.
         if self._worker is not None and self._worker.isRunning():

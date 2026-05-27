@@ -207,7 +207,7 @@ class CheatTable(QWidget):
         check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         check.setCheckState(Qt.Checked if entry.frozen else Qt.Unchecked)
         check.setTextAlignment(Qt.AlignCenter)
-        check.setToolTip("Toggle to freeze the value — Cheat Engine style.")
+        check.setToolTip("Toggle to freeze the value.")
         self._table.setItem(row, self.COL_ACTIVE, check)
 
         desc = QTableWidgetItem(entry.description)
