@@ -13,6 +13,7 @@ from ..util import resolve_bufflength
 from .functions import (
     allocate_memory,
     free_memory,
+    get_image_segments,
     get_memory_regions,
     get_modules,
     get_task_for_pid,
@@ -134,6 +135,38 @@ class MacProcess(AbstractProcess):
     def get_modules(self) -> Generator[ModuleInfo, None, None]:
         self.__require_open()
         return get_modules(self.__task)
+
+    def _static_image_ranges(self):
+        """
+        macOS-specific static ranges for the pointer scanner.
+
+        ``ModuleInfo.size`` on macOS is only the ``__TEXT`` segment, so the base
+        implementation would miss the writable ``__DATA`` segments where a
+        process keeps its global pointers — making pointer scans on macOS find
+        no static base at all. Here we expand each module into the runtime
+        ranges of *all* its Mach-O segments (see ``get_image_segments``), tagged
+        with the module name and ``__TEXT`` base so discovered paths still
+        rebase across runs.
+        """
+        self.__require_open()
+        ranges = []
+        for module in get_modules(self.__task):
+            segments = get_image_segments(self.__task, module.base_address)
+            if segments:
+                for start, size in segments:
+                    ranges.append(
+                        (start, start + size, module.name, module.base_address)
+                    )
+            elif module.size > 0:
+                ranges.append(
+                    (
+                        module.base_address,
+                        module.base_address + module.size,
+                        module.name,
+                        module.base_address,
+                    )
+                )
+        return ranges
 
     def search_by_addresses(
         self,

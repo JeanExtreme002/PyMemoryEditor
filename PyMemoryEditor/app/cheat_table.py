@@ -20,7 +20,7 @@ import json
 import logging
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -62,6 +62,9 @@ _LOG = logging.getLogger(__name__)
 
 class CheatTable(QWidget):
     """Bottom pane: saved addresses, freezing, manual edits."""
+
+    # qulonglong: 64-bit addresses overflow Qt's signed-32-bit default.
+    pointer_scan_for_address = Signal("qulonglong")  # target address
 
     COL_ACTIVE = 0
     COL_DESCRIPTION = 1
@@ -511,6 +514,12 @@ class CheatTable(QWidget):
             copy_addr = QAction("Copy address", self)
             copy_addr.triggered.connect(lambda: self._copy_address(row))
             menu.addAction(copy_addr)
+
+            pointer_scan = QAction("Pointer scan for this address…", self)
+            pointer_scan.triggered.connect(
+                lambda: self.pointer_scan_for_address.emit(self._entries[row].address)
+            )
+            menu.addAction(pointer_scan)
 
             change_type = QAction("Change value type…", self)
             change_type.triggered.connect(lambda: self._change_type(row))

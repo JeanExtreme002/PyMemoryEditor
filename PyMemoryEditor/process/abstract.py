@@ -2,8 +2,10 @@
 import sys
 from abc import ABC, abstractmethod
 from typing import (
+    Callable,
     Dict,
     Generator,
+    Iterable,
     List,
     Optional,
     Sequence,
@@ -21,6 +23,7 @@ from .scanning import _PRESORTED_KEY
 from .thread_info import ThreadInfo
 
 if TYPE_CHECKING:
+    from .pointer_scan import PointerPath
     from .remote_pointer import RemotePointer
 
 
@@ -450,3 +453,317 @@ class AbstractProcess(ABC):
             current = _read_ptr(current + offset)
 
         return current + offsets[-1]
+
+    def _static_image_ranges(self) -> List[Tuple[int, int, str, int]]:
+        """
+        Return ``(start, end, module_name, module_base)`` tuples covering the
+        address ranges considered *static* (fixed offset from a module base
+        across runs) — the valid bases for a pointer chain found by
+        :meth:`scan_pointer_paths`.
+
+        Default implementation: one range per loaded module spanning its whole
+        image (``base_address`` .. ``base_address + size``). This is correct on
+        Windows (``modBaseSize`` is the full image) and Linux (the mapped span
+        covers ``.data`` / ``.bss``). macOS overrides this because
+        ``ModuleInfo.size`` there is only the ``__TEXT`` segment, which would
+        miss the writable ``__DATA`` segments where global pointers live.
+        """
+        ranges: List[Tuple[int, int, str, int]] = []
+        for module in self.get_modules():
+            if module.size > 0:
+                ranges.append(
+                    (
+                        module.base_address,
+                        module.base_address + module.size,
+                        module.name,
+                        module.base_address,
+                    )
+                )
+        return ranges
+
+    def scan_pointer_paths(
+        self,
+        target_address: int,
+        *,
+        max_depth: int = 5,
+        max_offset: int = 0x400,
+        ptr_size: int = 8,
+        aligned: bool = True,
+        writable_only: bool = True,
+        static_ranges: Optional[Sequence[Tuple[int, int]]] = None,
+        max_results: Optional[int] = None,
+        memory_regions: Optional[Sequence[Dict]] = None,
+        progress_callback: Optional["Callable[[float], None]"] = None,
+    ) -> Generator["PointerPath", None, None]:
+        """
+        Reverse pointer scan — Cheat Engine's "Pointer scan", the inverse of
+        :meth:`resolve_pointer_chain`.
+
+        Given a *dynamic* ``target_address`` (one that changes every run, e.g.
+        an address :meth:`search_by_value` just found), discover **static
+        pointer paths** that resolve to it: chains
+        ``module + offset -> [+o1] -> ... -> +on`` whose base is fixed inside a
+        loaded module, so the recipe keeps working across restarts despite
+        ASLR. Each yielded :class:`~PyMemoryEditor.PointerPath` plugs straight
+        back into :meth:`resolve_pointer_chain` / :class:`RemotePointer`.
+
+        Built entirely on :meth:`get_memory_regions`, :meth:`read_process_memory`
+        and :meth:`get_modules`, so it behaves identically on Windows, Linux and
+        macOS.
+
+        :param target_address: the dynamic address to find pointer paths to.
+        :param max_depth: maximum pointer levels (offsets) in a chain. Deeper
+            scans find more paths but cost exponentially more — 1–7 is typical.
+        :param max_offset: largest positive offset a single hop may add (the
+            struct-size window). Larger values catch fields deeper inside
+            objects at the cost of many more candidate paths.
+        :param ptr_size: pointer width — 8 for 64-bit targets (default), 4 for
+            32-bit.
+        :param aligned: only consider pointers at natural alignment (default,
+            much faster). Set ``False`` to also scan misaligned slots (slow).
+        :param writable_only: build the pointer map from writable memory only
+            (default). This is both faster and usually correct — every hop in a
+            live chain reads a pointer the program writes (global pointers in
+            ``.data``, object fields on the heap). Set ``False`` to also include
+            read-only pointers (e.g. vtables), which is slower and noisier.
+        :param static_ranges: explicit ``(start, size)`` ranges to treat as
+            valid chain bases. Defaults to the image range of every loaded
+            module. **macOS note:** ``ModuleInfo.size`` there covers only the
+            ``__TEXT`` segment, so global pointers in ``__DATA`` may fall
+            outside the default static set — pass ``static_ranges`` explicitly
+            (or accept reduced static-base coverage) on macOS.
+        :param max_results: stop after yielding this many paths (``None`` = no
+            cap). Recommended for shallow exploration of large targets.
+        :param memory_regions: optional snapshot from
+            :meth:`snapshot_memory_regions` to skip region enumeration.
+        :param progress_callback: optional ``callback(fraction)`` invoked as the
+            pointer map is built (the long phase), ``fraction`` in ``[0, 1]``.
+
+        Example
+        -------
+        ::
+
+            hp_addr = next(process.search_by_value(int, 4, 1234))
+            for path in process.scan_pointer_paths(hp_addr, max_depth=5, max_results=20):
+                print(path)                 # "game.exe"+0x10F4F4 -> [+0x0] -> +0x158
+                assert path.resolve(process) == hp_addr
+
+            # In a later run, after the module moved (ASLR):
+            live = path.rebase(process).to_pointer(process, pytype=int, bufflength=4)
+            live.value = 9999
+        """
+        from .pointer_scan import (
+            AddressRanges,
+            build_pointer_map,
+            find_pointer_paths,
+        )
+
+        if ptr_size not in (4, 8):
+            raise ValueError(
+                "ptr_size must be 4 (32-bit target) or 8 (64-bit target)."
+            )
+
+        if memory_regions is None:
+            memory_regions = list(self.get_memory_regions())
+
+        # Pointers may point anywhere readable; chain hops live in writable
+        # memory (the program writes them) unless the caller opts into read-only.
+        readable = [r for r in memory_regions if r.get("is_readable", True)]
+        mapped_ranges = AddressRanges(
+            [(r["address"], r["address"] + r["size"]) for r in readable]
+        )
+
+        scan_regions = [
+            (r["address"], r["size"])
+            for r in readable
+            if (r.get("is_writable", True) if writable_only else True)
+        ]
+
+        # Image ranges drive both static-base detection and module naming. Each
+        # entry is (start, end, module_name, module_base). On macOS this spans
+        # every Mach-O segment (so global pointers in __DATA count as static),
+        # not just __TEXT — see _static_image_ranges.
+        image_ranges = self._static_image_ranges()
+
+        if static_ranges is not None:
+            static = AddressRanges(
+                [(start, start + size) for start, size in static_ranges]
+            )
+        else:
+            static = AddressRanges([(s, e) for s, e, _, _ in image_ranges])
+
+        # Map a static base back to the module that owns it (for ASLR rebasing).
+        sorted_images = sorted(image_ranges)
+
+        def module_resolver(address: int) -> Optional[Tuple[str, int]]:
+            for start, end, name, base in sorted_images:
+                if start <= address < end:
+                    return name, base
+            return None
+
+        def read_chunk(address: int, size: int) -> Optional[bytes]:
+            try:
+                return self.read_process_memory(address, bytes, size)
+            except Exception:  # noqa: BLE001 — unreadable page mid-scan; skip it
+                return None
+
+        values, addresses = build_pointer_map(
+            scan_regions,
+            read_chunk,
+            mapped_ranges,
+            ptr_size=ptr_size,
+            aligned=aligned,
+            progress_callback=progress_callback,
+        )
+
+        yield from find_pointer_paths(
+            target_address,
+            values,
+            addresses,
+            static.__contains__,
+            module_resolver,
+            max_depth=max_depth,
+            max_offset=max_offset,
+            ptr_size=ptr_size,
+            max_results=max_results,
+        )
+
+    def save_pointer_paths(
+        self,
+        paths: "Iterable[PointerPath]",
+        file: str,
+    ) -> None:
+        """
+        Save pointer paths (from :meth:`scan_pointer_paths`) to a JSON file so
+        you can reuse them in a later run with :meth:`rescan_pointer_paths` or
+        :meth:`compare_pointer_scans`.
+
+        The file stores each path's module + offsets — the part that survives a
+        restart — so it stays valid even though absolute addresses change.
+
+        Example
+        -------
+        ::
+
+            paths = process.scan_pointer_paths(0x1FA3C140)
+            process.save_pointer_paths(paths, "scan1.json")
+        """
+        import json
+
+        payload = {
+            "format": "pymemoryeditor-pointerscan",
+            "version": 1,
+            "pid": self.pid,
+            "paths": [path.to_dict() for path in paths],
+        }
+        with open(file, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+
+    def load_pointer_paths(self, file: str) -> "List[PointerPath]":
+        """
+        Load pointer paths previously written with :meth:`save_pointer_paths`.
+
+        Returns a list of :class:`~PyMemoryEditor.PointerPath`. Resolve one with
+        ``path.rebase(process).resolve(process)`` (or hand it to
+        :meth:`rescan_pointer_paths`).
+        """
+        import json
+
+        from .pointer_scan import PointerPath
+
+        with open(file, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return [PointerPath.from_dict(entry) for entry in payload["paths"]]
+
+    def rescan_pointer_paths(
+        self,
+        paths: "Union[str, Iterable[PointerPath]]",
+        target_address: int,
+    ) -> "List[PointerPath]":
+        """
+        Keep only the saved paths that still reach ``target_address`` in this
+        process — Cheat Engine's "pointer rescan".
+
+        Run it after the value moved (a restart, a level reload): each path is
+        re-based onto the module's current load address and walked; the ones
+        that no longer land on the value are dropped. Repeat across a few runs
+        and the list collapses to the reliable static pointers.
+
+        :param paths: a list of :class:`~PyMemoryEditor.PointerPath`, or the
+            name of a file saved with :meth:`save_pointer_paths`.
+        :param target_address: the value's address **in this run** (find it
+            again with :meth:`search_by_value`).
+        :return: the surviving paths, already re-based to this run.
+
+        Example
+        -------
+        ::
+
+            survivors = process.rescan_pointer_paths("scan1.json", new_address)
+            process.save_pointer_paths(survivors, "scan2.json")
+        """
+        from .pointer_scan import PointerPath
+
+        if isinstance(paths, str):
+            paths = self.load_pointer_paths(paths)
+
+        survivors: List["PointerPath"] = []
+        module_bases: Optional[Dict[str, int]] = None
+
+        for saved in paths:
+            try:
+                if saved.module is not None and saved.module_offset is not None:
+                    # Look modules up once, only if a module-backed path needs it.
+                    if module_bases is None:
+                        module_bases = {
+                            module.name: module.base_address
+                            for module in self.get_modules()
+                        }
+                    base = module_bases.get(saved.module)
+                    if base is None:
+                        continue  # the path's module isn't loaded in this run
+                    live = PointerPath(
+                        base_address=base + saved.module_offset,
+                        offsets=saved.offsets,
+                        module=saved.module,
+                        module_offset=saved.module_offset,
+                        ptr_size=saved.ptr_size,
+                    )
+                else:
+                    live = saved  # no module: best-effort with the stored base
+
+                if live.resolve(self) == target_address:
+                    survivors.append(live)
+            except Exception:  # noqa: BLE001 — broken chain / unreadable page: drop it
+                continue
+
+        return survivors
+
+    def compare_pointer_scans(
+        self,
+        *sources: "Union[str, Iterable[PointerPath]]",
+    ) -> "List[PointerPath]":
+        """
+        Intersect several saved scans: return the paths present in **every** one.
+
+        An alternative to :meth:`rescan_pointer_paths` that needs no live target.
+        Run a full :meth:`scan_pointer_paths` after each restart, save each, then
+        pass the files here — only the paths that showed up in all of them (the
+        reliable static pointers) are returned.
+
+        :param sources: two or more file names (from :meth:`save_pointer_paths`)
+            and/or lists of :class:`~PyMemoryEditor.PointerPath`.
+
+        Example
+        -------
+        ::
+
+            stable = process.compare_pointer_scans("scan1.json", "scan2.json", "scan3.json")
+        """
+        from .pointer_scan import intersect_pointer_paths
+
+        path_lists = [
+            self.load_pointer_paths(source) if isinstance(source, str) else list(source)
+            for source in sources
+        ]
+        return intersect_pointer_paths(path_lists)

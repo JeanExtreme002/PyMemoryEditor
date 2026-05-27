@@ -53,6 +53,7 @@ reading, writing and searching values in the process memory.
 | **Scan modes** | Exact, not-exact, bigger / smaller (±equal), in-range, out-of-range. |
 | **Pattern scan** | Byte signatures or regex — `grep` for process memory. |
 | **Pointer chains** | Walk multi-level pointers (`[[base+0x10]+0x20]+0x30`) in one call. |
+| **Pointer scan** *(reverse)* | *Find* the static pointer path to a moving address — then narrow it down across restarts, Cheat-Engine style. |
 | **Live pointers** | A `RemotePointer` handle re-resolves its chain on every `.value` read/write. |
 | **Module enumeration** | List loaded executables & libraries with their base address — `base + offset` beats ASLR. |
 | **Allocate / free memory** | Reserve and release memory inside the target (Windows & macOS). |
@@ -360,6 +361,54 @@ mp_ptr = hp_ptr + 4
 print(mp_ptr.value)
 ```
 
+### 🧭 Pointer scan — find a pointer that survives restarts
+
+A scanned address is gone the next launch — the OS loads everything somewhere new every
+time (ASLR). A **pointer chain** is the cure, but where do you *get* the chain?
+You **pointer-scan** for it: give the value's address **right now** and the library finds
+the static paths (`module + offsets`) that lead to it — the inverse of `resolve_pointer_chain`.
+
+```python
+# The value is at this address right now (e.g. from search_by_value).
+for path in process.scan_pointer_paths(0x1FA3C140):
+    print(path)                          # "game.exe"+0x10F4F4 -> [+0x0] -> +0x158
+    print(hex(path.resolve(process)))    # walk it -> the current address
+```
+
+Each result is a `PointerPath` you can keep: `path.to_pointer(process)` turns it into a
+live `RemotePointer`, and `path.rebase(process)` re-anchors it after a restart.
+
+> A first scan usually finds **many** candidates. Start narrow and widen only if needed —
+> `scan_pointer_paths(addr, max_depth=2, max_offset=0x100)`. Depth is the big cost.
+
+#### Narrowing down to the real one
+
+The reliable pointers are the ones that keep working after the value moves. So you
+**save a scan, restart the target, and rescan** — keeping only the paths that still land
+on the value. Repeat a couple of times and a handful of solid pointers remain:
+
+```python
+# Run 1 — scan and save.
+pointer_paths = process.scan_pointer_paths(address)
+process.save_pointer_paths(pointer_paths, "scan1.json")
+
+# …close the target, restart it, find the value's new address again…
+
+# Run 2 — keep only the saved paths that still reach it.
+survivors = process.rescan_pointer_paths("scan1.json", new_address)
+process.save_pointer_paths(survivors, "scan2.json")
+```
+
+Prefer working from independent scans? Save one per run, then **intersect** them — the
+paths present in *every* file are your stable pointers (no live address needed):
+
+```python
+stable = process.compare_pointer_scans("scan1.json", "scan2.json", "scan3.json")
+```
+
+Once you're down to one, use it forever — `path.rebase(process).to_pointer(process)`
+re-resolves itself on every read/write, so it just works in any future run.
+
 ### 🧱 Allocating memory in the target
 
 Reserve a fresh block inside the target process, write to it like any other
@@ -458,7 +507,7 @@ The app is a living demo of the library — it exercises every public surface (e
 - **Scanner** — eight scan modes, ranges, byte-signature or regex search
 - **Refine workflow** — *First Scan → Next Scan → Next Scan…* like Cheat Engine
 - **Cheat table** — freeze / write values, import/export as JSON
-- **Pointer chains** — resolve multi-level pointers
+- **Pointer scan** — find static pointers; export, rescan & compare to narrow them down;
 - **Memory map** — regions with R/W/X flags
 - **Hex viewer** — live dump with write-back
 

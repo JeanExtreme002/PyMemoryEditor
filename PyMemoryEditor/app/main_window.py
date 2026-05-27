@@ -54,6 +54,7 @@ from .memory_map_dialog import MemoryMapDialog
 from .memory_viewer_dialog import MemoryViewerDialog
 from .modules_dialog import ModulesDialog
 from .pointer_chain_dialog import PointerChainDialog
+from .pointer_scan_dialog import PointerScanDialog
 from .results_view import ResultsModel, ResultsView
 from .scan_worker import FirstScanWorker, RefineScanWorker, ScanRequest
 from .scanner_panel import ScannerPanel
@@ -95,6 +96,7 @@ class MainWindow(QMainWindow):
         self._threads_dialog: Optional[ThreadsDialog] = None
         self._modules_dialog: Optional[ModulesDialog] = None
         self._pointer_chain_dialog: Optional[PointerChainDialog] = None
+        self._pointer_scan_dialog: Optional[PointerScanDialog] = None
         self._log_console_dialog: Optional[LogConsoleDialog] = None
 
         self._build_ui()
@@ -182,11 +184,15 @@ class MainWindow(QMainWindow):
         self._results_view.setModel(self._results_model)
         self._results_view.promote_to_cheat_table.connect(self._promote_to_cheat_table)
         self._results_view.open_in_hex_viewer.connect(self._open_hex_viewer)
+        self._results_view.pointer_scan_for_address.connect(
+            self._open_pointer_scan_dialog
+        )
         results_layout.addWidget(self._results_view, 1)
 
         right_splitter.addWidget(results_wrap)
 
         self._cheat = CheatTable(self._process)
+        self._cheat.pointer_scan_for_address.connect(self._open_pointer_scan_dialog)
         right_splitter.addWidget(self._cheat)
         right_splitter.setSizes([520, 260])
 
@@ -253,6 +259,11 @@ class MainWindow(QMainWindow):
         pointer_chain_action.triggered.connect(self._open_pointer_chain_dialog)
         tools_menu.addAction(pointer_chain_action)
 
+        pointer_scan_action = QAction("Pointer Scan…", self)
+        pointer_scan_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        pointer_scan_action.triggered.connect(lambda: self._open_pointer_scan_dialog())
+        tools_menu.addAction(pointer_scan_action)
+
         tools_menu.addSeparator()
 
         log_console_action = QAction("Log Console…", self)
@@ -275,6 +286,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(modules_action)
         toolbar.addAction(hex_viewer_action)
         toolbar.addAction(pointer_chain_action)
+        toolbar.addAction(pointer_scan_action)
         toolbar.addSeparator()
         toolbar.addAction(export_results)
 
@@ -545,6 +557,9 @@ class MainWindow(QMainWindow):
             self._modules_dialog.open_hex_viewer.connect(
                 self._open_hex_viewer_with_size
             )
+            self._modules_dialog.resolve_pointer_chain.connect(
+                self._on_module_resolve_chain
+            )
             self._modules_dialog.finished.connect(self._on_modules_dialog_closed)
         else:
             self._modules_dialog.refresh()
@@ -571,6 +586,11 @@ class MainWindow(QMainWindow):
     def _on_pointer_chain_dialog_closed(self, _result: int) -> None:
         self._pointer_chain_dialog = None
 
+    def _on_module_resolve_chain(self, base_address: int) -> None:
+        """Open the Pointer Chain tool with a module's base address prefilled."""
+        self._open_pointer_chain_dialog()
+        self._pointer_chain_dialog.set_base_address(int(base_address))
+
     def _on_pointer_chain_promote(
         self, address: int, spec_label: str, length: int
     ) -> None:
@@ -584,6 +604,48 @@ class MainWindow(QMainWindow):
         self._cheat.add_entry(entry)
         self._status.showMessage(
             f"Added 0x{address:X} to cheat table (from pointer chain)."
+        )
+
+    def _open_pointer_scan_dialog(self, address: int = 0) -> None:
+        """Open the Pointer Scan dialog, optionally prefilled with an address.
+
+        ``address`` is passed by the results view's "Pointer scan for this
+        address" entry (Cheat Engine's workflow); the menu/toolbar action opens
+        it blank.
+        """
+        if self._pointer_scan_dialog is None:
+            self._pointer_scan_dialog = PointerScanDialog(self._process, self)
+            self._pointer_scan_dialog.add_to_cheat_table.connect(
+                self._on_pointer_scan_promote
+            )
+            self._pointer_scan_dialog.open_hex_viewer.connect(
+                self._open_hex_viewer_with_size
+            )
+            self._pointer_scan_dialog.finished.connect(
+                self._on_pointer_scan_dialog_closed
+            )
+        if address:
+            self._pointer_scan_dialog.set_target_address(int(address))
+        self._pointer_scan_dialog.show()
+        self._pointer_scan_dialog.raise_()
+        self._pointer_scan_dialog.activateWindow()
+
+    def _on_pointer_scan_dialog_closed(self, _result: int) -> None:
+        self._pointer_scan_dialog = None
+
+    def _on_pointer_scan_promote(
+        self, address: int, spec_label: str, length: int
+    ) -> None:
+        """Promote a resolved pointer-scan path's address into the cheat table."""
+        entry = CheatEntry(
+            description="",
+            address=int(address),
+            spec_label=spec_label,
+            length=int(length),
+        )
+        self._cheat.add_entry(entry)
+        self._status.showMessage(
+            f"Added 0x{address:X} to cheat table (from pointer scan)."
         )
 
     def _open_log_console(self) -> None:
@@ -733,6 +795,7 @@ class MainWindow(QMainWindow):
             "_threads_dialog",
             "_modules_dialog",
             "_pointer_chain_dialog",
+            "_pointer_scan_dialog",
         ):
             existing = getattr(self, dialog_attr, None)
             if existing is not None:
@@ -743,6 +806,7 @@ class MainWindow(QMainWindow):
         old_cheat = self._cheat
         old_index = self._right_splitter.indexOf(old_cheat)
         self._cheat = CheatTable(self._process)
+        self._cheat.pointer_scan_for_address.connect(self._open_pointer_scan_dialog)
         if old_index >= 0:
             self._right_splitter.replaceWidget(old_index, self._cheat)
         else:
