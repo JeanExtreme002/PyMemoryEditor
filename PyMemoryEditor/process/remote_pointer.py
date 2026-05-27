@@ -22,7 +22,7 @@ Because it is built purely on the abstract ``read_process_memory`` /
 on Windows, Linux and macOS.
 """
 
-from typing import Optional, Sequence, Type, TypeVar, TYPE_CHECKING, Union
+from typing import Optional, Sequence, Tuple, Type, TypeVar, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .abstract import AbstractProcess
@@ -180,6 +180,7 @@ class RemotePointer:
         re-walks the chain on every access — ``(hp + 4)`` keeps following the
         target as it moves, it doesn't snapshot the address at shift time.
         """
+        new_offsets: Optional[Tuple[int, ...]]
         if self._offsets is None:
             # Direct handle: just move the base address.
             new_base, new_offsets = self._base_address + delta, None
