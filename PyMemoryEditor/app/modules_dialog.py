@@ -66,6 +66,7 @@ class ModulesDialog(QDialog):
 
     # qulonglong: 64-bit addresses overflow Qt's default (C++ signed 32-bit) int.
     open_hex_viewer = Signal("qulonglong", "qulonglong")  # (address, length)
+    resolve_pointer_chain = Signal("qulonglong")  # module base address
 
     def __init__(self, process: AbstractProcess, parent=None):
         super().__init__(parent)
@@ -296,6 +297,16 @@ class ModulesDialog(QDialog):
         # the backend couldn't resolve one.
         copy_path.setEnabled(bool(path))
         copy_path.triggered.connect(lambda: self._copy_text(path))
+
+        menu.addSeparator()
+        resolve_chain = menu.addAction("Resolve pointer chain from base…")
+        resolve_chain.setToolTip(
+            "Open the Pointer Chain tool with this module's base address filled "
+            "in — then add the module offset and the chain offsets."
+        )
+        resolve_chain.triggered.connect(
+            lambda: self.resolve_pointer_chain.emit(address)
+        )
         return menu
 
     def _copy_text(self, text: str) -> None:

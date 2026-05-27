@@ -127,10 +127,12 @@ class PointerChainDialog(QDialog):
         layout.addWidget(header)
 
         hint = QLabel(
-            "Enter a pointer chain. The base address can be a static offset "
-            "inside the executable (module base + offset) or a known pointer "
-            "in memory."
+            "Enter a pointer chain. The base can be an absolute hex address, or "
+            "a module-relative base written <b>\"module\"+0xoffset</b> "
+            "(e.g. from a pointer-scan path) — it survives ASLR because the "
+            "module's current load base is looked up for you."
         )
+        hint.setTextFormat(Qt.RichText)
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -140,8 +142,20 @@ class PointerChainDialog(QDialog):
         form.setVerticalSpacing(8)
 
         self._base_edit = QLineEdit()
-        self._base_edit.setPlaceholderText("e.g. 0x14010F4F4 (hex)")
+        self._base_edit.setPlaceholderText(
+            'e.g. 0x14010F4F4  or  "game.exe"+0x10F4F4'
+        )
         form.addRow("Base address:", self._base_edit)
+
+        # Optional convenience: paste the raw module base in "Base address" (e.g.
+        # copied from the Modules window) and the static module_offset here — the
+        # resolver adds them. Equivalent to the "module"+0xoffset base syntax.
+        self._module_offset_edit = QLineEdit()
+        self._module_offset_edit.setPlaceholderText(
+            "optional — added to base (e.g. 0x4A0C68 from a pointer-scan path)"
+        )
+        self._module_offset_edit.setFont(QFont("Menlo, Consolas, Courier New", 10))
+        form.addRow("Module offset:", self._module_offset_edit)
 
         # Offsets row — a chain of "[+ hex ]" slots with a
         # trailing "+" button to add another hop. Wrapped in a horizontal
@@ -340,20 +354,99 @@ class PointerChainDialog(QDialog):
         length = self._length_spin.value() if spec.accepts_length_override else spec.length
         return spec, int(length)
 
+    def set_base_address(self, address: int) -> None:
+        """Prefill the Base field with an absolute address (e.g. a module base).
+
+        Clears the Module offset field so the next thing the user types there
+        is added to this base from a clean slate.
+        """
+        self._base_edit.setText("0x%X" % int(address))
+        self._module_offset_edit.clear()
+        self._base_edit.setFocus()
+
+    def _lookup_module_base(self, name: str) -> Optional[int]:
+        """Current load base of the module named ``name`` (case-insensitive)."""
+        name_lower = name.lower()
+        for module in self._process.get_modules():
+            if module.name.lower() == name_lower:
+                return module.base_address
+        return None
+
+    def _resolve_base(self, text: str) -> Optional[int]:
+        """
+        Parse the Base field into an absolute address.
+
+        Accepts either a plain hex address (``0x14010F4F4``) or Cheat-Engine's
+        ``"module"+0xoffset`` form (``"libpython3.12.dylib"+0x4ED3D0``), looking
+        the module's current load base up via ``get_modules()`` and adding the
+        offset — so a saved pointer-scan path (module + module_offset) can be
+        pasted straight in and resolves correctly despite ASLR. Shows a specific
+        warning and returns ``None`` on failure.
+        """
+        text = text.strip()
+
+        if "+" in text:
+            name_part, _, offset_part = text.partition("+")
+            module_name = name_part.strip().strip('"').strip("'").strip()
+            offset = parse_hex_address(offset_part)
+            if offset is None:
+                try:
+                    offset = int(offset_part.strip(), 16)
+                except ValueError:
+                    QMessageBox.warning(
+                        self,
+                        "Resolve",
+                        "The offset after '+' must be hex (e.g. \"game.exe\"+0x10F4F4).",
+                    )
+                    return None
+            module_base = self._lookup_module_base(module_name)
+            if module_base is None:
+                QMessageBox.warning(
+                    self,
+                    "Resolve",
+                    f"Module {module_name!r} is not loaded in this process.\n\n"
+                    "Open Tools → Modules to see the exact names available.",
+                )
+                return None
+            return module_base + offset
+
+        base = parse_hex_address(text)
+        if base is None:
+            QMessageBox.warning(
+                self,
+                "Resolve",
+                'Base must be hex (0x14010F4F4) or "module"+0xoffset '
+                '(e.g. "game.exe"+0x10F4F4).',
+            )
+        return base
+
     def _on_resolve(self) -> None:
         base_text = self._base_edit.text().strip()
         if not base_text:
             QMessageBox.warning(self, "Resolve", "Enter a base address first.")
             return
 
-        base = parse_hex_address(base_text)
+        base = self._resolve_base(base_text)
         if base is None:
-            QMessageBox.warning(
-                self,
-                "Resolve",
-                "Base address must be hex (e.g. 0x14010F4F4 or 14010F4F4).",
-            )
-            return
+            return  # _resolve_base already explained why
+
+        # Optional module-offset field: added to the base *before* any
+        # dereference (it locates the static slot — it is NOT a chain offset).
+        module_offset_text = self._module_offset_edit.text().strip()
+        if module_offset_text:
+            module_offset = parse_hex_address(module_offset_text)
+            if module_offset is None:
+                try:
+                    module_offset = int(module_offset_text, 16)
+                except ValueError:
+                    QMessageBox.warning(
+                        self,
+                        "Resolve",
+                        "Module offset must be hex (e.g. 0x4A0C68). Leave it "
+                        "empty if your base address already includes it.",
+                    )
+                    return
+            base += module_offset
 
         offsets = self._read_offsets()
         if offsets is None:

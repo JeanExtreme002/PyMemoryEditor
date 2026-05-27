@@ -9,7 +9,7 @@ import ctypes
 import logging
 import os
 import warnings
-from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Dict, Generator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.module_info import ModuleInfo
@@ -603,6 +603,83 @@ def _macho_image_size(task: int, load_address: int) -> int:
         cmd_address += cmd_size
 
     return 0
+
+
+# Segments that never hold a process's mutable global pointers and so are
+# useless (or actively harmful) as pointer-scan static bases: __PAGEZERO is the
+# multi-GB unmapped guard at the bottom of the image, and __LINKEDIT is a merged
+# blob shared across dylibs (its address isn't private to one image).
+_SKIP_SEGMENTS = (b"__PAGEZERO", b"__LINKEDIT")
+
+
+def get_image_segments(task: int, load_address: int) -> List[Tuple[int, int]]:
+    """
+    Return the runtime ``(start, size)`` of every real segment of the Mach-O
+    image at ``load_address`` — ``__TEXT``, ``__DATA``, ``__DATA_CONST``, etc.
+
+    Unlike :func:`_macho_image_size` (which returns only ``__TEXT`` because it
+    answers "how big is the code?"), this answers "which address ranges belong
+    to this image?" — the question the pointer scanner needs, since a process's
+    *global pointers* (the static bases of a pointer chain) live in the
+    writable ``__DATA`` / ``__DATA_CONST`` segments, **not** in ``__TEXT``.
+
+    Each segment is rebased by the image's ASLR slide (computed from where
+    ``__TEXT`` actually landed), so the returned ranges are live addresses. This
+    is exact for the main executable and ordinary dylibs; segments of
+    dyld-shared-cache dylibs may be relocated independently of ``__TEXT`` and so
+    come back approximate — harmless for static-base detection (a wrong range
+    simply won't contain any real pointer slot). Returns ``[]`` when the header
+    can't be parsed.
+    """
+    try:
+        header = read_process_memory(task, load_address, bytes, _MACH_HEADER_64_SIZE)
+    except MachReadError:
+        return []
+
+    if int.from_bytes(header[:4], "little") != _MH_MAGIC_64:
+        return []
+
+    ncmds = int.from_bytes(header[16:20], "little")
+    cmd_address = load_address + _MACH_HEADER_64_SIZE
+
+    segments: List[Tuple[bytes, int, int]] = []  # (segname, vmaddr, vmsize)
+    text_vmaddr: Optional[int] = None
+
+    for _ in range(ncmds):
+        try:
+            cmd_header = read_process_memory(task, cmd_address, bytes, 8)
+        except MachReadError:
+            break
+
+        cmd = int.from_bytes(cmd_header[:4], "little")
+        cmd_size = int.from_bytes(cmd_header[4:8], "little")
+        if cmd_size == 0:
+            break
+
+        if cmd == _LC_SEGMENT_64:
+            try:
+                seg = read_process_memory(task, cmd_address, bytes, 40)
+            except MachReadError:
+                break
+            segname = seg[8:24].split(b"\x00", 1)[0]
+            vmaddr = int.from_bytes(seg[24:32], "little")
+            vmsize = int.from_bytes(seg[32:40], "little")
+            if segname == b"__TEXT":
+                text_vmaddr = vmaddr
+            segments.append((segname, vmaddr, vmsize))
+
+        cmd_address += cmd_size
+
+    if text_vmaddr is None:
+        return []
+
+    slide = load_address - text_vmaddr
+    ranges: List[Tuple[int, int]] = []
+    for segname, vmaddr, vmsize in segments:
+        if vmsize == 0 or segname in _SKIP_SEGMENTS:
+            continue
+        ranges.append((vmaddr + slide, vmsize))
+    return ranges
 
 
 def get_modules(task: int) -> Generator[ModuleInfo, None, None]:

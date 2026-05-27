@@ -183,6 +183,7 @@ class ResultsView(QTableView):
     promote_to_cheat_table = Signal(list)  # list[int]
     # qulonglong: 64-bit address overflows Qt's default int (C++ signed 32-bit).
     open_in_hex_viewer = Signal("qulonglong")
+    pointer_scan_for_address = Signal("qulonglong")  # target address
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -227,6 +228,13 @@ class ResultsView(QTableView):
             copy_action = QAction("Copy address", self)
             copy_action.triggered.connect(lambda: self._copy_address(rows[0]))
             menu.addAction(copy_action)
+
+            menu.addSeparator()
+            pointer_scan = QAction("Pointer scan for this address…", self)
+            pointer_scan.triggered.connect(
+                lambda: self.pointer_scan_for_address.emit(model.address_at(rows[0]))
+            )
+            menu.addAction(pointer_scan)
 
         menu.exec(self.viewport().mapToGlobal(pos))
 

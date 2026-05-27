@@ -65,6 +65,8 @@ def test_app_modules_import_cleanly():
     import PyMemoryEditor.app.memory_viewer_dialog  # noqa: F401
     import PyMemoryEditor.app.memory_map_dialog  # noqa: F401
     import PyMemoryEditor.app.modules_dialog  # noqa: F401
+    import PyMemoryEditor.app.pointer_chain_dialog  # noqa: F401
+    import PyMemoryEditor.app.pointer_scan_dialog  # noqa: F401
     import PyMemoryEditor.app.open_process_dialog  # noqa: F401
     import PyMemoryEditor.app.main_window  # noqa: F401
     import PyMemoryEditor.app.application  # noqa: F401
@@ -91,3 +93,32 @@ def test_qapplication_starts_under_offscreen(qtbot):
     qtbot.wait(10)
     label.close()
     assert app is not None
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_pointer_scan_dialog_constructs_and_prefills(qtbot):
+    """
+    The Pointer Scan dialog starts no background thread in ``__init__`` (the
+    worker only spins up on Scan), so it's safe to construct, prefill and tear
+    down in a unit test — unlike the polling dialogs.
+    """
+    import os
+
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor import OpenProcess
+    from PyMemoryEditor.app.pointer_scan_dialog import PointerScanDialog
+
+    QApplication.instance() or QApplication([])
+    process = OpenProcess(pid=os.getpid())
+    try:
+        dialog = PointerScanDialog(process)
+        qtbot.addWidget(dialog)
+        # set_target_address is the entry point the results view uses.
+        dialog.set_target_address(0x1234)
+        assert "1234" in dialog._target_edit.text().upper()
+        # Table is wired with the Cheat-Engine-style columns.
+        assert dialog._model.columnCount() == 6
+        dialog.close()
+    finally:
+        process.close()
