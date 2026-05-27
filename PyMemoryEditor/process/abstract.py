@@ -10,6 +10,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    TYPE_CHECKING,
     Union,
 )
 
@@ -18,6 +19,9 @@ from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .scanning import _PRESORTED_KEY
 from .thread_info import ThreadInfo
+
+if TYPE_CHECKING:
+    from .remote_pointer import RemotePointer
 
 
 T = TypeVar("T")
@@ -348,6 +352,42 @@ class AbstractProcess(ABC):
         :raises NotImplementedError: on Linux (see :meth:`allocate_memory`).
         """
         raise NotImplementedError()
+
+    def get_pointer(
+        self,
+        base_address: int,
+        offsets: Optional[Sequence[int]] = None,
+        *,
+        pytype: Type = int,
+        bufflength: Optional[int] = None,
+        ptr_size: int = 8,
+    ) -> "RemotePointer":
+        """
+        Build a :class:`~PyMemoryEditor.RemotePointer` bound to this process —
+        a live, re-resolving handle to a typed value in the target.
+
+        Convenience wrapper around the ``RemotePointer(self, ...)`` constructor;
+        see that class for the meaning of every parameter (notably ``offsets``,
+        whose ``None`` vs ``[]`` distinction selects a direct handle vs a
+        single-dereference chain).
+
+        Example
+        -------
+        ::
+
+            hp = process.get_pointer(0x14010F4F4, [0x0, 0x158], pytype=int, bufflength=4)
+            hp.value -= 10
+        """
+        from .remote_pointer import RemotePointer
+
+        return RemotePointer(
+            self,
+            base_address,
+            offsets,
+            pytype=pytype,
+            bufflength=bufflength,
+            ptr_size=ptr_size,
+        )
 
     def resolve_pointer_chain(
         self,

@@ -4,3 +4,4 @@ from . import errors
 from . import util
 from .abstract import AbstractProcess
 from .info import ProcessInfo
+from .remote_pointer import RemotePointer

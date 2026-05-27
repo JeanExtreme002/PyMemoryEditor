@@ -53,6 +53,7 @@ reading, writing and searching values in the process memory.
 | **Scan modes** | Exact, not-exact, bigger / smaller (±equal), in-range, out-of-range. |
 | **Pattern scan** | Byte signatures or regex — `grep` for process memory. |
 | **Pointer chains** | Walk multi-level pointers (`[[base+0x10]+0x20]+0x30`) in one call. |
+| **Live pointers** | A `RemotePointer` handle re-resolves its chain on every `.value` read/write. |
 | **Module enumeration** | List loaded executables & libraries with their base address — `base + offset` beats ASLR. |
 | **Allocate / free memory** | Reserve and release memory inside the target (Windows & macOS). |
 | **Snapshot caching** | The Cheat-Engine "scan → refine → refine" loop, accelerated. |
@@ -333,6 +334,31 @@ hp = process.read_process_memory(hp_address, int, 4)
 ```
 
 `ptr_size=4` for 32-bit targets, `ptr_size=8` (default) for 64-bit.
+
+### 📍 Live pointers — a handle you keep around
+
+`resolve_pointer_chain` finds an address once. A **`RemotePointer`** wraps that
+recipe in a reusable handle: read or write the value through `.value`, and it
+re-walks the chain every time — so the same handle keeps working even when the
+target moves things around in memory.
+
+```python
+# A handle to the player's HP, behind a two-level pointer.
+hp_ptr = process.get_pointer(address, pytype=int, bufflength=4)
+
+print(hp_ptr.value)   # read it
+hp_ptr.value = 9999   # write it
+```
+
+You can do pointer math too: `hp_ptr + 4` gives a **new** handle 4 bytes further
+along (handy when values sit side by side), without touching memory. Omit the
+offsets to wrap an address you already have — e.g. one found by a scan.
+
+```python
+# Mana is stored right after HP, so just step 4 bytes forward.
+mp_ptr = hp_ptr + 4
+print(mp_ptr.value)
+```
 
 ### 🧱 Allocating memory in the target
 
