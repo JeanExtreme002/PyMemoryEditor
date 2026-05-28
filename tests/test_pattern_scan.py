@@ -26,6 +26,11 @@ if sys.platform not in ("win32", "darwin") and not sys.platform.startswith("linu
 from PyMemoryEditor import OpenProcess  # noqa: E402
 
 
+# Live pattern scans of the entire test-process address space — slow.
+# Run with ``pytest -m "not slow"`` to skip them during fast feedback loops.
+pytestmark = pytest.mark.slow
+
+
 # A reasonably distinctive marker — eight bytes give us enough entropy that
 # random other matches in the test process's address space are unlikely.
 _MARKER = b"\x90\x90\xDE\xAD\xBE\xEF\xCA\xFE"

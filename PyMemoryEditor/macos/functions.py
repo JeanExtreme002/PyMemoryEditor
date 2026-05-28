@@ -13,7 +13,11 @@ from typing import Dict, Generator, List, Optional, Sequence, Tuple, Type, TypeV
 
 from ..enums import ScanTypesEnum
 from ..process.module_info import ModuleInfo
-from ..process.region import enrich_region
+from ..process.region import (
+    default_address_filter,
+    default_scan_filter,
+    enrich_region,
+)
 from ..process.scanning import (
     iter_pattern_results,
     iter_search_results,
@@ -62,6 +66,20 @@ _WRITE_RETRY_CODES = (KERN_PROTECTION_FAILURE, KERN_INVALID_ADDRESS)
 _logger = logging.getLogger("PyMemoryEditor")
 
 
+# When mach_vm_region returns a transient non-success code mid-enumeration we
+# bump the cursor by one page and keep going instead of silently truncating
+# the region list. 4 KiB is conservative: on Apple Silicon (16 KiB pages) we
+# simply make 4 small hops past a problem page, which is cheap. Sized small
+# enough that we do not accidentally skip a real adjacent region.
+_REGION_SKIP_BUMP = 0x1000
+
+# mach_vm_write's data_count parameter is `mach_msg_type_number_t` — a 32-bit
+# unsigned int per the Mach interface. A write larger than UINT32_MAX would
+# silently truncate at the kernel boundary. Guard it explicitly so the user
+# sees a real error instead of a partial write.
+_MACH_WRITE_MAX_SIZE = 0xFFFFFFFF
+
+
 T = TypeVar("T")
 
 
@@ -103,7 +121,13 @@ def release_task(task: int) -> None:
 def get_memory_regions(task: int) -> Generator[dict, None, None]:
     """
     Yield {address, size, struct} dicts describing each memory region of the task.
-    Stops when mach_vm_region returns a non-success code (typical end of address space).
+
+    ``mach_vm_region`` returning :data:`KERN_INVALID_ADDRESS` is the documented
+    way the kernel says "no more regions past this address" — the natural end
+    of the enumeration. Any *other* non-success code (``KERN_FAILURE``,
+    ``KERN_NO_ACCESS`` on a guard page, etc.) used to terminate enumeration
+    too, silently truncating the region list. Now those are logged and the
+    cursor is bumped one page so the walk keeps going.
     """
     address = mach_vm_address_t(0)
 
@@ -124,7 +148,15 @@ def get_memory_regions(task: int) -> Generator[dict, None, None]:
         )
 
         if kr != KERN_SUCCESS:
-            break
+            if kr == KERN_INVALID_ADDRESS:
+                return  # end of address space — the normal terminator
+            _logger.debug(
+                "get_memory_regions: mach_vm_region skipped 0x%X (kr=%d, %s); "
+                "advancing one page",
+                address.value, kr, mach_error_message(kr),
+            )
+            address.value += _REGION_SKIP_BUMP
+            continue
 
         # mach_vm_region returns a port name for the backing object; release it.
         if object_name.value:
@@ -148,7 +180,7 @@ def get_memory_regions(task: int) -> Generator[dict, None, None]:
         )
 
         if size.value == 0:
-            break
+            return
         address.value += size.value
 
 
@@ -225,7 +257,19 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
     so the change is private to the target task), performs the write, and
     restores the original protection. This mirrors the practical behavior of
     WriteProcessMemory on Windows.
+
+    ``mach_vm_write``'s ``data_count`` parameter is a 32-bit
+    ``mach_msg_type_number_t`` per the Mach interface; reject ``size`` values
+    that would silently truncate at the kernel boundary instead of letting
+    them slip through.
     """
+    if size > _MACH_WRITE_MAX_SIZE:
+        raise OverflowError(
+            "mach_vm_write size %d exceeds UINT32_MAX — the Mach interface "
+            "would silently truncate. Split the write into smaller chunks."
+            % size
+        )
+
     kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
     if kr == KERN_SUCCESS:
         return
@@ -279,6 +323,26 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
             )
             _logger.warning(message)
             warnings.warn(message, ResourceWarning, stacklevel=2)
+
+
+def _make_read_chunk(task: int):
+    """
+    Build a ``read_chunk(address, size)`` closure bound to ``task``.
+
+    Hoisted here so every ``search_*`` entry point uses one canonical
+    definition instead of re-declaring the closure inline three times.
+    """
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _mach_read(task, address, ctypes.addressof(buffer), size)
+        return buffer
+
+    return read_chunk
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Classify ``exc`` as a transient page-vanished failure for scan loops."""
+    return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
 
 
 def _query_region(task: int, address: int):
@@ -442,24 +506,12 @@ def search_addresses_by_value(
         memory_regions if memory_regions is not None else get_memory_regions(task)
     )
 
-    def is_scannable(region) -> bool:
-        protection = region["struct"].Protection
-        if protection & VM_PROT_READ == 0:
-            return False
-        if writeable_only and protection & VM_PROT_WRITE == 0:
-            return False
-        return True
-
-    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions = [
+        region
+        for region in source_regions
+        if default_scan_filter(region, writeable_only=writeable_only)
+    ]
     filtered_regions.sort(key=lambda region: region["address"])
-
-    def read_chunk(address: int, size: int):
-        buffer = (ctypes.c_byte * size)()
-        _mach_read(task, address, ctypes.addressof(buffer), size)
-        return buffer
-
-    def is_transient(exc: BaseException) -> bool:
-        return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
 
     yield from iter_search_results(
         filtered_regions,
@@ -467,9 +519,9 @@ def search_addresses_by_value(
         bufflength,
         target_value_bytes,
         scan_type,
-        read_chunk,
+        _make_read_chunk(task),
         progress_information=progress_information,
-        transient_error_check=is_transient,
+        transient_error_check=_is_transient,
     )
 
 
@@ -774,27 +826,18 @@ def search_addresses_by_pattern(
         memory_regions if memory_regions is not None else get_memory_regions(task)
     )
 
-    def is_scannable(region) -> bool:
-        return (region["struct"].Protection & VM_PROT_READ) != 0
-
-    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions = [
+        region for region in source_regions if default_scan_filter(region)
+    ]
     filtered_regions.sort(key=lambda region: region["address"])
-
-    def read_chunk(address: int, size: int):
-        buffer = (ctypes.c_byte * size)()
-        _mach_read(task, address, ctypes.addressof(buffer), size)
-        return buffer
-
-    def is_transient(exc: BaseException) -> bool:
-        return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
 
     yield from iter_pattern_results(
         filtered_regions,
         compiled,
         length,
-        read_chunk,
+        _make_read_chunk(task),
         progress_information=progress_information,
-        transient_error_check=is_transient,
+        transient_error_check=_is_transient,
     )
 
 
@@ -823,25 +866,17 @@ def search_values_by_addresses(
     # the caller pre-filtered to zero regions.
     if memory_regions is None:
         memory_regions = [
-            region for region in get_memory_regions(task) if region["is_readable"]
+            region for region in get_memory_regions(task) if default_address_filter(region)
         ]
     else:
         memory_regions = list(memory_regions)
-
-    def read_chunk(address: int, size: int):
-        buffer = (ctypes.c_byte * size)()
-        _mach_read(task, address, ctypes.addressof(buffer), size)
-        return buffer
-
-    def is_transient(exc: BaseException) -> bool:
-        return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
 
     yield from iter_values_for_addresses(
         addresses,
         memory_regions,
         pytype,
         bufflength,
-        read_chunk,
+        _make_read_chunk(task),
         raise_error=raise_error,
-        transient_error_check=is_transient,
+        transient_error_check=_is_transient,
     )

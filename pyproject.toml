@@ -127,5 +127,15 @@ skip_empty = true
 # ``test_*.py`` together on a single worker (module-scoped fixtures stay
 # valid), and ``-n auto`` picks one worker per available CPU. Override with
 # ``pytest -n 0`` for serial debugging.
+#
+# Fast vs slow split:
+#   pytest -m "not slow"        # ~30 s — unit/property/GUI tests only.
+#   pytest                      # ~20 min — everything, including the live
+#                               # self-process integration suite.
+# Mark a test (or set ``pytestmark = pytest.mark.slow`` at module scope) to
+# add it to the slow bucket — see tests/test_editor.py for the pattern.
 [tool.pytest.ini_options]
 addopts = "-n auto --dist=loadfile"
+markers = [
+    "slow: integration tests that read/scan the current process's whole address space (minutes, not seconds)",
+]

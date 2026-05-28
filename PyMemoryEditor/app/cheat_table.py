@@ -94,9 +94,24 @@ class CheatTable(QWidget):
         self._publish_timer.timeout.connect(self._publish_snapshot_to_worker)
         self._publish_timer.start()
 
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
+    def shutdown(self) -> None:
+        """
+        Stop the cheat poller thread cleanly.
+
+        Idempotent and safe to call from places ``closeEvent`` won't fire —
+        ``QWidget.deleteLater()`` / ``setParent(None)`` do *not* trigger
+        ``closeEvent``, so ``_change_process`` and the top-level window's
+        ``closeEvent`` need to drive the teardown explicitly to avoid leaving
+        the poller running against a now-closed process handle.
+        """
+        # Stop the publish timer first so no fresh snapshot races our shutdown.
+        if self._publish_timer.isActive():
+            self._publish_timer.stop()
         self._poller.stop()
         self._poller.wait(1000)
+
+    def closeEvent(self, event):  # noqa: N802 — Qt naming
+        self.shutdown()
         super().closeEvent(event)
 
     def _build_ui(self) -> None:

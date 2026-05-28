@@ -13,7 +13,11 @@ from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Un
 
 from ..enums import ScanTypesEnum
 from ..process.module_info import ModuleInfo
-from ..process.region import enrich_region
+from ..process.region import (
+    default_address_filter,
+    default_scan_filter,
+    enrich_region,
+)
 from ..process.scanning import (
     iter_pattern_results,
     iter_search_results,
@@ -27,7 +31,7 @@ from ..util import (
 )
 from ..util.pattern import PatternLike, compile_pattern
 
-from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum
+from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum
 from .types import (
     MEMORY_BASIC_INFORMATION,
     MEMORY_BASIC_INFORMATION_32,
@@ -233,15 +237,24 @@ def GetMemoryRegions(process_handle: int) -> Generator[dict, None, None]:
     Picks the right MEMORY_BASIC_INFORMATION layout (32-bit vs 64-bit) for the
     target process to handle the WOW64 case (64-bit Python attached to a 32-bit
     target). VirtualQueryEx is dispatched against `mbi_class` accordingly.
+
+    ``VirtualQueryEx`` returning 0 used to terminate enumeration unconditionally,
+    silently truncating the region list whenever the kernel hiccuped on a
+    single region (DLL unloaded mid-walk, transient permission edge). Now we
+    consult ``GetLastError``: only fall through for the natural end-of-space
+    case; for any other failure log it and bump the cursor by one page so the
+    walk keeps making progress.
     """
     mbi_class = mbi_class_for_handle(process_handle)
     mem_region_begin = system_information.lpMinimumApplicationAddress
     mem_region_end = system_information.lpMaximumApplicationAddress
+    page_size = system_information.dwPageSize or 0x1000
 
     current_address = mem_region_begin
 
     while current_address < mem_region_end:
         region = mbi_class()
+        ctypes.set_last_error(0)
         result = kernel32.VirtualQueryEx(
             process_handle,
             current_address,
@@ -250,14 +263,30 @@ def GetMemoryRegions(process_handle: int) -> Generator[dict, None, None]:
         )
 
         if result == 0:
-            break
+            err = ctypes.get_last_error()
+            # ERROR_INVALID_PARAMETER (87) is what VirtualQueryEx returns once
+            # we walk past lpMaximumApplicationAddress on some Windows builds —
+            # the natural end. Anything else is a transient skip, not a
+            # terminator: log and step one page forward.
+            if err in (0, 87):
+                return
+            _logger.debug(
+                "GetMemoryRegions: VirtualQueryEx skipped 0x%X (err=%d); "
+                "advancing one page",
+                current_address, err,
+            )
+            current_address += page_size
+            continue
 
         yield enrich_region(
             {"address": current_address, "size": region.RegionSize, "struct": region}
         )
 
         if region.RegionSize == 0:
-            break
+            # Defensive: would otherwise spin forever. Bump one page and keep
+            # going so a single weird region can't cap the enumeration either.
+            current_address += page_size
+            continue
         current_address += region.RegionSize
 
 
@@ -329,26 +358,6 @@ def ReadProcessMemory(
         return data.value
 
 
-def _is_region_scannable(region, writeable_only: bool) -> bool:
-    """Check whether a memory region should be scanned (private or image, committed, readable)."""
-    info = region["struct"]
-    if info.State != MemoryAllocationStatesEnum.MEM_COMMIT.value:
-        return False
-    if info.Type not in (
-        MemoryTypesEnum.MEM_PRIVATE.value,
-        MemoryTypesEnum.MEM_IMAGE.value,
-    ):
-        return False
-    if info.Protect & MemoryProtectionsEnum.PAGE_READABLE.value == 0:
-        return False
-    if (
-        writeable_only
-        and info.Protect & MemoryProtectionsEnum.PAGE_READWRITEABLE.value == 0
-    ):
-        return False
-    return True
-
-
 def _read_region(process_handle: int, address: int, size: int):
     """Read a memory region; returns the byte buffer or None on failure."""
     region_data = (ctypes.c_byte * size)()
@@ -396,7 +405,7 @@ def SearchAddressesByValue(
     filtered_regions = [
         region
         for region in source_regions
-        if _is_region_scannable(region, writeable_only)
+        if default_scan_filter(region, writeable_only=writeable_only)
     ]
     filtered_regions.sort(key=lambda region: region["address"])
 
@@ -437,9 +446,7 @@ def SearchAddressesByPattern(
         else GetMemoryRegions(process_handle)
     )
     filtered_regions = [
-        region
-        for region in source_regions
-        if _is_region_scannable(region, writeable_only=False)
+        region for region in source_regions if default_scan_filter(region)
     ]
     filtered_regions.sort(key=lambda region: region["address"])
 
@@ -490,10 +497,11 @@ def SearchValuesByAddresses(
         memory_regions = [
             region
             for region in GetMemoryRegions(process_handle)
-            # Accept both private and image (loaded DLLs) regions, matching
-            # SearchAddressesByValue. Previously this filter was stricter and
-            # caused addresses found via search_by_value to fail here.
-            if _is_region_scannable(region, writeable_only=False)
+            # An address-list read has the caller already deciding *where* —
+            # the library has no business filtering by region "interestingness"
+            # (which used to exclude MEM_MAPPED here and diverge from
+            # Linux/macOS). All three backends now agree: just readable.
+            if default_address_filter(region)
         ]
     else:
         memory_regions = list(memory_regions)

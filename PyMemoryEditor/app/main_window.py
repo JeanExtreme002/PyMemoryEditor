@@ -806,6 +806,14 @@ class MainWindow(QMainWindow):
         # Replace the cheat table — old entries point at the previous process.
         # QSplitter has no QLayout, so we use its native replaceWidget(index).
         old_cheat = self._cheat
+        # Stop the old poller thread *before* swapping it out: deleteLater() /
+        # setParent(None) do not fire closeEvent, so the old QThread would
+        # otherwise keep reading from the previous process's now-closed handle
+        # until GC. shutdown() is idempotent and joins the worker.
+        try:
+            old_cheat.shutdown()
+        except Exception:
+            pass
         old_index = self._right_splitter.indexOf(old_cheat)
         self._cheat = CheatTable(self._process)
         self._cheat.pointer_scan_for_address.connect(self._open_pointer_scan_dialog)
@@ -819,12 +827,45 @@ class MainWindow(QMainWindow):
         self._status.showMessage(f"Now targeting PID {self._process.pid}.")
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._worker is not None:
-            self._worker.cancel()
-            self._worker.wait(_WORKER_SHUTDOWN_WAIT_MS)
+        # The cheat poller is a child widget but its closeEvent is *not*
+        # guaranteed to fire on a top-level window close — only on an explicit
+        # close of the child. Drive it directly so the QThread is stopped
+        # before the process handle goes away in `application.main`'s finally.
+        try:
+            self._cheat.shutdown()
+        except Exception:
+            pass
+
+        self._shutdown_worker()
         self._heartbeat.stop()
         self.closing.emit()
         super().closeEvent(event)
+
+    def _shutdown_worker(self) -> None:
+        """
+        Stop the active scan worker safely.
+
+        Disconnect every signal **before** waiting — if the wait times out
+        (long scan that ignores cancel), a late ``chunk_ready`` / ``finished``
+        emit would otherwise land on a half-destroyed UI. Then wait the
+        capped time and forcibly forget the worker either way.
+        """
+        worker = self._worker
+        if worker is None:
+            return
+        worker.cancel()
+        try:
+            worker.chunk_ready.disconnect()
+            worker.progress.disconnect()
+            worker.status.disconnect()
+            worker.error.disconnect()
+            worker.finished_ok.disconnect()
+            worker.finished.disconnect()
+        except (RuntimeError, TypeError):
+            # Already disconnected / no slots — fine, we just want them gone.
+            pass
+        worker.wait(_WORKER_SHUTDOWN_WAIT_MS)
+        self._worker = None
 
 
 def _safe_for_json(value) -> object:
