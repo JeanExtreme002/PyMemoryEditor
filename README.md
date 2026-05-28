@@ -20,7 +20,7 @@ A pure-Python library (built on [ctypes](https://docs.python.org/3/library/ctype
 
 <p align="center">
   Tweak a value in a running game · inspect a live program's state ·
-  harvest data straight from RAM — <b>on Windows, Linux and macOS</b>.
+  harvest data straight from RAM.
 </p>
 
 <p align="center">
