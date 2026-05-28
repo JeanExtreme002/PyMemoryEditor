@@ -17,20 +17,25 @@ if sys.platform not in ("win32", "darwin") and not sys.platform.startswith("linu
     pytest.skip("Platform not supported by PyMemoryEditor", allow_module_level=True)
 
 
-from PyMemoryEditor import OpenProcess  # noqa: E402
+from PyMemoryEditor import MemoryRegion, MemoryRegionSnapshot, OpenProcess  # noqa: E402
 
 
 def test_snapshot_returns_materialized_list():
     process = OpenProcess(pid=os.getpid())
     try:
         snapshot = process.snapshot_memory_regions()
+        # MemoryRegionSnapshot is a list subclass — the helpers in
+        # process.scanning rely on this isinstance check to skip the per-call
+        # sorted() step.
         assert isinstance(snapshot, list)
+        assert isinstance(snapshot, MemoryRegionSnapshot)
         assert len(snapshot) > 0
-        # Each entry should expose the same shape as get_memory_regions().
+        # Each entry should expose the dataclass fields.
         first = snapshot[0]
-        assert "address" in first
-        assert "size" in first
-        assert "struct" in first
+        assert isinstance(first, MemoryRegion)
+        assert isinstance(first.address, int)
+        assert isinstance(first.size, int)
+        assert first.struct is not None
     finally:
         process.close()
 
@@ -41,8 +46,8 @@ def test_snapshot_can_be_iterated_multiple_times():
     try:
         snapshot = process.snapshot_memory_regions()
         # Two passes yield identical content.
-        addresses_pass_1 = [r["address"] for r in snapshot]
-        addresses_pass_2 = [r["address"] for r in snapshot]
+        addresses_pass_1 = [r.address for r in snapshot]
+        addresses_pass_2 = [r.address for r in snapshot]
         assert addresses_pass_1 == addresses_pass_2
     finally:
         process.close()

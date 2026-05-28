@@ -16,7 +16,7 @@ dialog also publishes its last snapshot so the main window can reuse it as the
 ``memory_regions`` kwarg to subsequent scans.
 """
 import sys
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QGuiApplication, QStandardItem, QStandardItemModel
@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from PyMemoryEditor import AbstractProcess
+from PyMemoryEditor import AbstractProcess, MemoryRegion, MemoryRegionSnapshot
 
 from ._widgets import NumericItem
 
@@ -43,7 +43,7 @@ from ._widgets import NumericItem
 class _SnapshotWorker(QThread):
     """Background thread that runs ``snapshot_memory_regions()`` off the UI."""
 
-    snapshot_ready = Signal(object)  # List[Dict]
+    snapshot_ready = Signal(object)  # List[MemoryRegion]
     snapshot_failed = Signal(str)
 
     def __init__(self, process: AbstractProcess, parent=None):
@@ -95,12 +95,12 @@ def _parse_amount(text: str) -> Optional[float]:
     return value if value > 0 else None
 
 
-def _decode_protection(region: Dict) -> str:
+def _decode_protection(region) -> str:
     """
     Translate the platform-specific protection field into a short ``R W X`` /
     ``private``-style string. Falls back to the raw int if we can't recognise it.
     """
-    struct = region.get("struct")
+    struct = region.struct
 
     if sys.platform == "win32":
         # Windows: the low byte of Protect is one of the mutually-exclusive
@@ -167,15 +167,13 @@ def _decode_protection(region: Dict) -> str:
         return "-"
 
 
-def _region_path(region: Dict) -> str:
+def _region_path(region) -> str:
     """On Linux, surface the backing file path (so the user sees [stack], [heap] etc)."""
-    return region.get("path") or ""
+    return region.path or ""
 
 
-def _region_shared(region: Dict) -> str:
-    if "is_shared" not in region:
-        return "—"
-    return "Shared" if region["is_shared"] else "Private"
+def _region_shared(region) -> str:
+    return "Shared" if region.is_shared else "Private"
 
 
 class MemoryMapDialog(QDialog):
@@ -187,7 +185,7 @@ class MemoryMapDialog(QDialog):
     def __init__(self, process: AbstractProcess, parent=None):
         super().__init__(parent)
         self._process = process
-        self._snapshot: List[Dict] = []
+        self._snapshot: List[MemoryRegion] = []
         self._worker: Optional[_SnapshotWorker] = None
 
         # allocate/free are a Windows/macOS capability (Linux raises
@@ -360,9 +358,13 @@ class MemoryMapDialog(QDialog):
             "QPushButton#secondary { padding: 5px 12px; min-height: 0px; }"
         )
 
-    def snapshot(self) -> List[Dict]:
-        """Return the cached region snapshot so the scanner can reuse it."""
-        return list(self._snapshot)
+    def snapshot(self) -> MemoryRegionSnapshot:
+        """Return the cached region snapshot so the scanner can reuse it.
+
+        Wrapped in :class:`MemoryRegionSnapshot` so the scan helpers detect the
+        pre-sorted contract and skip their per-call ``sorted(...)`` step.
+        """
+        return MemoryRegionSnapshot(self._snapshot)
 
     def refresh(self) -> None:
         # Skip if a snapshot is already in flight — the 1000ms auto-refresh timer
@@ -385,7 +387,10 @@ class MemoryMapDialog(QDialog):
         worker.start()
 
     def _on_snapshot_ready(self, snapshot) -> None:
-        self._snapshot = list(snapshot)
+        # Preserve the MemoryRegionSnapshot tag — scans that reuse this cache
+        # via the ``memory_regions=`` kwarg rely on the isinstance check to
+        # skip the per-call ``sorted(...)`` step.
+        self._snapshot = MemoryRegionSnapshot(snapshot)
         self._populate()
 
     def _populate(self) -> None:
@@ -404,7 +409,7 @@ class MemoryMapDialog(QDialog):
         scroll_value = self._table.verticalScrollBar().value()
 
         total = len(self._snapshot)
-        total_bytes = sum(int(region["size"]) for region in self._snapshot)
+        total_bytes = sum(int(region.size) for region in self._snapshot)
 
         # Disable sorting while rebuilding so the model isn't re-sorted on every
         # appendRow (and rows don't shuffle mid-build).
@@ -413,8 +418,8 @@ class MemoryMapDialog(QDialog):
 
         shown = 0
         for region in self._snapshot:
-            addr = int(region["address"])
-            size = int(region["size"])
+            addr = int(region.address)
+            size = int(region.size)
             path = _region_path(region) or ""
 
             if needle and needle not in path.lower() and needle not in f"0x{addr:x}":
@@ -499,14 +504,21 @@ class MemoryMapDialog(QDialog):
             self._worker.wait(1000)
         super().closeEvent(event)
 
-    def _selected_region(self) -> Optional[Dict]:
+    def _selected_region(self) -> Optional[MemoryRegion]:
         rows = self._table.selectionModel().selectedRows()
         if not rows:
             return None
         row = rows[0].row()
-        addr = self._model.item(row, 0).data(Qt.UserRole)
-        size = self._model.item(row, 1).data(Qt.UserRole)
-        return {"address": int(addr), "size": int(size)}
+        addr = int(self._model.item(row, 0).data(Qt.UserRole))
+        # Look up the real MemoryRegion from the snapshot so callers get the
+        # full set of fields (is_writable, struct, path, …). Falls back to a
+        # minimal stub if the row's address is no longer in the snapshot
+        # (rare; can happen if the map refreshed mid-selection).
+        for region in self._snapshot:
+            if region.address == addr:
+                return region
+        size = int(self._model.item(row, 1).data(Qt.UserRole))
+        return MemoryRegion(address=addr, size=size)
 
     def _show_context_menu(self, pos) -> None:
         """Right-click menu on a region row: copy its address or backing path."""
@@ -546,8 +558,8 @@ class MemoryMapDialog(QDialog):
             QMessageBox.information(self, "Memory Map", "Select a region first.")
             return
         # Cap the initial view to keep the hex widget responsive on huge regions.
-        size = min(region["size"], 4096)
-        self.open_hex_viewer.emit(region["address"], size)
+        size = min(region.size, 4096)
+        self.open_hex_viewer.emit(region.address, size)
 
     def _on_allocate(self) -> None:
         amount = _parse_amount(self._size_edit.text())
@@ -593,7 +605,7 @@ class MemoryMapDialog(QDialog):
             QMessageBox.information(self, "Memory Map", "Select a region to free first.")
             return
 
-        address = region["address"]
+        address = region.address
         reply = QMessageBox.warning(
             self,
             "Free memory",

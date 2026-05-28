@@ -9,6 +9,7 @@ from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
+from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
 from .enums import ProcessOperationsEnum
 
@@ -191,7 +192,7 @@ class WindowsProcess(AbstractProcess):
         addresses: Sequence[int],
         *,
         raise_error: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
         self.__require_read()
@@ -213,7 +214,7 @@ class WindowsProcess(AbstractProcess):
         *,
         progress_information: bool = False,
         writeable_only: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
         self.__require_read()
@@ -240,7 +241,7 @@ class WindowsProcess(AbstractProcess):
         *,
         byte_length: int = 0,
         progress_information: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
         self.__require_read()
@@ -262,7 +263,7 @@ class WindowsProcess(AbstractProcess):
         not_between: bool = False,
         progress_information: bool = False,
         writeable_only: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
         self.__require_read()

@@ -15,12 +15,21 @@ import ctypes
 
 import pytest
 
+from PyMemoryEditor.process.region import MemoryRegion
 from PyMemoryEditor.process.scanning import iter_values_for_addresses
 
 
-def _make_region(address: int, payload: bytes) -> dict:
-    """Build a fake region dict matching what get_memory_regions() yields."""
-    return {"address": address, "size": len(payload), "_payload": payload}
+# Tests build fake regions as ``MemoryRegion`` instances and keep the payload
+# bytes in a side-channel dict keyed by base address (the dataclass is frozen,
+# so attaching a payload to the region itself isn't an option). The
+# ``_make_reader`` closure walks the regions and serves bytes from that dict.
+_FAKE_PAYLOADS: "dict[int, bytes]" = {}
+
+
+def _make_region(address: int, payload: bytes) -> MemoryRegion:
+    """Build a fake region matching what get_memory_regions() yields."""
+    _FAKE_PAYLOADS[address] = payload
+    return MemoryRegion(address=address, size=len(payload), is_readable=True)
 
 
 def _make_reader(regions):
@@ -32,11 +41,11 @@ def _make_reader(regions):
 
     def read_chunk(address: int, size: int):
         for region in regions:
-            base = region["address"]
-            end = base + region["size"]
+            base = region.address
+            end = base + region.size
             if base <= address and address + size <= end:
                 offset = address - base
-                slice_ = region["_payload"][offset : offset + size]
+                slice_ = _FAKE_PAYLOADS[base][offset : offset + size]
                 buf = (ctypes.c_byte * len(slice_))()
                 ctypes.memmove(buf, slice_, len(slice_))
                 return buf

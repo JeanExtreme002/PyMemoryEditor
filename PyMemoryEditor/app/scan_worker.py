@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
-from PyMemoryEditor import AbstractProcess, ScanTypesEnum
+from PyMemoryEditor import AbstractProcess, MemoryRegion, ScanTypesEnum
 
 from .scan_types import NextScanType, ScanType
 from .value_types import ValueTypeSpec
@@ -70,7 +70,7 @@ class ScanRequest:
     writeable_only: bool = False
     # Optional cached snapshot of memory regions, reused across scans to skip
     # the region enumeration step. Pass None to let the backend enumerate.
-    memory_regions: Optional[Sequence[Dict]] = None
+    memory_regions: Optional[Sequence[MemoryRegion]] = None
 
 
 class _BaseWorker(QThread):
