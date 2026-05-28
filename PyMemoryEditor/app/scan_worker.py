@@ -16,19 +16,21 @@ blocks on a long scan.
 """
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, cast
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 
 from PySide6.QtCore import QThread, Signal
 
 from PyMemoryEditor import AbstractProcess, ScanTypesEnum
 
+from .scan_types import NextScanType, ScanType
 from .value_types import ValueTypeSpec
 
 
 _LOG = logging.getLogger(__name__)
 
 
-# Map of ScanTypesEnum → comparison used by the refine step.
+# Map of ScanTypesEnum → comparison used by the refine step. These compare the
+# freshly-read value (cur) against the user-supplied target (exp).
 COMPARATORS = {
     ScanTypesEnum.EXACT_VALUE: lambda cur, exp: cur == exp,
     ScanTypesEnum.NOT_EXACT_VALUE: lambda cur, exp: cur != exp,
@@ -38,6 +40,19 @@ COMPARATORS = {
     ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE: lambda cur, exp: cur <= exp,
     ScanTypesEnum.VALUE_BETWEEN: lambda cur, exp: exp[0] <= cur <= exp[1],
     ScanTypesEnum.NOT_VALUE_BETWEEN: lambda cur, exp: cur < exp[0] or cur > exp[1],
+}
+
+# Cheat Engine's "Next Scan" comparisons (app-only — see scan_types.py). These
+# compare the freshly-read value (cur) against the value recorded at that
+# address by the previous scan (prev). ``exp`` carries the delta for the *_BY
+# variants and is ignored otherwise.
+PREVIOUS_COMPARATORS = {
+    NextScanType.INCREASED_VALUE: lambda cur, prev, exp: cur > prev,
+    NextScanType.INCREASED_VALUE_BY: lambda cur, prev, exp: cur == prev + exp,
+    NextScanType.DECREASED_VALUE: lambda cur, prev, exp: cur < prev,
+    NextScanType.DECREASED_VALUE_BY: lambda cur, prev, exp: cur == prev - exp,
+    NextScanType.CHANGED_VALUE: lambda cur, prev, exp: cur != prev,
+    NextScanType.UNCHANGED_VALUE: lambda cur, prev, exp: cur == prev,
 }
 
 # Refresh the UI at most every N matches during a scan.
@@ -50,7 +65,7 @@ class ScanRequest:
 
     spec: ValueTypeSpec
     length: int
-    scan_type: ScanTypesEnum
+    scan_type: ScanType  # ScanTypesEnum, or app-only NextScanType for refines
     value: Any  # parsed primary value, or (a, b) for ranges
     writeable_only: bool = False
     # Optional cached snapshot of memory regions, reused across scans to skip
@@ -172,16 +187,21 @@ class RefineScanWorker(_BaseWorker):
         addresses: Sequence[int],
         *,
         filter_only: bool = True,
+        previous_values: Optional[Mapping[int, Any]] = None,
         parent=None,
     ):
         super().__init__(process, parent)
         self._request = request
         self._addresses = list(addresses)
         self._filter_only = filter_only
+        # Snapshot of {address: value} from the previous scan, needed by the
+        # Increased/Decreased/Changed/Unchanged comparisons.
+        self._previous_values: Mapping[int, Any] = previous_values or {}
 
     def run(self) -> None:
         req = self._request
         compare = COMPARATORS.get(req.scan_type)
+        prev_compare = PREVIOUS_COMPARATORS.get(req.scan_type)
 
         try:
             generator = self._process.search_by_addresses(
@@ -209,6 +229,31 @@ class RefineScanWorker(_BaseWorker):
                 # unreadable page (which on macOS can be most of the heap).
                 if current is None:
                     chunk.append((address, None, False))
+                    continue
+
+                keeps = True
+                if self._filter_only and prev_compare is not None:
+                    # Increased/Decreased/Changed/Unchanged: compare against the
+                    # value recorded at this address by the previous scan. With
+                    # no baseline (address discovered without a value), keep it
+                    # rather than guessing.
+                    previous = self._previous_values.get(address)
+                    try:
+                        keeps = previous is not None and bool(
+                            prev_compare(current, previous, req.value)
+                        )
+                    except TypeError as exc:
+                        _LOG.debug(
+                            "refine comparator raised TypeError at 0x%X "
+                            "(scan_type=%s, current=%r, previous=%r, target=%r): %s",
+                            address,
+                            req.scan_type,
+                            current,
+                            previous,
+                            req.value,
+                            exc,
+                        )
+                        keeps = False
                 elif self._filter_only and compare is not None:
                     try:
                         keeps = bool(compare(current, req.value))
@@ -227,11 +272,9 @@ class RefineScanWorker(_BaseWorker):
                             exc,
                         )
                         keeps = False
-                    chunk.append((address, current, keeps))
-                    if keeps:
-                        kept += 1
-                else:
-                    chunk.append((address, current, True))
+
+                chunk.append((address, current, keeps))
+                if keeps:
                     kept += 1
 
                 if len(chunk) >= UI_REFRESH_STEP:

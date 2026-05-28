@@ -173,6 +173,13 @@ class ResultsModel(QAbstractTableModel):
     def all_addresses(self) -> List[int]:
         return list(self._addresses)
 
+    def value_map(self) -> Dict[int, Any]:
+        """
+        Snapshot of {address: current_value}, used as the baseline for the
+        Increased/Decreased/Changed/Unchanged "Next Scan" comparisons.
+        """
+        return {addr: self._values[i] for i, addr in enumerate(self._addresses)}
+
     def count(self) -> int:
         return len(self._addresses)
 

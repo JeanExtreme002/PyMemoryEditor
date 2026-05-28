@@ -399,6 +399,8 @@ class MainWindow(QMainWindow):
             request,
             self._results_model.all_addresses(),
             filter_only=True,
+            # Baseline for the Increased/Decreased/Changed/Unchanged comparisons.
+            previous_values=self._results_model.value_map(),
             parent=self,
         )
         worker.chunk_ready.connect(
