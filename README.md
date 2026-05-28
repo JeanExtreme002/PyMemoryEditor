@@ -44,24 +44,6 @@ reading, writing and searching values in the process memory.
 
 ---
 
-## ✨ Highlights
-
-|     |     |
-| --- | --- |
-| **Read & write memory** | Change live values on the fly — just like Cheat Engine, but in a few lines of Python. |
-| **Pure-Python via `ctypes`** | No compilation, no native wheels — `pip install` and you're done. |
-| **Scan modes** | Exact, not-exact, bigger / smaller (±equal), in-range, out-of-range. |
-| **Pattern scan** | Byte signatures or regex — `grep` for process memory. |
-| **Pointer chains** | Walk multi-level pointers (`[[base+0x10]+0x20]+0x30`) in one call. |
-| **Pointer scan** *(reverse)* | *Find* the static pointer path to a moving address — then narrow it down across restarts, Cheat-Engine style. |
-| **Live pointers** | A `RemotePointer` handle re-resolves its chain on every `.value` read/write. |
-| **Module enumeration** | List loaded executables & libraries with their base address — `base + offset` beats ASLR. |
-| **Allocate / free memory** | Reserve and release memory inside the target (Windows & macOS). |
-| **Snapshot caching** | The Cheat-Engine "scan → refine → refine" loop, accelerated. |
-| **Bundled GUI app** | A full memory scanner ships in the box — just type `pymemoryeditor`. |
-
----
-
 ## Installation
 
 Available on PyPI for Windows, Linux and macOS — no native build step, no extra wheels.

@@ -37,6 +37,12 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import ScanTypesEnum
 
+from .scan_types import (
+    DELTA_SCAN_TYPES,
+    NO_VALUE_SCAN_TYPES,
+    NextScanType,
+    is_next_scan_type,
+)
 from .scan_worker import ScanRequest
 from .value_types import VALUE_TYPES, find_spec, parse_value
 
@@ -50,6 +56,13 @@ SCAN_TYPE_CHOICES = (
     ("Smaller Than or Equal To", ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE),
     ("Value Between", ScanTypesEnum.VALUE_BETWEEN),
     ("Not Value Between", ScanTypesEnum.NOT_VALUE_BETWEEN),
+    # App-only "Next Scan" comparisons (current value vs. previous scan).
+    ("Increased Value", NextScanType.INCREASED_VALUE),
+    ("Increased Value By", NextScanType.INCREASED_VALUE_BY),
+    ("Decreased Value", NextScanType.DECREASED_VALUE),
+    ("Decreased Value By", NextScanType.DECREASED_VALUE_BY),
+    ("Changed Value", NextScanType.CHANGED_VALUE),
+    ("Unchanged Value", NextScanType.UNCHANGED_VALUE),
 )
 
 
@@ -255,6 +268,11 @@ class ScannerPanel(QWidget):
             self._second_value_label.hide()
         self._scan_combo.setEnabled(not is_pattern and not self._busy)
 
+        # Re-apply the value-field state for the current scan type now that the
+        # value shape changed (e.g. keep the Value field disabled for a
+        # no-value comparison, restore its placeholder otherwise).
+        self._on_scan_type_changed(self._scan_combo.currentIndex())
+
         # The pattern/non-pattern flag also drives Next-Scan availability, so
         # let _refresh_buttons re-evaluate now that the type has flipped.
         self._refresh_buttons()
@@ -267,6 +285,25 @@ class ScannerPanel(QWidget):
         )
         self._second_value_edit.setVisible(ranged)
         self._second_value_label.setVisible(ranged)
+
+        # In pattern mode the Value field holds the AOB pattern and the
+        # scan-type combo is forced to EXACT, so leave its value field alone.
+        spec = find_spec(self._type_combo.currentText())
+        if spec is not None and spec.is_pattern:
+            return
+
+        # Increased/Decreased/Changed/Unchanged compare against the previous
+        # scan and take no target value, so disable the Value field. The *_BY
+        # variants keep it enabled to read the delta.
+        no_value = scan_type in NO_VALUE_SCAN_TYPES
+        self._value_edit.setEnabled(not no_value)
+        if no_value:
+            self._value_edit.clear()
+            self._value_edit.setPlaceholderText("(not used for this scan type)")
+        elif scan_type in DELTA_SCAN_TYPES:
+            self._value_edit.setPlaceholderText("Amount the value changed by")
+        else:
+            self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
 
     def _build_request(self, *, with_value: bool = True) -> Optional[ScanRequest]:
         spec = find_spec(self._type_combo.currentText())
@@ -295,6 +332,18 @@ class ScannerPanel(QWidget):
         length_override = (
             self._length_spin.value() if spec.accepts_length_override else None
         )
+
+        # Increased/Decreased/Changed/Unchanged compare current vs previous and
+        # need no target value — just the value shape (type + length).
+        if scan_type in NO_VALUE_SCAN_TYPES:
+            length = length_override if length_override is not None else spec.length
+            return ScanRequest(
+                spec=spec,
+                length=int(length),
+                scan_type=scan_type,
+                value=None,
+                writeable_only=self._writable_check.isChecked(),
+            )
 
         value: Any
         try:
@@ -328,6 +377,17 @@ class ScannerPanel(QWidget):
         )
 
     def _on_first_scan(self) -> None:
+        _, scan_type = SCAN_TYPE_CHOICES[self._scan_combo.currentIndex()]
+        if is_next_scan_type(scan_type):
+            QMessageBox.information(
+                self,
+                "First Scan",
+                "Increased / Decreased / Changed / Unchanged compare against a "
+                "previous scan, so they only work as a Next Scan. Run a First "
+                "Scan with another comparison (e.g. Exact Value) first, then "
+                "switch to one of these and press Next Scan.",
+            )
+            return
         request = self._build_request()
         if request is not None:
             self.first_scan_requested.emit(request)
