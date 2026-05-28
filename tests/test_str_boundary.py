@@ -16,21 +16,28 @@ next chunk when the value type is ``str``, completing the straddling decode.
 import ctypes
 
 from PyMemoryEditor.enums import ScanTypesEnum
+from PyMemoryEditor.process.region import MemoryRegion
 from PyMemoryEditor.process.scanning import iter_search_results
 
 
-def _make_region(address: int, payload: bytes) -> dict:
-    return {"address": address, "size": len(payload), "_payload": payload}
+# Payload bytes keyed by region base address — the dataclass is frozen so the
+# raw bytes live in this side-channel dict (the reader closure reaches into it).
+_FAKE_PAYLOADS: "dict[int, bytes]" = {}
+
+
+def _make_region(address: int, payload: bytes) -> MemoryRegion:
+    _FAKE_PAYLOADS[address] = payload
+    return MemoryRegion(address=address, size=len(payload), is_readable=True)
 
 
 def _make_reader(region):
     def read_chunk(addr: int, size: int):
-        base = region["address"]
+        base = region.address
         offset = addr - base
         end = offset + size
         # Mimic how a backend reads: clamp at region end so over-reads still
         # return what's available rather than raising.
-        payload = region["_payload"][offset:end]
+        payload = _FAKE_PAYLOADS[base][offset:end]
         buf = (ctypes.c_byte * len(payload))()
         ctypes.memmove(buf, payload, len(payload))
         return buf

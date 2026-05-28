@@ -9,14 +9,15 @@ import ctypes
 import logging
 import os
 import warnings
-from typing import Dict, Generator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.module_info import ModuleInfo
 from ..process.region import (
     default_address_filter,
     default_scan_filter,
-    enrich_region,
+    MemoryRegion,
+    make_region,
 )
 from ..process.scanning import (
     iter_pattern_results,
@@ -118,7 +119,7 @@ def release_task(task: int) -> None:
         libsystem.mach_port_deallocate(mach_task_self_.value, task)
 
 
-def get_memory_regions(task: int) -> Generator[dict, None, None]:
+def get_memory_regions(task: int) -> Generator[MemoryRegion, None, None]:
     """
     Yield {address, size, struct} dicts describing each memory region of the task.
 
@@ -171,12 +172,10 @@ def get_memory_regions(task: int) -> Generator[dict, None, None]:
             info.reserved,
         )
 
-        yield enrich_region(
-            {
-                "address": address.value,
-                "size": size.value,
-                "struct": region_struct,
-            }
+        yield make_region(
+            address=address.value,
+            size=size.value,
+            struct=region_struct,
         )
 
         if size.value == 0:
@@ -283,7 +282,7 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
         # The address really is invalid — surface the original error.
         raise OSError("mach_vm_write failed: %s (kr=%d)" % (mach_error_message(kr), kr))
 
-    original_protection = region["struct"].Protection
+    original_protection = region.struct.Protection
 
     new_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY
     protect_kr = libsystem.mach_vm_protect(task, address, size, 0, new_protection)
@@ -374,10 +373,10 @@ def _query_region(task: int, address: int):
     if not (addr.value <= address < addr.value + size.value):
         return None
 
-    return {
-        "address": addr.value,
-        "size": size.value,
-        "struct": MEMORY_BASIC_INFORMATION(
+    return make_region(
+        address=addr.value,
+        size=size.value,
+        struct=MEMORY_BASIC_INFORMATION(
             addr.value,
             size.value,
             info.protection,
@@ -385,7 +384,7 @@ def _query_region(task: int, address: int):
             info.shared,
             info.reserved,
         ),
-    }
+    )
 
 
 def read_process_memory(
@@ -490,7 +489,7 @@ def search_addresses_by_value(
     progress_information: bool = False,
     writeable_only: bool = False,
     *,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every readable region of the task and yield addresses whose value
@@ -511,7 +510,7 @@ def search_addresses_by_value(
         for region in source_regions
         if default_scan_filter(region, writeable_only=writeable_only)
     ]
-    filtered_regions.sort(key=lambda region: region["address"])
+    filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_search_results(
         filtered_regions,
@@ -814,7 +813,7 @@ def search_addresses_by_pattern(
     *,
     byte_length: int = 0,
     progress_information: bool = False,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable region of the target task. See
@@ -829,7 +828,7 @@ def search_addresses_by_pattern(
     filtered_regions = [
         region for region in source_regions if default_scan_filter(region)
     ]
-    filtered_regions.sort(key=lambda region: region["address"])
+    filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_pattern_results(
         filtered_regions,
@@ -847,7 +846,7 @@ def search_values_by_addresses(
     bufflength: int,
     addresses: Sequence[int],
     *,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """

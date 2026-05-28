@@ -17,9 +17,10 @@ from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
 from ..process.module_info import ModuleInfo
 from ..process.region import (
+    MemoryRegion,
     default_address_filter,
     default_scan_filter,
-    enrich_region,
+    make_region,
 )
 from ..process.scanning import (
     iter_pattern_results,
@@ -158,9 +159,9 @@ def _is_transient(exc: BaseException) -> bool:
     return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
 
-def get_memory_regions(pid: int) -> Generator[dict, None, None]:
+def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
     """
-    Generates dictionaries with the address and size of a region used by the process.
+    Yield a :class:`MemoryRegion` for each entry in ``/proc/<pid>/maps``.
 
     Translates the typical I/O failures of ``/proc/<pid>/maps`` into the
     library's own exception hierarchy so callers don't have to special-case
@@ -218,12 +219,10 @@ def get_memory_regions(pid: int) -> Generator[dict, None, None]:
                 inode,
                 path_bytes,
             )
-            yield enrich_region(
-                {
-                    "address": start_address,
-                    "size": region.RegionSize,
-                    "struct": region,
-                }
+            yield make_region(
+                address=start_address,
+                size=region.RegionSize,
+                struct=region,
             )
 
 
@@ -248,12 +247,12 @@ def get_modules(pid: int) -> Generator[ModuleInfo, None, None]:
     first_seen = []
 
     for region in get_memory_regions(pid):
-        path = region["path"]
+        path = region.path
         if not path.startswith("/"):
             continue
 
-        start = region["address"]
-        end = start + region["size"]
+        start = region.address
+        end = start + region.size
 
         entry = bounds.get(path)
         if entry is None:
@@ -302,7 +301,7 @@ def search_addresses_by_value(
     progress_information: bool = False,
     writeable_only: bool = False,
     *,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -323,7 +322,7 @@ def search_addresses_by_value(
         for region in source_regions
         if default_scan_filter(region, writeable_only=writeable_only)
     ]
-    filtered_regions.sort(key=lambda region: region["address"])
+    filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_search_results(
         filtered_regions,
@@ -343,7 +342,7 @@ def search_addresses_by_pattern(
     *,
     byte_length: int = 0,
     progress_information: bool = False,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target. See
@@ -358,7 +357,7 @@ def search_addresses_by_pattern(
     filtered_regions = [
         region for region in source_regions if default_scan_filter(region)
     ]
-    filtered_regions.sort(key=lambda region: region["address"])
+    filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_pattern_results(
         filtered_regions,
@@ -376,7 +375,7 @@ def search_values_by_addresses(
     bufflength: int,
     addresses: Sequence[int],
     *,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """

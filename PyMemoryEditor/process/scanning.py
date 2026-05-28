@@ -26,7 +26,6 @@ import logging
 from typing import (
     Any,
     Callable,
-    Dict,
     Generator,
     Iterable,
     Optional,
@@ -46,6 +45,7 @@ from ..util import (
     scan_memory,
     scan_memory_for_exact_value,
 )
+from .region import MemoryRegion, MemoryRegionSnapshot
 
 
 _logger = logging.getLogger("PyMemoryEditor")
@@ -64,31 +64,23 @@ _SearchingMethod = Callable[
 T = TypeVar("T")
 
 
-# Sentinel key on a region dict marking the dict as already address-sorted.
-# `iter_values_for_addresses` and `iter_search_results` consult this to skip
-# the per-call `sorted(...)` cost. ``snapshot_memory_regions()`` pre-sorts the
-# list and tags every region; pre-filtered slices that preserve order can
-# carry the tag through too.
-_PRESORTED_KEY = "_pymemoryeditor_presorted"
-
-
-def _ensure_sorted_by_address(memory_regions: Sequence[Dict]) -> Sequence[Dict]:
+def _ensure_sorted_by_address(
+    memory_regions: Sequence[MemoryRegion],
+) -> Sequence[MemoryRegion]:
     """
     Return ``memory_regions`` sorted by ``address``, reusing the input verbatim
-    when every region is already tagged with :data:`_PRESORTED_KEY`.
+    when it is a :class:`MemoryRegionSnapshot` (already address-sorted by
+    contract).
 
-    Tagging is purely advisory — falsifying it on an unsorted snapshot would
-    silently mis-walk regions, but no public API does that. The optimization
-    matters in tight refine-scan loops where snapshots are reused across many
-    ``search_by_addresses``/``search_by_value*`` calls.
+    The optimization matters in tight refine-scan loops where snapshots are
+    reused across many ``search_by_addresses`` / ``search_by_value*`` calls;
+    re-sorting a 100k-region list per call would dominate the runtime.
     """
     if not memory_regions:
         return memory_regions
-    # Cheap check: only inspect the first region; the tagging contract is
-    # all-or-nothing.
-    if memory_regions[0].get(_PRESORTED_KEY):
+    if isinstance(memory_regions, MemoryRegionSnapshot):
         return memory_regions
-    return sorted(memory_regions, key=lambda region: region["address"])
+    return sorted(memory_regions, key=lambda region: region.address)
 
 
 def _always_false(_exc: BaseException) -> bool:
@@ -98,7 +90,7 @@ def _always_false(_exc: BaseException) -> bool:
 
 def iter_values_for_addresses(
     addresses: Sequence[int],
-    memory_regions: Sequence[Dict],
+    memory_regions: Sequence[MemoryRegion],
     pytype: Type[T],
     bufflength: int,
     read_chunk: Callable[[int, int], "ctypes.Array"],
@@ -135,7 +127,7 @@ def iter_values_for_addresses(
         # Advance past regions that end before the current address.
         while region_index < len(sorted_regions):
             region = sorted_regions[region_index]
-            if current_address < region["address"] + region["size"]:
+            if current_address < region.address + region.size:
                 break
             region_index += 1
 
@@ -146,8 +138,8 @@ def iter_values_for_addresses(
             continue
 
         region = sorted_regions[region_index]
-        base_address = region["address"]
-        size = region["size"]
+        base_address = region.address
+        size = region.size
 
         # Address falls in the gap before this region (and no earlier region holds it).
         if current_address < base_address:
@@ -232,7 +224,7 @@ def iter_values_for_addresses(
 
 
 def iter_search_results(
-    memory_regions: Sequence[Dict],
+    memory_regions: Sequence[MemoryRegion],
     pytype: Type,
     bufflength: int,
     target_value_bytes: Union[bytes, Tuple[bytes, ...]],
@@ -270,7 +262,7 @@ def iter_search_results(
 
     memory_total = 0
     for region in memory_regions:
-        memory_total += region["size"]
+        memory_total += region.size
 
     if memory_total == 0:
         return
@@ -296,7 +288,7 @@ def iter_search_results(
     str_overlap = bufflength - 1 if pytype is str else 0
 
     for region in memory_regions:
-        address, size = region["address"], region["size"]
+        address, size = region.address, region.size
 
         for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
             chunk_address = address + chunk_offset
@@ -355,7 +347,7 @@ def iter_search_results(
 
 
 def iter_pattern_results(
-    memory_regions: Sequence[Dict],
+    memory_regions: Sequence[MemoryRegion],
     compiled_pattern: "Pattern[bytes]",
     pattern_length: int,
     read_chunk: Callable[[int, int], Any],
@@ -387,7 +379,7 @@ def iter_pattern_results(
 
     memory_total = 0
     for region in memory_regions:
-        memory_total += region["size"]
+        memory_total += region.size
 
     if memory_total == 0:
         return
@@ -395,7 +387,7 @@ def iter_pattern_results(
     checked_memory_size = 0
 
     for region in memory_regions:
-        address, size = region["address"], region["size"]
+        address, size = region.address, region.size
 
         for chunk_offset, chunk_size in iter_region_chunks(size, pattern_length):
             chunk_address = address + chunk_offset

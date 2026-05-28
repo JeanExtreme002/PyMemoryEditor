@@ -83,7 +83,7 @@ def test_module_base_matches_a_real_memory_region():
     """
     with OpenProcess(pid=os.getpid()) as process:
         modules = list(process.get_modules())
-        region_starts = {region["address"] for region in process.get_memory_regions()}
+        region_starts = {region.address for region in process.get_memory_regions()}
 
     matched = sum(1 for m in modules if m.base_address in region_starts)
     assert matched > 0, (

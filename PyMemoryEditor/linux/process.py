@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 
 import warnings
-from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
 from ..util import resolve_bufflength
 from ..process.module_info import ModuleInfo
+from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
 from .functions import (
     get_memory_regions,
@@ -108,7 +109,7 @@ class LinuxProcess(AbstractProcess):
         addresses: Sequence[int],
         *,
         raise_error: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
         return search_values_by_addresses(
@@ -129,7 +130,7 @@ class LinuxProcess(AbstractProcess):
         *,
         progress_information: bool = False,
         writeable_only: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
@@ -155,7 +156,7 @@ class LinuxProcess(AbstractProcess):
         *,
         byte_length: int = 0,
         progress_information: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
         return search_addresses_by_pattern(
@@ -176,7 +177,7 @@ class LinuxProcess(AbstractProcess):
         not_between: bool = False,
         progress_information: bool = False,
         writeable_only: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 

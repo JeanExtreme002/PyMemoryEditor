@@ -1,28 +1,29 @@
 [project]
 name = "PyMemoryEditor"
 dynamic = ["version"]
-description = "Multi-platform library developed with ctypes for reading, writing and searching at process memory, in a simple and friendly way with Python 3."
+description = "Read, write and scan process memory in a few lines of Python — Cheat Engine-style scans, pointer chains and AOB search on Windows, Linux and macOS."
 authors = [
     { name = "Jean Loui Bernard Silva de Jesus", email = "contact@jeanloui.dev" },
 ]
 license = "MIT"
 readme = "README.md"
 keywords = [
-    "memory",
-    "address",
-    "pointer",
-    "process",
-    "virtual",
-    "writer",
-    "reader",
-    "editor",
-    "override",
-    "win32", "api", "ctypes", "linux", "macos", "mach",
-    "cheat", "scanner", "debug", "track",
-    "readprocessmemory", "writeprocessmemory"
+    "cheat-engine",
+    "memory-scanner",
+    "memory-editor",
+    "process-memory",
+    "pointer-scan",
+    "aob-scan",
+    "pattern-scan",
+    "game-hacking",
+    "reverse-engineering",
+    "debugging",
+    "introspection",
+    "ctypes",
 ]
 
 classifiers = [
+    "Development Status :: 5 - Production/Stable",
     "License :: OSI Approved :: MIT License",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
@@ -37,10 +38,10 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
     "Topic :: Security",
-    "Topic :: System :: Monitoring"
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
 ]
-exclude = ["tests", ".flake8"]
-requires-python = ">=3.6"
+requires-python = ">=3.10"
 dependencies = ["psutil>=5.9,<7"]
 
 [project.optional-dependencies]
@@ -64,8 +65,15 @@ dev = [
   "PySide6>=6.5",
 ]
 
+[project.scripts]
+pymemoryeditor = "PyMemoryEditor.app.application:main"
+
 [project.urls]
-"Homepage" = "https://github.com/JeanExtreme002/PyMemoryEditor"
+Homepage = "https://github.com/JeanExtreme002/PyMemoryEditor"
+Documentation = "https://pymemoryeditor.readthedocs.io"
+Repository = "https://github.com/JeanExtreme002/PyMemoryEditor"
+Issues = "https://github.com/JeanExtreme002/PyMemoryEditor/issues"
+Changelog = "https://github.com/JeanExtreme002/PyMemoryEditor/releases"
 
 [tool.mypy]
 # The Qt app uses dynamic types and depends on the optional PySide6 GUI
@@ -108,9 +116,6 @@ exclude = ["scripts"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[project.scripts]
-pymemoryeditor = "PyMemoryEditor.app.application:main"
 
 # Coverage scope: the Qt app is excluded — it's exercised manually, not by
 # the automated test suite. The library code (everything else) is what we

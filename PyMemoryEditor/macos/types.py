@@ -99,8 +99,8 @@ TASK_DYLD_INFO_COUNT = sizeof(task_dyld_info_data_t) // _NATURAL_T_SIZE
 class MEMORY_BASIC_INFORMATION(Structure):
     """
     Cross-platform-compatible view of a memory region exposed via
-    `process.get_memory_regions()["struct"]`. Mirrors the Linux/Windows
-    structures shipped by PyMemoryEditor.
+    ``MemoryRegion.struct`` (see ``PyMemoryEditor.MemoryRegion``). Mirrors the
+    Linux/Windows structures shipped by PyMemoryEditor.
     """
 
     _fields_ = [

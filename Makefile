@@ -9,6 +9,8 @@ DIST_DIR = dist
 EGG_INFO = $(PACKAGE_NAME).egg-info
 VENV_DIR = venv
 TEST_DIR = tests
+DOCS_DIR = docs
+DOCS_BUILD_DIR = $(DOCS_DIR)/_build/html
 
 # Colors for output
 GREEN = \033[0;32m
@@ -44,7 +46,10 @@ help:
 	@echo "  $(YELLOW)check-deps$(NC)       - Check for outdated dependencies"
 	@echo "  $(YELLOW)update-deps$(NC)      - Update dependencies"
 	@echo "  $(YELLOW)security$(NC)         - Run security audit"
-	@echo "  $(YELLOW)docs$(NC)             - Generate documentation"
+	@echo "  $(YELLOW)install-docs$(NC)     - Install dependencies to build the documentation"
+	@echo "  $(YELLOW)docs$(NC)             - Build the HTML documentation (output: $(DOCS_BUILD_DIR))"
+	@echo "  $(YELLOW)docs-serve$(NC)       - Live-reload docs server at http://127.0.0.1:8000"
+	@echo "  $(YELLOW)docs-clean$(NC)       - Remove the docs build directory"
 	@echo "  $(YELLOW)venv$(NC)             - Create virtual environment"
 	@echo "  $(YELLOW)venv-activate$(NC)    - Show command to activate venv"
 	@echo "  $(YELLOW)all$(NC)              - Run full pipeline (install, lint, test, build)"
@@ -223,16 +228,38 @@ security:
 	pip-audit
 	@echo "$(GREEN)Security audit completed!$(NC)"
 
-# Generate documentation
+# Install the dependencies needed to build the documentation (Sphinx + MyST +
+# Furo + extensions, listed in docs/requirements.txt). Also installs the
+# package itself in editable mode so autodoc can import it.
+.PHONY: install-docs
+install-docs:
+	@echo "$(GREEN)Installing documentation dependencies...$(NC)"
+	$(PIP) install -r $(DOCS_DIR)/requirements.txt
+	$(PIP) install -e .
+	@echo "$(GREEN)Docs dependencies installed!$(NC)"
+
+# Build the HTML documentation. Output lands in $(DOCS_BUILD_DIR).
 .PHONY: docs
 docs:
-	@echo "$(GREEN)Generating documentation...$(NC)"
-	@if [ -d "docs" ]; then \
-		cd docs && make html; \
-		echo "$(GREEN)Documentation generated in docs/_build/html/$(NC)"; \
-	else \
-		echo "$(YELLOW)No docs directory found. Skipping documentation generation.$(NC)"; \
-	fi
+	@echo "$(GREEN)Building HTML documentation...$(NC)"
+	$(PYTHON) -m sphinx -b html $(DOCS_DIR) $(DOCS_BUILD_DIR)
+	@echo "$(GREEN)Documentation generated at $(DOCS_BUILD_DIR)/index.html$(NC)"
+
+# Live-reload docs server — rebuilds on every save and reloads the browser.
+# Requires `sphinx-autobuild` (installed automatically via install-docs is
+# optional; we install it on demand here for convenience).
+.PHONY: docs-serve
+docs-serve:
+	@echo "$(GREEN)Starting live-reload docs server at http://127.0.0.1:8000$(NC)"
+	@$(PYTHON) -c "import sphinx_autobuild" 2>/dev/null || $(PIP) install sphinx-autobuild
+	$(PYTHON) -m sphinx_autobuild $(DOCS_DIR) $(DOCS_BUILD_DIR) --open-browser
+
+# Wipe the built docs.
+.PHONY: docs-clean
+docs-clean:
+	@echo "$(GREEN)Cleaning docs build directory...$(NC)"
+	rm -rf $(DOCS_DIR)/_build
+	@echo "$(GREEN)Docs build directory removed.$(NC)"
 
 # Full development pipeline
 .PHONY: all

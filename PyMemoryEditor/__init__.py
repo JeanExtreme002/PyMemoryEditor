@@ -25,6 +25,7 @@ from .process.errors import (
 )
 from .process.module_info import ModuleInfo
 from .process.pointer_scan import PointerPath
+from .process.region import MemoryRegion, MemoryRegionSnapshot
 from .process.remote_pointer import RemotePointer
 from .process.thread_info import ThreadInfo
 
@@ -84,6 +85,8 @@ __all__ = (
     "AbstractProcess",
     "AmbiguousProcessNameError",
     "ClosedProcess",
+    "MemoryRegion",
+    "MemoryRegionSnapshot",
     "ModuleInfo",
     "OpenProcess",
     "PointerPath",

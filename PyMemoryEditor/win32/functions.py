@@ -9,14 +9,15 @@
 import ctypes
 import ctypes.wintypes
 import logging
-from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.module_info import ModuleInfo
 from ..process.region import (
+    MemoryRegion,
     default_address_filter,
     default_scan_filter,
-    enrich_region,
+    make_region,
 )
 from ..process.scanning import (
     iter_pattern_results,
@@ -230,9 +231,9 @@ def CloseProcessHandle(process_handle: int) -> int:
     return kernel32.CloseHandle(process_handle)
 
 
-def GetMemoryRegions(process_handle: int) -> Generator[dict, None, None]:
+def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]:
     """
-    Generates dictionaries with the address and size of a region used by the process.
+    Yield a :class:`MemoryRegion` for every region in the target's address space.
 
     Picks the right MEMORY_BASIC_INFORMATION layout (32-bit vs 64-bit) for the
     target process to handle the WOW64 case (64-bit Python attached to a 32-bit
@@ -278,8 +279,8 @@ def GetMemoryRegions(process_handle: int) -> Generator[dict, None, None]:
             current_address += page_size
             continue
 
-        yield enrich_region(
-            {"address": current_address, "size": region.RegionSize, "struct": region}
+        yield make_region(
+            address=current_address, size=region.RegionSize, struct=region,
         )
 
         if region.RegionSize == 0:
@@ -384,7 +385,7 @@ def SearchAddressesByValue(
     progress_information: bool = False,
     writeable_only: bool = False,
     *,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -407,7 +408,7 @@ def SearchAddressesByValue(
         for region in source_regions
         if default_scan_filter(region, writeable_only=writeable_only)
     ]
-    filtered_regions.sort(key=lambda region: region["address"])
+    filtered_regions.sort(key=lambda region: region.address)
 
     def read_chunk(address: int, size: int):
         # `_read_region` returns None on transient failures (page unmapped /
@@ -432,7 +433,7 @@ def SearchAddressesByPattern(
     *,
     byte_length: int = 0,
     progress_information: bool = False,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every scannable region of the target process. See
@@ -448,7 +449,7 @@ def SearchAddressesByPattern(
     filtered_regions = [
         region for region in source_regions if default_scan_filter(region)
     ]
-    filtered_regions.sort(key=lambda region: region["address"])
+    filtered_regions.sort(key=lambda region: region.address)
 
     def read_chunk(address: int, size: int):
         # ``_read_region`` returns None on transient failures (page unmapped /
@@ -475,7 +476,7 @@ def SearchValuesByAddresses(
     bufflength: int,
     addresses: Sequence[int],
     *,
-    memory_regions: Optional[Sequence[Dict]] = None,
+    memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """

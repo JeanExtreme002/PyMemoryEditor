@@ -76,5 +76,8 @@ Desktop.ini
 *.log
 *.tmp
 
+# Sphinx / docs build output
+docs/_build/
+
 # Project-local
 .claude/

@@ -19,7 +19,7 @@ from typing import (
 from ..enums import ScanTypesEnum
 from .info import ProcessInfo
 from .module_info import ModuleInfo
-from .scanning import _PRESORTED_KEY
+from .region import MemoryRegion, MemoryRegionSnapshot
 from .thread_info import ThreadInfo
 
 if TYPE_CHECKING:
@@ -89,10 +89,15 @@ class AbstractProcess(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def get_memory_regions(self) -> Generator[dict, None, None]:
+    def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         """
-        Generates dictionaries with the address, size and other
-        information of each memory region used by the process.
+        Yield a :class:`~PyMemoryEditor.MemoryRegion` for every memory region
+        the process owns.
+
+        Each region carries its base ``address`` and ``size`` plus the portable
+        flags ``is_readable`` / ``is_writable`` / ``is_executable`` /
+        ``is_shared``, the backing file ``path`` (when known), and the
+        platform-specific ``struct`` for advanced introspection.
         """
         raise NotImplementedError()
 
@@ -144,27 +149,26 @@ class AbstractProcess(ABC):
             return None
         return min(threads, key=lambda t: t.tid)
 
-    def snapshot_memory_regions(self) -> List[Dict]:
+    def snapshot_memory_regions(self) -> MemoryRegionSnapshot:
         """
         Return a materialized snapshot of the process memory regions.
 
-        Pass the result as the `memory_regions` keyword to subsequent calls of
-        `search_by_value`, `search_by_value_between` or `search_by_addresses`
-        to skip the region enumeration. Useful for "scan → refine → refine"
-        workflows where the region map doesn't change between calls.
+        Pass the result as the ``memory_regions`` keyword to subsequent calls of
+        ``search_by_value``, ``search_by_value_between`` or
+        ``search_by_addresses`` to skip the region enumeration. Useful for
+        "scan → refine → refine" workflows where the region map doesn't change
+        between calls.
 
-        Regions are pre-sorted by base address and tagged so that the helper
-        functions in ``process.scanning`` skip their per-call ``sorted(...)``
-        step on reuse. Don't reorder the returned list manually; if you must
-        slice or filter, pass the result of ``sorted(my_slice, key=...)`` (or
-        an unsorted slice) — the helpers re-sort defensively when the tag is
-        missing.
+        The returned :class:`MemoryRegionSnapshot` is pre-sorted by base
+        address; the scan helpers in ``process.scanning`` detect this via
+        ``isinstance`` and skip their per-call ``sorted(...)`` step on reuse.
+        Slicing or filtering with a list comprehension drops the
+        ``MemoryRegionSnapshot`` type (you get a plain ``list``) — the helpers
+        then re-sort defensively, which is safe but slower for very large
+        region maps.
         """
-        regions = list(self.get_memory_regions())
-        regions.sort(key=lambda region: region["address"])
-        for region in regions:
-            region[_PRESORTED_KEY] = True
-        return regions
+        regions = sorted(self.get_memory_regions(), key=lambda region: region.address)
+        return MemoryRegionSnapshot(regions)
 
     @abstractmethod
     def search_by_addresses(
@@ -174,7 +178,7 @@ class AbstractProcess(ABC):
         addresses: Sequence[int],
         *,
         raise_error: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         """
         Search the whole memory space, accessible to the process,
@@ -195,7 +199,7 @@ class AbstractProcess(ABC):
         *,
         progress_information: bool = False,
         writeable_only: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
@@ -221,7 +225,7 @@ class AbstractProcess(ABC):
         *,
         byte_length: int = 0,
         progress_information: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Scan the target's memory for a byte pattern (AOB) — the Cheat Engine /
@@ -253,7 +257,7 @@ class AbstractProcess(ABC):
         not_between: bool = False,
         progress_information: bool = False,
         writeable_only: bool = False,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
@@ -492,7 +496,7 @@ class AbstractProcess(ABC):
         writable_only: bool = True,
         static_ranges: Optional[Sequence[Tuple[int, int]]] = None,
         max_results: Optional[int] = None,
-        memory_regions: Optional[Sequence[Dict]] = None,
+        memory_regions: Optional[Sequence[MemoryRegion]] = None,
         progress_callback: Optional["Callable[[float], None]"] = None,
     ) -> Generator["PointerPath", None, None]:
         """
@@ -568,15 +572,15 @@ class AbstractProcess(ABC):
 
         # Pointers may point anywhere readable; chain hops live in writable
         # memory (the program writes them) unless the caller opts into read-only.
-        readable = [r for r in memory_regions if r.get("is_readable", True)]
+        readable = [r for r in memory_regions if r.is_readable]
         mapped_ranges = AddressRanges(
-            [(r["address"], r["address"] + r["size"]) for r in readable]
+            [(r.address, r.address + r.size) for r in readable]
         )
 
         scan_regions = [
-            (r["address"], r["size"])
+            (r.address, r.size)
             for r in readable
-            if (r.get("is_writable", True) if writable_only else True)
+            if (r.is_writable if writable_only else True)
         ]
 
         # Image ranges drive both static-base detection and module naming. Each
