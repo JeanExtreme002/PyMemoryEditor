@@ -20,6 +20,10 @@ import pytest
 
 from PyMemoryEditor import OpenProcess, ScanTypesEnum
 
+# Live scans of the entire test-process address space — minutes, not seconds.
+# Run with ``pytest -m "not slow"`` to skip them during fast feedback loops.
+pytestmark = pytest.mark.slow
+
 
 # The default permission on Windows already includes read+write, but spell
 # the mask out here so the suite stays explicit about what it needs. Linux

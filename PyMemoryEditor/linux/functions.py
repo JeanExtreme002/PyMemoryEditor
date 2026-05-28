@@ -14,8 +14,13 @@ from ctypes import addressof, sizeof
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.errors import ProcessIDNotExistsError
 from ..process.module_info import ModuleInfo
-from ..process.region import enrich_region
+from ..process.region import (
+    default_address_filter,
+    default_scan_filter,
+    enrich_region,
+)
 from ..process.scanning import (
     iter_pattern_results,
     iter_search_results,
@@ -122,13 +127,64 @@ def _process_vm_writev(
     return result
 
 
+def _make_read_chunk(pid: int):
+    """
+    Build a `read_chunk(address, size)` closure bound to ``pid``.
+
+    Each backend used to define this closure inline three times
+    (``search_addresses_by_value``, ``search_addresses_by_pattern``,
+    ``search_values_by_addresses``) — drift between them was a recurring source
+    of subtle bugs. Owning it once per backend keeps the trio in lockstep.
+    """
+    def read_chunk(address: int, size: int):
+        buffer = (ctypes.c_byte * size)()
+        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
+        return buffer
+
+    return read_chunk
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """
+    Classify ``exc`` as a transient page-vanished failure that scan loops
+    should swallow vs a real configuration / permission error that must
+    propagate. Shared by every scanning entry point.
+    """
+    # A short read mid-scan is equivalent to a page disappearing — the scan
+    # should skip the chunk and keep going. Real permission/configuration
+    # errors (EACCES, EPERM, ESRCH, EINVAL) propagate.
+    if isinstance(exc, _LinuxPartialIOError):
+        return True
+    return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
+
+
 def get_memory_regions(pid: int) -> Generator[dict, None, None]:
     """
     Generates dictionaries with the address and size of a region used by the process.
+
+    Translates the typical I/O failures of ``/proc/<pid>/maps`` into the
+    library's own exception hierarchy so callers don't have to special-case
+    raw ``FileNotFoundError`` / ``PermissionError`` from the kernel pseudo-fs.
     """
     mapping_filename = "/proc/{}/maps".format(pid)
 
-    with open(mapping_filename, "r") as mapping_file:
+    try:
+        mapping_file = open(mapping_filename, "r")
+    except FileNotFoundError:
+        # Target died between OpenProcess()'s pid_exists() check and now. The
+        # caller already accepts ProcessIDNotExistsError from the open path,
+        # so funnel into it instead of leaking a kernel pseudo-fs error.
+        raise ProcessIDNotExistsError(pid)
+    except PermissionError as exc:
+        # ptrace_scope (or being a non-root user inspecting a different uid)
+        # is the typical reason — re-raise with a hint pointing at the fix.
+        raise PermissionError(
+            "Cannot read %s: %s. On Linux this usually means ptrace_scope "
+            "is restricting access; try `sudo sysctl kernel.yama.ptrace_scope=0` "
+            "or run as root." % (mapping_filename, exc)
+        )
+
+    with mapping_file:
         for line in mapping_file:
             region_information = line.split()
 
@@ -262,34 +318,12 @@ def search_addresses_by_value(
         memory_regions if memory_regions is not None else get_memory_regions(pid)
     )
 
-    def is_scannable(region) -> bool:
-        privileges = region["struct"].Privileges
-        if b"r" not in privileges:
-            return False
-        if writeable_only and b"w" not in privileges:
-            return False
-        # Skip shared mappings — they typically hold libc and other code that
-        # the caller is not interested in, and scanning them adds noise and
-        # CPU cost. Mirrors the Win32 backend filtering on MEM_PRIVATE.
-        if b"s" in privileges:
-            return False
-        return True
-
-    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions = [
+        region
+        for region in source_regions
+        if default_scan_filter(region, writeable_only=writeable_only)
+    ]
     filtered_regions.sort(key=lambda region: region["address"])
-
-    def read_chunk(address: int, size: int):
-        buffer = (ctypes.c_byte * size)()
-        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
-        return buffer
-
-    def is_transient(exc: BaseException) -> bool:
-        # A short read mid-scan is equivalent to a page disappearing — the
-        # scan should skip the chunk and keep going. Real permission /
-        # configuration errors (EACCES, EPERM, ESRCH, EINVAL) propagate.
-        if isinstance(exc, _LinuxPartialIOError):
-            return True
-        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
     yield from iter_search_results(
         filtered_regions,
@@ -297,9 +331,9 @@ def search_addresses_by_value(
         bufflength,
         target_value_bytes,
         scan_type,
-        read_chunk,
+        _make_read_chunk(pid),
         progress_information=progress_information,
-        transient_error_check=is_transient,
+        transient_error_check=_is_transient,
     )
 
 
@@ -321,36 +355,18 @@ def search_addresses_by_pattern(
         memory_regions if memory_regions is not None else get_memory_regions(pid)
     )
 
-    def is_scannable(region) -> bool:
-        privileges = region["struct"].Privileges
-        if b"r" not in privileges:
-            return False
-        # Mirror search_addresses_by_value: skip shared mappings (libc text
-        # etc.) — they bloat scans with noise.
-        if b"s" in privileges:
-            return False
-        return True
-
-    filtered_regions = [region for region in source_regions if is_scannable(region)]
+    filtered_regions = [
+        region for region in source_regions if default_scan_filter(region)
+    ]
     filtered_regions.sort(key=lambda region: region["address"])
-
-    def read_chunk(address: int, size: int):
-        buffer = (ctypes.c_byte * size)()
-        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
-        return buffer
-
-    def is_transient(exc: BaseException) -> bool:
-        if isinstance(exc, _LinuxPartialIOError):
-            return True
-        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
     yield from iter_pattern_results(
         filtered_regions,
         compiled,
         length,
-        read_chunk,
+        _make_read_chunk(pid),
         progress_information=progress_information,
-        transient_error_check=is_transient,
+        transient_error_check=_is_transient,
     )
 
 
@@ -380,32 +396,19 @@ def search_values_by_addresses(
     # the caller pre-filtered to zero regions.
     if memory_regions is None:
         memory_regions = [
-            region for region in get_memory_regions(pid) if region["is_readable"]
+            region for region in get_memory_regions(pid) if default_address_filter(region)
         ]
     else:
         memory_regions = list(memory_regions)
-
-    def read_chunk(address: int, size: int):
-        buffer = (ctypes.c_byte * size)()
-        _process_vm_readv(pid, addressof(buffer), address, sizeof(buffer))
-        return buffer
-
-    def is_transient(exc: BaseException) -> bool:
-        # A short read mid-scan is equivalent to a page disappearing — the
-        # scan should skip the chunk and keep going. Real permission /
-        # configuration errors (EACCES, EPERM, ESRCH, EINVAL) propagate.
-        if isinstance(exc, _LinuxPartialIOError):
-            return True
-        return isinstance(exc, OSError) and exc.errno in _PAGE_GONE_ERRNOS
 
     yield from iter_values_for_addresses(
         addresses,
         memory_regions,
         pytype,
         bufflength,
-        read_chunk,
+        _make_read_chunk(pid),
         raise_error=raise_error,
-        transient_error_check=is_transient,
+        transient_error_check=_is_transient,
     )
 
 

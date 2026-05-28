@@ -200,6 +200,10 @@ def test_max_results_caps_output():
 # --------------------------------------------------------------------------- #
 # Integration against the running process
 # --------------------------------------------------------------------------- #
+#
+# These tests build a real pointer map over the whole test process — slow.
+# Each one carries ``@pytest.mark.slow`` so ``pytest -m "not slow"`` skips the
+# integration half while keeping the unit tests above in the fast subset.
 
 @pytest.fixture
 def process():
@@ -210,6 +214,7 @@ def process():
         handle.close()
 
 
+@pytest.mark.slow
 def test_scan_pointer_paths_rediscovers_planted_chain(process):
     """
     Plant ``base -> [+0] -> +offset`` on the heap, mark the base's address as a
@@ -255,11 +260,13 @@ def test_scan_pointer_paths_rediscovers_planted_chain(process):
     ), [str(p) for p in resolving]
 
 
+@pytest.mark.slow
 def test_scan_pointer_paths_rejects_bad_ptr_size(process):
     with pytest.raises(ValueError, match="ptr_size"):
         list(process.scan_pointer_paths(0x1000, ptr_size=5))
 
 
+@pytest.mark.slow
 def test_save_load_pointer_paths_round_trip(process, tmp_path):
     paths = [
         PointerPath(0x1000, (0x0, 0x158), module="m.dylib", module_offset=0x10),
@@ -271,6 +278,7 @@ def test_save_load_pointer_paths_round_trip(process, tmp_path):
     assert loaded == paths
 
 
+@pytest.mark.slow
 def test_rescan_pointer_paths_keeps_only_resolving(process, tmp_path):
     """
     Plant a chain, save a path to it plus a decoy, and confirm rescan keeps the
@@ -293,6 +301,7 @@ def test_rescan_pointer_paths_keeps_only_resolving(process, tmp_path):
     assert decoy not in survivors
 
 
+@pytest.mark.slow
 def test_rescan_pointer_paths_accepts_list(process):
     ptr_size = ctypes.sizeof(ctypes.c_void_p)
     obj = (ctypes.c_uint8 * 0x40)()
@@ -304,6 +313,7 @@ def test_rescan_pointer_paths_accepts_list(process):
     assert survivors == [good]
 
 
+@pytest.mark.slow
 def test_compare_pointer_scans_via_process(process, tmp_path):
     common = PointerPath(0x1, (0x8,), module="a.exe", module_offset=0x10)
     only1 = PointerPath(0x1, (0x4,), module="a.exe", module_offset=0x20)

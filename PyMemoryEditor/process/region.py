@@ -173,8 +173,49 @@ def enrich_region(region: dict) -> dict:
     return region
 
 
+def default_scan_filter(region: dict, *, writeable_only: bool = False) -> bool:
+    """
+    Single source of truth for "which regions does a *value* / *pattern* scan
+    walk by default".
+
+    Historically each backend rolled its own filter — Win32 excluded
+    ``MEM_MAPPED`` via ``Type``, Linux excluded shared via ``'s'`` in
+    privileges, and macOS excluded nothing — so the same call returned a
+    different set of matches per OS. The portable booleans on the region dict
+    (populated by :func:`enrich_region`) let one filter cover all three:
+
+    - must be readable (no syscall hops into unreadable pages),
+    - if ``writeable_only``, must also be writable,
+    - drop shared mappings (libc text, file-backed pages): they're full of
+      noise the caller virtually never wants in a value scan, and matching the
+      Linux/Win32 historical behavior is the practical default.
+    """
+    if not region.get("is_readable", False):
+        return False
+    if writeable_only and not region.get("is_writable", False):
+        return False
+    if region.get("is_shared", False):
+        return False
+    return True
+
+
+def default_address_filter(region: dict) -> bool:
+    """
+    Single source of truth for "which regions does an *address-list* read walk
+    by default" (``search_by_addresses`` without a snapshot).
+
+    Crucially this is *not* the same as :func:`default_scan_filter`: when the
+    caller hands the library a concrete address, the library has no business
+    second-guessing whether the region is "interesting". The only requirement
+    is that the region is readable — same on every OS.
+    """
+    return bool(region.get("is_readable", False))
+
+
 __all__ = (
     "REGION_KEYS",
+    "default_address_filter",
+    "default_scan_filter",
     "enrich_region",
     "is_region_executable",
     "is_region_readable",

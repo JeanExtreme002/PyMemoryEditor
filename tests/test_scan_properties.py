@@ -26,6 +26,12 @@ from PyMemoryEditor.enums import ScanTypesEnum  # noqa: E402
 from PyMemoryEditor.util.scan import scan_memory  # noqa: E402
 
 
+# Hypothesis property-based tests — each draws hundreds of cases, easily the
+# slowest non-integration file in the suite. Marked slow so ``pytest -m "not
+# slow"`` keeps the fast subset really fast.
+pytestmark = pytest.mark.slow
+
+
 # Pre-compute valid value counts per (size, pytype) so hypothesis doesn't burn
 # cycles on inputs the slow path silently rejects.
 _INT_SIZES = (1, 2, 4, 8)
