@@ -30,14 +30,14 @@ Each region is an instance of `MemoryRegion` — an immutable
 
 <table>
 <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
-<tr><td><code>address</code></td><td><code>int</code></td><td>Base address of the region.</td></tr>
-<tr><td><code>size</code></td><td><code>int</code></td><td>Region size in bytes.</td></tr>
-<tr><td><code>is_readable</code></td><td><code>bool</code></td><td>True if the region can be read.</td></tr>
-<tr><td><code>is_writable</code></td><td><code>bool</code></td><td>True if the region can be written.</td></tr>
-<tr><td><code>is_executable</code></td><td><code>bool</code></td><td>True if the region contains executable code.</td></tr>
-<tr><td><code>is_shared</code></td><td><code>bool</code></td><td>True if the region is a shared/file-backed mapping.</td></tr>
-<tr><td><code>path</code></td><td><code>str</code></td><td>File backing the region (Linux only — empty on Windows/macOS).</td></tr>
-<tr><td><code>struct</code></td><td>platform-specific</td><td>Raw platform descriptor (see below).</td></tr>
+<tr><td><code>address</code></td><td data-label="Type"><code>int</code></td><td data-label="Meaning">Base address of the region.</td></tr>
+<tr><td><code>size</code></td><td data-label="Type"><code>int</code></td><td data-label="Meaning">Region size in bytes.</td></tr>
+<tr><td><code>is_readable</code></td><td data-label="Type"><code>bool</code></td><td data-label="Meaning">True if the region can be read.</td></tr>
+<tr><td><code>is_writable</code></td><td data-label="Type"><code>bool</code></td><td data-label="Meaning">True if the region can be written.</td></tr>
+<tr><td><code>is_executable</code></td><td data-label="Type"><code>bool</code></td><td data-label="Meaning">True if the region contains executable code.</td></tr>
+<tr><td><code>is_shared</code></td><td data-label="Type"><code>bool</code></td><td data-label="Meaning">True if the region is a shared/file-backed mapping.</td></tr>
+<tr><td><code>path</code></td><td data-label="Type"><code>str</code></td><td data-label="Meaning">File backing the region (Linux only — empty on Windows/macOS).</td></tr>
+<tr><td><code>struct</code></td><td data-label="Type">platform-specific</td><td data-label="Meaning">Raw platform descriptor (see below).</td></tr>
 </table>
 
 ```{admonition} Immutability

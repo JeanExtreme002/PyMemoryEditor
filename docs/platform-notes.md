@@ -6,11 +6,11 @@ for real-world use.
 
 A one-line summary:
 
-<table>
+<table class="platform-grid">
 <tr><th>Platform</th><th>Permission model</th><th>Allocate / free</th></tr>
-<tr><td>🪟 <b>Windows</b></td><td><code>OpenProcess</code> access mask</td><td>✅ <code>VirtualAllocEx</code> / <code>VirtualFreeEx</code></td></tr>
-<tr><td>🐧 <b>Linux</b></td><td><code>ptrace_scope</code> + process ownership</td><td>❌ Not supported</td></tr>
-<tr><td>🍎 <b>macOS</b></td><td>Mach entitlements (<code>com.apple.security.cs.debugger</code>) or SIP off + root</td><td>✅ <code>mach_vm_allocate</code> / <code>mach_vm_deallocate</code></td></tr>
+<tr><td class="platform-name">🪟 <b>Windows</b></td><td data-label="Permission model"><code>OpenProcess</code> access mask</td><td data-label="Allocate / free">✅ <code>VirtualAllocEx</code> / <code>VirtualFreeEx</code></td></tr>
+<tr><td class="platform-name">🐧 <b>Linux</b></td><td data-label="Permission model"><code>ptrace_scope</code> + process ownership</td><td data-label="Allocate / free">❌ Not supported</td></tr>
+<tr><td class="platform-name">🍎 <b>macOS</b></td><td data-label="Permission model">Mach entitlements (<code>com.apple.security.cs.debugger</code>) or SIP off + root</td><td data-label="Allocate / free">✅ <code>mach_vm_allocate</code> / <code>mach_vm_deallocate</code></td></tr>
 </table>
 
 ---

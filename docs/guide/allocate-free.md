@@ -65,7 +65,7 @@ process.free_memory(address, size=4096)
 
 ## Platform behavior
 
-<table>
+<table class="platform-grid">
 <tr>
 <th>Platform</th>
 <th>Status</th>
@@ -73,22 +73,22 @@ process.free_memory(address, size=4096)
 <th>Underlying API</th>
 </tr>
 <tr>
-<td>🪟 <b>Windows</b></td>
-<td>✅ Supported</td>
-<td><code>PAGE_EXECUTE_READWRITE</code> (executable + writable)</td>
-<td><code>VirtualAllocEx</code> / <code>VirtualFreeEx</code></td>
+<td class="platform-name">🪟 <b>Windows</b></td>
+<td data-label="Status">✅ Supported</td>
+<td data-label="Default permission"><code>PAGE_EXECUTE_READWRITE</code> (executable + writable)</td>
+<td data-label="Underlying API"><code>VirtualAllocEx</code> / <code>VirtualFreeEx</code></td>
 </tr>
 <tr>
-<td>🍎 <b>macOS</b></td>
-<td>✅ Supported</td>
-<td>Mach default (read+write)</td>
-<td><code>mach_vm_allocate</code> / <code>mach_vm_deallocate</code></td>
+<td class="platform-name">🍎 <b>macOS</b></td>
+<td data-label="Status">✅ Supported</td>
+<td data-label="Default permission">Mach default (read+write)</td>
+<td data-label="Underlying API"><code>mach_vm_allocate</code> / <code>mach_vm_deallocate</code></td>
 </tr>
 <tr>
-<td>🐧 <b>Linux</b></td>
-<td>❌ <b>Not supported</b></td>
-<td>—</td>
-<td>Raises <code>NotImplementedError</code></td>
+<td class="platform-name">🐧 <b>Linux</b></td>
+<td data-label="Status">❌ <b>Not supported</b></td>
+<td data-label="Default permission">—</td>
+<td data-label="Underlying API">Raises <code>NotImplementedError</code></td>
 </tr>
 </table>
 

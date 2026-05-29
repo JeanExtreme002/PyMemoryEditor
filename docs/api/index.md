@@ -5,7 +5,7 @@ task-oriented walkthroughs, see the [User Guide](../guide/index.md).
 
 ## At a glance
 
-<table>
+<table class="glance-grid">
 <tr><th>Symbol</th><th>What it is</th></tr>
 <tr><td><a href="openprocess.html"><code>OpenProcess</code></a></td><td>The unified entry point — read, write, scan, allocate.</td></tr>
 <tr><td><a href="enums.html">Enums</a></td><td><code>ScanTypesEnum</code>, <code>ProcessOperationsEnum</code>, <code>MemoryProtectionsEnum</code>.</td></tr>
