@@ -1,0 +1,113 @@
+/* Furo centers the layout: on wide screens the sidebar drawer spans the whole
+   left half and right-justifies its content against the text column, leaving a
+   wide margin on the far left. Pin it to a fixed width, flush against the left
+   edge of the window, for a conventional left-sidebar layout. */
+.sidebar-drawer {
+  width: 20em;
+  justify-content: flex-start;
+}
+
+/* The inner container is hardcoded to 15em in Furo; widen it to match the
+   drawer so the brand, search box and nav tree fill the extra space. */
+.sidebar-container {
+  width: 20em;
+}
+
+/* Roomier horizontal padding for the whole sidebar (brand, captions, links). */
+body {
+  --sidebar-item-spacing-horizontal: 1rem;
+}
+
+/* Center the brand block (logo + project name) so it lines up with the
+   centered GitHub button below it. Furo only adds its own `.centered` class
+   for a text logo, not for an image logo. */
+.sidebar-brand {
+  align-items: center;
+  text-align: center;
+}
+
+/* Smaller logo (Furo lets it grow to the full sidebar width by default). */
+.sidebar-logo {
+  max-width: 6em;
+}
+
+/* Furo keeps a few purple accents that don't follow the brand colour:
+   visited links and the generic admonition-title accent. Point them at the
+   teal brand colour in every theme mode (explicit light/dark + auto). */
+body {
+  --color-brand-visited: var(--color-brand-content);
+  --color-admonition-title: var(--color-brand-content);
+}
+@media not print {
+  body[data-theme="dark"] {
+    --color-brand-visited: var(--color-brand-content);
+    --color-admonition-title: var(--color-brand-content);
+  }
+  @media (prefers-color-scheme: dark) {
+    body:not([data-theme="light"]) {
+      --color-brand-visited: var(--color-brand-content);
+      --color-admonition-title: var(--color-brand-content);
+    }
+  }
+}
+
+/* Pygments (light theme): retint the purple keyword tokens to the teal accent.
+   Dark-theme keywords are already green, so they have no purple to fix. */
+.highlight .k,
+.highlight .kc,
+.highlight .kd,
+.highlight .kn,
+.highlight .kp,
+.highlight .kr,
+.highlight .ne,
+.highlight .ow {
+  color: #0d9488;
+}
+
+/* "Why use it?" feature grid on the landing page: add horizontal breathing
+   room between the three columns without overflowing (border-box keeps the
+   33% widths intact), and zero out the outer edges. */
+.feature-grid td {
+  box-sizing: border-box;
+  padding: 0 1.25rem;
+  /* Shrink the cell text; the `h3` headings use `em`, so the title and body
+     scale down together proportionally. */
+  font-size: 0.85rem;
+}
+.feature-grid td:first-child {
+  padding-left: 0;
+}
+.feature-grid td:last-child {
+  padding-right: 0;
+}
+
+/* Persistent GitHub call-to-action in the sidebar, under the project name. */
+.sidebar-github-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0.75rem 1rem 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-background-border);
+  border-radius: 0.5rem;
+  color: var(--color-sidebar-link-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-github-cta:hover,
+.sidebar-github-cta:focus-visible {
+  background: var(--color-background-hover);
+  border-color: var(--color-foreground-border);
+  color: var(--color-sidebar-link-text);
+}
+
+.sidebar-github-cta svg {
+  width: 1.15em;
+  height: 1.15em;
+  flex-shrink: 0;
+}

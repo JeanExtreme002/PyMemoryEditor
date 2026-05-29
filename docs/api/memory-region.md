@@ -73,7 +73,7 @@ of memory with its address, size, permissions and backing path.
 .. py:class:: MemoryRegionSnapshot
 
    A pre-sorted snapshot of memory regions returned by
-   :py:meth:`AbstractProcess.snapshot_memory_regions`. Behaves exactly like a
+   :py:meth:`snapshot_memory_regions`. Behaves exactly like a
    plain ``list[MemoryRegion]`` — the only purpose of the subclass is to let
    the scanning helpers detect via ``isinstance`` that the input is already
    sorted by ``address`` and skip the per-call ``sorted(...)`` step.

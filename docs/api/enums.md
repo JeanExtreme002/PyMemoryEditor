@@ -2,7 +2,12 @@
 
 ## `ScanTypesEnum`
 
-Comparison modes for `search_by_value` and `search_by_value_between`.
+```{eval-rst}
+.. py:class:: ScanTypesEnum
+
+   Comparison modes for :py:meth:`search_by_value` and
+   :py:meth:`search_by_value_between`.
+```
 
 ```python
 from PyMemoryEditor import ScanTypesEnum
@@ -35,6 +40,13 @@ with OpenProcess(process_name="game.exe") as process:
 ---
 
 ## `ProcessOperationsEnum` <small>(Windows only)</small>
+
+```{eval-rst}
+.. py:class:: ProcessOperationsEnum
+
+   Bitmask of Windows process access rights, passed as the ``permission=``
+   argument of ``OpenProcess`` on Windows.
+```
 
 Bitmask of [process access rights](https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights).
 Defined as `IntFlag` so members can be combined with `|`:
@@ -80,6 +92,12 @@ This is enough for both read and write operations plus region enumeration
 ---
 
 ## `MemoryProtectionsEnum` <small>(Windows only)</small>
+
+```{eval-rst}
+.. py:class:: MemoryProtectionsEnum
+
+   The Win32 ``PAGE_*`` page-protection constants.
+```
 
 The Win32 `PAGE_*` constants. Used as the `permission=` argument of
 `allocate_memory` and surfaced in `region["struct"].Protect`.

@@ -12,6 +12,14 @@ resolves to:
 
 All three subclass `AbstractProcess` and share the API documented below.
 
+```{eval-rst}
+.. py:class:: AbstractProcess
+
+   The cross-platform base class every backend implements. ``OpenProcess``
+   returns one of its subclasses; the methods documented on this page are the
+   shared, public surface.
+```
+
 ## Construction
 
 ```{eval-rst}
@@ -208,7 +216,7 @@ with OpenProcess(
 ```{eval-rst}
 .. py:method:: close()
 
-   Close the process handle. Subsequent calls raise :py:class:`ClosedProcess`.
+   Close the process handle. Subsequent calls raise :py:exc:`ClosedProcess`.
 
 .. py:method:: __enter__()
 .. py:method:: __exit__(exc_type, exc_value, exc_traceback)

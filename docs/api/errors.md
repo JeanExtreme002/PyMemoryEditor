@@ -32,10 +32,18 @@ more idiomatic match (`PermissionError`, `OSError`, `TypeError`, `ValueError`,
 
 ### `PyMemoryEditorError`
 
+```{eval-rst}
+.. py:exception:: PyMemoryEditorError
+```
+
 Base class for every PyMemoryEditor-specific exception. Catch it to handle
 *any* library error.
 
 ### `ClosedProcess`
+
+```{eval-rst}
+.. py:exception:: ClosedProcess
+```
 
 Raised when you call any method on a process whose handle has already been
 closed (manually or by leaving the `with` block).
@@ -52,10 +60,12 @@ process.read_process_memory(0x1000, int)   # raises ClosedProcess
 Raised when the given `pid=` doesn't correspond to a running process.
 
 ```{eval-rst}
-.. py:attribute:: pid
-   :type: int
+.. py:exception:: ProcessIDNotExistsError
 
-   The PID that was looked up.
+   .. py:attribute:: pid
+      :type: int
+
+      The PID that was looked up.
 ```
 
 ### `ProcessNotFoundError`
@@ -63,10 +73,12 @@ Raised when the given `pid=` doesn't correspond to a running process.
 Raised when no running process matches the given `process_name=`.
 
 ```{eval-rst}
-.. py:attribute:: process_name
-   :type: str
+.. py:exception:: ProcessNotFoundError
 
-   The process name that was looked up.
+   .. py:attribute:: process_name
+      :type: str
+
+      The process name that was looked up.
 ```
 
 ### `AmbiguousProcessNameError`
@@ -75,16 +87,17 @@ Raised when **more than one** running process matches the given
 `process_name=` (typical when using `exact_match=False`).
 
 ```{eval-rst}
-.. py:attribute:: process_name
-   :type: str
-   :no-index:
+.. py:exception:: AmbiguousProcessNameError
 
-   The process name that was looked up.
+   .. py:attribute:: process_name
+      :type: str
 
-.. py:attribute:: pids
-   :type: List[int]
+      The process name that was looked up.
 
-   PIDs of the matching processes — pick one and pass it via ``pid=``.
+   .. py:attribute:: pids
+      :type: List[int]
+
+      PIDs of the matching processes — pick one and pass it via ``pid=``.
 ```
 
 Example:
