@@ -45,7 +45,7 @@ It carries everything you need to reconstruct the chain in another run.
       Recommended for shallow exploration.
    :param memory_regions: optional snapshot from
       :py:meth:`snapshot_memory_regions`.
-   :param callable progress_callback: ``callback(fraction)`` invoked as the
+   :param progress_callback: a callable ``callback(fraction)`` invoked as the
       pointer map is built (the long phase), ``fraction`` in ``[0, 1]``.
    :returns: a generator of :py:class:`PointerPath`.
 ```

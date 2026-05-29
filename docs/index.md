@@ -33,7 +33,7 @@ If you've never done memory editing before, start with the
 
 ## Why use it?
 
-<table>
+<table class="feature-grid">
 <tr>
 <td width="33%" valign="top">
 
@@ -53,7 +53,7 @@ platform-specific wheels.
 </td>
 <td width="33%" valign="top">
 
-### 🧰 Batteries included
+### 🧰 Complete toolkit
 
 Value scans, AOB scans, pointer chains, pointer scans, a GUI app — all the
 Cheat Engine workflows in one package.
@@ -78,16 +78,7 @@ quickstart
 :caption: User Guide
 :maxdepth: 2
 
-guide/opening-process
-guide/read-write
-guide/searching
-guide/pattern-scan
-guide/memory-regions
-guide/modules-threads
-guide/pointers
-guide/pointer-scan
-guide/allocate-free
-guide/logging
+guide/index
 ```
 
 ```{toctree}
@@ -101,15 +92,7 @@ app
 :caption: API Reference
 :maxdepth: 2
 
-api/openprocess
-api/enums
-api/memory-region
-api/remote-pointer
-api/pointer-path
-api/module-info
-api/thread-info
-api/errors
-api/utilities
+api/index
 ```
 
 ```{toctree}
@@ -118,6 +101,7 @@ api/utilities
 
 platform-notes
 troubleshooting
+guide/logging
 glossary
 ```
 

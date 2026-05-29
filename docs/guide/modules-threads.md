@@ -51,7 +51,7 @@ with OpenProcess(process_name="game.exe") as process:
       Address where the module is loaded **for this run**. Combine it with a
       static offset (``base_address + offset``) to reach a known location
       despite ASLR — the natural feed into
-      :py:meth:`AbstractProcess.resolve_pointer_chain`.
+      :py:meth:`resolve_pointer_chain`.
 
    .. py:attribute:: size
       :no-index:
