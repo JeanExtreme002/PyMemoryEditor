@@ -33,7 +33,7 @@ name or PID.
 
 ## What's inside
 
-<table>
+<table class="inside-grid">
 <tr>
 <td width="50%" valign="top">
 
@@ -120,12 +120,26 @@ The pointer-scan format is documented in [`PointerPath`](api/pointer-path.md).
 
 ## When to use the app vs the library
 
-<table>
-<tr><th>Use the GUI when…</th><th>Use the library when…</th></tr>
-<tr><td>You're exploring a target interactively.</td><td>You want to script a workflow or build a tool.</td></tr>
-<tr><td>You're learning memory editing.</td><td>You want to embed memory access into a bigger application.</td></tr>
-<tr><td>You want to inspect what's available before writing code.</td><td>You need batch processing, automation, or CI integration.</td></tr>
-</table>
+<div class="vs-cards">
+<div class="vs-card">
+
+**Use the GUI when…**
+
+- You're exploring a target interactively.
+- You're learning memory editing.
+- You want to inspect what's available before writing code.
+
+</div>
+<div class="vs-card">
+
+**Use the library when…**
+
+- You want to script a workflow or build a tool.
+- You want to embed memory access into a bigger application.
+- You need batch processing, automation, or CI integration.
+
+</div>
+</div>
 
 ```{seealso}
 - [Quick Start](quickstart.md) — the same workflow, in code.

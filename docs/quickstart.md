@@ -106,6 +106,46 @@ with OpenProcess(process_name="game.exe") as process:
 For big targets, see [the refine-scan workflow](guide/searching.md#the-refine-scan-workflow)
 to cache the region map once.
 
+## 6. Pointer scanning — make an address survive restarts
+
+The address you just found is **useless next launch**. The OS loads everything
+somewhere new every time (ASLR), so `0x1FA3C140` today is garbage tomorrow.
+The fix is a **static pointer path**: a chain that starts at a fixed location
+inside a loaded module and dereferences its way to your value — so the same
+recipe keeps working across restarts.
+
+PyMemoryEditor finds these for you. `scan_pointer_paths` is a **reverse pointer
+scan** (Cheat Engine's "Pointer scan"): give it the value's address *right now*,
+and it discovers the static paths that resolve to it.
+
+```python
+with OpenProcess(process_name="game.exe") as process:
+    # The value lives here this run (e.g. from search_by_value above).
+    for path in process.scan_pointer_paths(0x1FA3C140, max_depth=4):
+        print(path)
+        # "game.exe"+0x10F4F4 -> [+0x0] -> +0x158
+        print(hex(path.resolve(process)))
+```
+
+Each result is a `PointerPath` carrying the module + offsets — the part that
+survives a restart. Save the reliable ones and reuse them later:
+
+```python
+with OpenProcess(process_name="game.exe") as process:
+    paths = list(process.scan_pointer_paths(0x1FA3C140, max_depth=4))
+    process.save_pointer_paths(paths, "health.json")
+
+# ...next launch, the absolute address has changed but the path still works:
+with OpenProcess(process_name="game.exe") as process:
+    survivors = process.rescan_pointer_paths("health.json", 0x2B7C0140)
+    pointer = survivors[0].rebase(process).to_pointer(process)
+    pointer.write(9999)
+```
+
+[See the pointer scan guide](guide/pointer-scan.md) for tuning the scan
+(`max_depth`, `max_offset`), the multi-run refine workflow, and intersecting
+independent scans with `compare_pointer_scans`.
+
 ## Next steps
 
 - 📖 [User guide](guide/opening-process.md) — every workflow, in depth.

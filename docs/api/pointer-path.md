@@ -37,11 +37,11 @@ hashable.
 
 <table>
 <tr><th>Attribute</th><th>Type</th><th>Meaning</th></tr>
-<tr><td><code>base_address</code></td><td><code>int</code></td><td>Absolute static base for the run the path was found in.</td></tr>
-<tr><td><code>offsets</code></td><td><code>Tuple[int, ...]</code></td><td>Forward-order offsets.</td></tr>
-<tr><td><code>module</code></td><td><code>Optional[str]</code></td><td>Module owning <code>base_address</code>.</td></tr>
-<tr><td><code>module_offset</code></td><td><code>Optional[int]</code></td><td><code>base_address - module.base_address</code>.</td></tr>
-<tr><td><code>ptr_size</code></td><td><code>int</code></td><td>Pointer width (4 or 8).</td></tr>
+<tr><td><code>base_address</code></td><td data-label="Type"><code>int</code></td><td data-label="Meaning">Absolute static base for the run the path was found in.</td></tr>
+<tr><td><code>offsets</code></td><td data-label="Type"><code>Tuple[int, ...]</code></td><td data-label="Meaning">Forward-order offsets.</td></tr>
+<tr><td><code>module</code></td><td data-label="Type"><code>Optional[str]</code></td><td data-label="Meaning">Module owning <code>base_address</code>.</td></tr>
+<tr><td><code>module_offset</code></td><td data-label="Type"><code>Optional[int]</code></td><td data-label="Meaning"><code>base_address - module.base_address</code>.</td></tr>
+<tr><td><code>ptr_size</code></td><td data-label="Type"><code>int</code></td><td data-label="Meaning">Pointer width (4 or 8).</td></tr>
 </table>
 
 ## Methods

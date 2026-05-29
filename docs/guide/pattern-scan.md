@@ -8,7 +8,7 @@ same `search_by_pattern` method.
 ## When to use it
 
 <table>
-<tr><td width="40%"><b>You want…</b></td><td><b>Use this</b></td></tr>
+<tr><th width="40%">You want…</th><th>Use this</th></tr>
 <tr><td>Find every email address in memory</td><td>Regex pattern</td></tr>
 <tr><td>Locate a function whose absolute address changes between builds</td><td>IDA-style byte signature with wildcards</td></tr>
 <tr><td>Recognize a custom struct header</td><td>Regex or IDA-style pattern</td></tr>

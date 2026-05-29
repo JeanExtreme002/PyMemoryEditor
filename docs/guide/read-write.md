@@ -11,11 +11,11 @@ process memory:
 
 <table>
 <tr><th>Type</th><th>Default size</th><th>Notes</th></tr>
-<tr><td><code>int</code></td><td><b>4 bytes</b></td><td>Signed integer. Override to 1/2/8 for other widths.</td></tr>
-<tr><td><code>float</code></td><td><b>8 bytes</b></td><td><code>double</code> by default; pass 4 for <code>float32</code>.</td></tr>
-<tr><td><code>bool</code></td><td><b>1 byte</b></td><td>C <code>bool</code>.</td></tr>
-<tr><td><code>str</code></td><td>— (required)</td><td>UTF-8 decoded with <code>errors="replace"</code>.</td></tr>
-<tr><td><code>bytes</code></td><td>— (required)</td><td>Raw, no decoding.</td></tr>
+<tr><td><code>int</code></td><td data-label="Default size"><b>4 bytes</b></td><td data-label="Notes">Signed integer. Override to 1/2/8 for other widths.</td></tr>
+<tr><td><code>float</code></td><td data-label="Default size"><b>8 bytes</b></td><td data-label="Notes"><code>double</code> by default; pass 4 for <code>float32</code>.</td></tr>
+<tr><td><code>bool</code></td><td data-label="Default size"><b>1 byte</b></td><td data-label="Notes">C <code>bool</code>.</td></tr>
+<tr><td><code>str</code></td><td data-label="Default size">— (required)</td><td data-label="Notes">UTF-8 decoded with <code>errors="replace"</code>.</td></tr>
+<tr><td><code>bytes</code></td><td data-label="Default size">— (required)</td><td data-label="Notes">Raw, no decoding.</td></tr>
 </table>
 
 For numeric types, you can pass `bufflength=None` (or just omit it) to use the

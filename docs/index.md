@@ -1,4 +1,4 @@
-# PyMemoryEditor Documentation
+# <span class="main-title">PyMemoryEditor Documentation</span>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/JeanExtreme002/PyMemoryEditor/main/PyMemoryEditor/app/assets/icon.svg" alt="PyMemoryEditor logo" width="120" />

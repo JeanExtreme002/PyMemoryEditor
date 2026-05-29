@@ -13,6 +13,18 @@
   width: 20em;
 }
 
+/* Below Furo's mobile breakpoint (63em) the sidebar becomes an off-canvas
+   drawer that Furo hides at `left: -15em` to match its default 15em width.
+   Our 20em override above leaves the extra 5em poking out past the left edge
+   of the screen. Push it the full 20em off-screen so it stays fully hidden
+   until the menu toggle slides it back to `left: 0`. */
+@media (max-width: 63em) {
+  .sidebar-drawer {
+    width: 20em;
+    left: -20em;
+  }
+}
+
 /* Roomier horizontal padding for the whole sidebar (brand, captions, links). */
 body {
   --sidebar-item-spacing-horizontal: 1rem;
@@ -79,6 +91,99 @@ body {
 }
 .feature-grid td:last-child {
   padding-right: 0;
+}
+
+/* "When to use the app vs the library": two side-by-side "when to use" cards
+   on desktop that stack vertically on mobile (handled by the breakpoint below). */
+.vs-cards {
+  display: flex;
+  gap: 1rem;
+}
+.vs-card {
+  flex: 1;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-background-border);
+  border-radius: 0.5rem;
+}
+/* Tighten the card's inner spacing so the title and list sit snugly. */
+.vs-card > :first-child {
+  margin-top: 0;
+}
+.vs-card > :last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 410px) {
+  .main-title {
+    font-size: 32px;
+  }
+}
+/* --- Mobile (below Furo's 63em breakpoint) layout tweaks for the landing page --- */
+@media (max-width: 63em) {
+  /* Stack the "Why use it?" feature columns vertically instead of side by side.
+     The cells are table-cells by default; switch the row to a flex column so
+     each feature occupies the full width on its own line. */
+  .feature-grid,
+  .feature-grid tbody,
+  .feature-grid tr,
+  .inside-grid,
+  .inside-grid tbody,
+  .inside-grid tr {
+    display: flex;
+    flex-direction: column;
+  }
+  .feature-grid td,
+  .inside-grid td {
+    width: 100%;
+    padding: 0;
+  }
+
+  /* Stack the two "when to use" cards on top of each other. */
+  .vs-cards {
+    flex-direction: column;
+  }
+
+  /* Every other content table (data / comparison / lookup) turns each row into
+     a stacked card. This is a blanket rule for all tables in the page body; the
+     two layout grids above are excluded since they stack as plain blocks. */
+  article table:not(.feature-grid):not(.inside-grid) {
+    &,
+    & tbody {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    /* Header row is redundant once stacked — its labels are re-attached per
+       cell via `data-label` (multi-column tables) or implied by the title. */
+    & tr:has(th) {
+      display: none;
+    }
+    & tr {
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+      border: 1px solid var(--color-background-border);
+      border-radius: 0.5rem;
+    }
+    & td {
+      display: block;
+      width: 100%;
+      border: 0;
+      padding: 0;
+    }
+    /* An unlabelled first cell (the name / symbol / platform) is the card
+       title: slightly larger and spaced from the details below it. */
+    & td:first-child:not([data-label]) {
+      font-size: 1.1em;
+      margin-bottom: 0.5rem;
+    }
+    /* Re-attach the column header as an inline label before each value. */
+    & td[data-label]::before {
+      content: attr(data-label) ": ";
+      font-weight: 600;
+      color: var(--color-foreground-muted);
+    }
+  }
 }
 
 /* Persistent GitHub call-to-action in the sidebar, under the project name. */
