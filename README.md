@@ -50,7 +50,7 @@ pymemoryeditor
 
 ---
 
-## A 60-second taste
+## See it in action
 
 ```python
 from PyMemoryEditor import OpenProcess
