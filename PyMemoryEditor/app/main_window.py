@@ -485,21 +485,24 @@ class MainWindow(QMainWindow):
         self._results_label.setText(f"{self._results_model.count():,} addresses found.")
 
     def _on_first_scan_done(self, count: int) -> None:
-        self._results_label.setText(f"{self._results_model.count():,} addresses found.")
-        if count == 0:
-            self._scanner.set_has_results(False)
-        else:
-            self._scanner.set_has_results(True)
+        total = self._results_model.count()
+        self._results_label.setText(f"{total:,} addresses found.")
+        self._status.showMessage(f"Scan complete — {total:,} addresses found.")
+        self._scanner.set_has_results(count != 0)
 
     def _on_refine_done(self, kept: int) -> None:
-        self._results_label.setText(f"{self._results_model.count():,} addresses left.")
-        self._scanner.set_has_results(self._results_model.count() > 0)
+        total = self._results_model.count()
+        self._results_label.setText(f"{total:,} addresses left.")
+        self._status.showMessage(f"Scan refined — {total:,} addresses left.")
+        self._scanner.set_has_results(total > 0)
 
     def _on_refresh_done(self, _kept: int) -> None:
-        self._results_label.setText(
-            f"{self._results_model.count():,} addresses found."
-        )
-        self._scanner.set_has_results(self._results_model.count() > 0)
+        total = self._results_model.count()
+        self._results_label.setText(f"{total:,} addresses found.")
+        # Leave the status bar showing the worker's final
+        # "Checked {seen}/{total}, kept {kept}…" tally rather than overwriting
+        # it — it's emitted just before finished_ok, so it's already on screen.
+        self._scanner.set_has_results(total > 0)
 
     def _on_worker_error(self, message: str) -> None:
         _LOG.error("Scan worker error: %s", message)
