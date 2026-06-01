@@ -287,6 +287,12 @@ class RefineScanWorker(_BaseWorker):
             if chunk:
                 self.chunk_ready.emit(chunk)
 
+            # Emit a final tally so the status always ends on the complete
+            # numbers — the in-loop status only fires every UI_REFRESH_STEP
+            # rows, so a small set (or the last partial chunk) would otherwise
+            # leave a stale "Updating values…" / mid-progress count behind.
+            if not self._cancelled:
+                self.status.emit(f"Checked {seen:,}/{total:,}, kept {kept:,}…")
             self.progress.emit(100.0)
             self.finished_ok.emit(kept)
         except Exception as exc:  # noqa: BLE001 — surface every backend error to the UI

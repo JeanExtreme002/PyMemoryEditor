@@ -78,8 +78,31 @@ class ScannerPanel(QWidget):
         super().__init__(parent)
         self._has_results = False
         self._busy = False
+        self._initial_focus_done = False
         self._build_ui()
         self._refresh_buttons()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Land the cursor in the Value field the first time the panel appears
+        # so the user can type a target value and press Enter without reaching
+        # for the mouse. Guarded so restoring/raising the window later doesn't
+        # yank focus away from wherever the user put it.
+        if not self._initial_focus_done:
+            self._initial_focus_done = True
+            self._value_edit.setFocus()
+
+    def _on_value_submitted(self) -> None:
+        """Enter in a value field runs the scan that's currently valid.
+
+        Mirrors the buttons' enabled state: First Scan before any results
+        exist, Next Scan once they do (and neither in pattern mode / while a
+        scan is running, where the buttons are disabled).
+        """
+        if self._first_scan_btn.isEnabled():
+            self._on_first_scan()
+        elif self._next_scan_btn.isEnabled():
+            self._on_next_scan()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -95,10 +118,12 @@ class ScannerPanel(QWidget):
 
         self._value_edit = QLineEdit()
         self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
+        self._value_edit.returnPressed.connect(self._on_value_submitted)
         value_form.addRow("Value:", self._value_edit)
 
         self._second_value_edit = QLineEdit()
         self._second_value_edit.setPlaceholderText("Upper bound (for ranges only)")
+        self._second_value_edit.returnPressed.connect(self._on_value_submitted)
         self._second_value_label = QLabel("Up to:")
         value_form.addRow(self._second_value_label, self._second_value_edit)
         self._second_value_edit.hide()

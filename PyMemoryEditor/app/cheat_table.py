@@ -21,7 +21,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -172,9 +172,18 @@ class CheatTable(QWidget):
             self.COL_VALUE, QHeaderView.Stretch
         )
         self._table.cellChanged.connect(self._on_cell_changed)
+        self._table.doubleClicked.connect(self._on_double_clicked)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._table, 1)
+
+        # Delete removes the selected rows — the standard gesture, previously
+        # only reachable through the context menu. Scoped to the table widget
+        # (WidgetShortcut) so Delete still edits text while a cell is in
+        # inline-edit mode (the editor child, not the table, has focus then).
+        delete_shortcut = QShortcut(QKeySequence(QKeySequence.Delete), self._table)
+        delete_shortcut.setContext(Qt.WidgetShortcut)
+        delete_shortcut.activated.connect(self._on_remove_selected)
 
     def add_entry(self, entry: CheatEntry) -> None:
         # If the address already exists, just refresh its description/type.
@@ -377,6 +386,17 @@ class CheatTable(QWidget):
             return -1
         index = self._table.currentIndex()
         return index.row() if index.isValid() else -1
+
+    def _on_double_clicked(self, index) -> None:
+        """Open Edit Selected when a row's non-editable cell is double-clicked.
+
+        Description and Value stay inline-editable on double-click (the Value
+        cell's whole point is "double-click to write a new value"), so we only
+        hook the Address and Type columns — otherwise dead to double-click —
+        to the bulk edit dialog.
+        """
+        if index.isValid() and index.column() in (self.COL_ADDRESS, self.COL_TYPE):
+            self._on_edit_selected()
 
     def _on_add_manually(self) -> None:
         entry = prompt_for_manual_entry(self)

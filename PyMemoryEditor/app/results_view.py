@@ -9,7 +9,7 @@ index so the scan worker's chunked updates can patch existing rows in O(1).
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtGui import QAction, QColor, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -200,12 +200,70 @@ class ResultsView(QTableView):
         self.setSortingEnabled(False)  # streaming inserts → custom sorting is expensive
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
-        self.horizontalHeader().setStretchLastSection(True)
-        self.horizontalHeader().setSectionResizeMode(
-            COL_ADDRESS, QHeaderView.ResizeToContents
-        )
+        self.horizontalHeader().setStretchLastSection(False)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        # Double-click promotes the row to the cheat table — the same quick
+        # gesture the Memory Map / Modules / Pointer Scan tables already use.
+        self.doubleClicked.connect(self._on_double_clicked)
+
+    def _on_double_clicked(self, index) -> None:
+        if not index.isValid():
+            return
+        model: ResultsModel = self.model()
+        address = model.address_at(index.row())
+        if address is not None:
+            self.promote_to_cheat_table.emit([address])
+
+    def keyPressEvent(self, event) -> None:
+        # Enter/Return promotes the selected rows to the cheat table — the
+        # keyboard equivalent of double-clicking or the context-menu action,
+        # so the table is fully usable without the mouse.
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            model: ResultsModel = self.model()
+            if model is not None:
+                rows = sorted({idx.row() for idx in self.selectedIndexes()})
+                addresses = [
+                    model.address_at(r)
+                    for r in rows
+                    if model.address_at(r) is not None
+                ]
+                if addresses:
+                    self.promote_to_cheat_table.emit(addresses)
+                    return
+        super().keyPressEvent(event)
+
+    def setModel(self, model) -> None:
+        super().setModel(model)
+        # Per-section resize modes only stick once a model is attached (the
+        # header rebuilds its sections on setModel and resets them otherwise).
+        # Address hugs its fixed-width hex content; Value and Previous split the
+        # remaining width evenly so neither — least of all the less-important
+        # Previous column — swallows the whole row.
+        header = self.horizontalHeader()
+        # Floor every section's width so Address doesn't collapse to a few
+        # characters for short addresses; ResizeToContents still grows it for
+        # long 64-bit ones. Value/Previous are Stretch and always exceed this.
+        header.setMinimumSectionSize(120)
+        header.setSectionResizeMode(COL_ADDRESS, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_VALUE, QHeaderView.Stretch)
+        header.setSectionResizeMode(COL_PREVIOUS, QHeaderView.Stretch)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        model = self.model()
+        if model is not None and model.rowCount() > 0:
+            return
+        # Empty-state guidance painted over the viewport so the large blank
+        # table reads as "ready and waiting" rather than broken.
+        painter = QPainter(self.viewport())
+        painter.setPen(self.palette().color(QPalette.PlaceholderText))
+        painter.drawText(
+            self.viewport().rect(),
+            int(Qt.AlignCenter),
+            "Found addresses will appear here.",
+        )
+        painter.end()
 
     def _show_context_menu(self, pos) -> None:
         rows = sorted({idx.row() for idx in self.selectedIndexes()})
