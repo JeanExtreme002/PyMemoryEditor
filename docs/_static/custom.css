@@ -1,90 +1,79 @@
-/* Furo centers the layout: on wide screens the sidebar drawer spans the whole
-   left half and right-justifies its content against the text column, leaving a
-   wide margin on the far left. Pin it to a fixed width, flush against the left
-   edge of the window, for a conventional left-sidebar layout. */
-.sidebar-drawer {
-  width: 20em;
-  justify-content: flex-start;
-}
+/* PyMemoryEditor docs — tweaks on top of the Read the Docs theme.
+   Goal: keep the familiar RTD look, add a persistent GitHub "star" CTA, and
+   make the landing-page content grids responsive. */
 
-/* The inner container is hardcoded to 15em in Furo; widen it to match the
-   drawer so the brand, search box and nav tree fill the extra space. */
-.sidebar-container {
-  width: 20em;
-}
-
-/* Below Furo's mobile breakpoint (63em) the sidebar becomes an off-canvas
-   drawer that Furo hides at `left: -15em` to match its default 15em width.
-   Our 20em override above leaves the extra 5em poking out past the left edge
-   of the screen. Push it the full 20em off-screen so it stays fully hidden
-   until the menu toggle slides it back to `left: 0`. */
-@media (max-width: 63em) {
-  .sidebar-drawer {
-    width: 20em;
-    left: -20em;
-  }
-}
-
-/* Roomier horizontal padding for the whole sidebar (brand, captions, links). */
-body {
-  --sidebar-item-spacing-horizontal: 1rem;
-}
-
-/* Center the brand block (logo + project name) so it lines up with the
-   centered GitHub button below it. Furo only adds its own `.centered` class
-   for a text logo, not for an image logo. */
-.sidebar-brand {
+/* --- Sidebar brand (logo + project title) ------------------------------- */
+/* RTD renders the title text *before* the logo image inside the home link, so
+   the name ends up above the logo. Stack them as a centered column and use
+   `order` to lift the logo to the top, with the project name beneath it. */
+.wy-side-nav-search > a.icon-home {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  text-align: center;
+}
+.wy-side-nav-search > a img.logo {
+  order: -1;            /* move the logo above the title regardless of DOM order */
+  max-width: 5.5em;
+  margin: 0.2em auto 0.4em;
+}
+/* Drop the small home glyph the theme prepends — redundant next to the logo. */
+.wy-side-nav-search > a.icon-home::before {
+  display: none;
 }
 
-/* Smaller logo (Furo lets it grow to the full sidebar width by default). */
-.sidebar-logo {
-  max-width: 6em;
+/* --- Persistent "Star on GitHub" CTA (injected in _templates/layout.html) --- */
+/* Sits at the top of the dark navigation menu, above the toctree.
+   Scoped under `.wy-menu-vertical a` so it beats the RTD theme's own
+   `.wy-menu-vertical a { display: block; color: ... }` rule on specificity —
+   otherwise `display: flex` (and the centering/gap it enables) is ignored. */
+.wy-menu-vertical a.github-star-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0.75rem 1rem 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 0.4rem;
+  color: #fcfcfc;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-/* Furo keeps a few purple accents that don't follow the brand colour:
-   visited links and the generic admonition-title accent. Point them at the
-   teal brand colour in every theme mode (explicit light/dark + auto). */
-body {
-  --color-brand-visited: var(--color-brand-content);
-  --color-admonition-title: var(--color-brand-content);
-}
-@media not print {
-  body[data-theme="dark"] {
-    --color-brand-visited: var(--color-brand-content);
-    --color-admonition-title: var(--color-brand-content);
-  }
-  @media (prefers-color-scheme: dark) {
-    body:not([data-theme="light"]) {
-      --color-brand-visited: var(--color-brand-content);
-      --color-admonition-title: var(--color-brand-content);
-    }
-  }
+.wy-menu-vertical a.github-star-cta:hover,
+.wy-menu-vertical a.github-star-cta:focus-visible {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: #fff;
 }
 
-/* Pygments (light theme): retint the purple keyword tokens to the teal accent.
-   Dark-theme keywords are already green, so they have no purple to fix. */
-.highlight .k,
-.highlight .kc,
-.highlight .kd,
-.highlight .kn,
-.highlight .kp,
-.highlight .kr,
-.highlight .ne,
-.highlight .ow {
-  color: #0d9488;
+.github-star-cta svg {
+  flex-shrink: 0;
 }
 
-/* "Why use it?" feature grid on the landing page: add horizontal breathing
-   room between the three columns without overflowing (border-box keeps the
-   33% widths intact), and zero out the outer edges. */
+/* The RTD theme's JavaScript injects a `<button class="toctree-expand">` as the
+   first child of every link inside `.wy-menu-vertical` (the expand/collapse caret
+   for nav items with children). Our CTA isn't a nav item, so that button renders
+   as a stray white pill before the icon — hide it. */
+.github-star-cta button.toctree-expand {
+  display: none;
+}
+
+/* --- Landing page: "Why use it?" feature grid --------------------------- */
+.feature-grid {
+  border: 0;
+  width: 100%;
+}
 .feature-grid td {
   box-sizing: border-box;
   padding: 0 1.25rem;
-  /* Shrink the cell text; the `h3` headings use `em`, so the title and body
-     scale down together proportionally. */
-  font-size: 0.85rem;
+  border: 0;
+  background: transparent;
+  font-size: 0.92rem;
+  vertical-align: top;
 }
 .feature-grid td:first-child {
   padding-left: 0;
@@ -92,9 +81,13 @@ body {
 .feature-grid td:last-child {
   padding-right: 0;
 }
+/* The two layout grids are columns, not data tables: kill any table chrome. */
+.feature-grid tr,
+.inside-grid tr {
+  background: transparent !important;
+}
 
-/* "When to use the app vs the library": two side-by-side "when to use" cards
-   on desktop that stack vertically on mobile (handled by the breakpoint below). */
+/* --- "When to use the app vs the library" cards ------------------------- */
 .vs-cards {
   display: flex;
   gap: 1rem;
@@ -102,10 +95,9 @@ body {
 .vs-card {
   flex: 1;
   padding: 1rem 1.25rem;
-  border: 1px solid var(--color-background-border);
+  border: 1px solid #e1e4e5;
   border-radius: 0.5rem;
 }
-/* Tighten the card's inner spacing so the title and list sit snugly. */
 .vs-card > :first-child {
   margin-top: 0;
 }
@@ -113,16 +105,43 @@ body {
   margin-bottom: 0;
 }
 
-@media (max-width: 410px) {
-  .main-title {
-    font-size: 32px;
-  }
+/* --- Data tables written as raw HTML ------------------------------------ */
+/* Markdown pipe tables get RTD's `.docutils` class and are styled by the
+   theme. Raw HTML tables (used across the guide for richer cells) don't, so
+   the theme leaves them unstyled. Give them the same RTD look — borders,
+   padding, an emphasised header row and zebra striping — while excluding the
+   borderless layout grids. */
+.rst-content
+  table:not(.docutils):not(.feature-grid):not(.inside-grid) {
+  border-collapse: collapse;
+  border: 1px solid #e1e4e5;
+  width: 100%;
+  margin-bottom: 24px;
 }
-/* --- Mobile (below Furo's 63em breakpoint) layout tweaks for the landing page --- */
-@media (max-width: 63em) {
-  /* Stack the "Why use it?" feature columns vertically instead of side by side.
-     The cells are table-cells by default; switch the row to a flex column so
-     each feature occupies the full width on its own line. */
+.rst-content table:not(.docutils):not(.feature-grid):not(.inside-grid) th,
+.rst-content table:not(.docutils):not(.feature-grid):not(.inside-grid) td {
+  border: 1px solid #e1e4e5;
+  padding: 8px 16px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.5;
+}
+.rst-content table:not(.docutils):not(.feature-grid):not(.inside-grid) th {
+  font-weight: 700;
+  border-bottom: 2px solid #e1e4e5;
+}
+/* Zebra-stripe the body rows. The header is row 1 (odd), so striping the even
+   rows leaves it clean. */
+.rst-content
+  table:not(.docutils):not(.feature-grid):not(.inside-grid)
+  tr:nth-child(2n)
+  td {
+  background: #f3f6f6;
+}
+
+/* --- Mobile (RTD's grid-break breakpoint is 768px) ---------------------- */
+@media screen and (max-width: 768px) {
+  /* Layout grids: stack their columns vertically. */
   .feature-grid,
   .feature-grid tbody,
   .feature-grid tr,
@@ -135,84 +154,73 @@ body {
   .feature-grid td,
   .inside-grid td {
     width: 100%;
-    padding: 0;
+    padding: 0 0 1rem;
   }
 
-  /* Stack the two "when to use" cards on top of each other. */
+  /* Stack the two "when to use" cards. */
   .vs-cards {
     flex-direction: column;
   }
 
-  /* Every other content table (data / comparison / lookup) turns each row into
-     a stacked card. This is a blanket rule for all tables in the page body; the
-     two layout grids above are excluded since they stack as plain blocks. */
-  article table:not(.feature-grid):not(.inside-grid) {
-    &,
-    & tbody {
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-    }
-    /* Header row is redundant once stacked — its labels are re-attached per
-       cell via `data-label` (multi-column tables) or implied by the title. */
-    & tr:has(th) {
-      display: none;
-    }
-    & tr {
-      display: flex;
-      flex-direction: column;
-      padding: 1rem;
-      border: 1px solid var(--color-background-border);
-      border-radius: 0.5rem;
-    }
-    & td {
-      display: block;
-      width: 100%;
-      border: 0;
-      padding: 0;
-    }
-    /* An unlabelled first cell (the name / symbol / platform) is the card
-       title: slightly larger and spaced from the details below it. */
-    & td:first-child:not([data-label]) {
-      font-size: 1.1em;
-      margin-bottom: 0.5rem;
-    }
-    /* Re-attach the column header as an inline label before each value. */
-    & td[data-label]::before {
-      content: attr(data-label) ": ";
-      font-weight: 600;
-      color: var(--color-foreground-muted);
-    }
+  /* Data tables overflow a phone screen, so turn each row into a stacked card.
+     Cells re-attach their column header via the `data-label` attribute the
+     markup carries; an unlabelled first cell becomes the card title. */
+  .rst-content table:not(.docutils):not(.feature-grid):not(.inside-grid) {
+    border: 0;
+    margin-bottom: 24px;
   }
-}
+  .rst-content table:not(.docutils):not(.feature-grid):not(.inside-grid),
+  .rst-content
+    table:not(.docutils):not(.feature-grid):not(.inside-grid)
+    tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  /* The header row is redundant once each cell carries its own label. */
+  .rst-content
+    table:not(.docutils):not(.feature-grid):not(.inside-grid)
+    tr:has(th) {
+    display: none;
+  }
+  .rst-content
+    table:not(.docutils):not(.feature-grid):not(.inside-grid)
+    tr {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    border: 1px solid #e1e4e5;
+    border-radius: 0.5rem;
+  }
+  .rst-content
+    table:not(.docutils):not(.feature-grid):not(.inside-grid)
+    td {
+    display: block;
+    width: 100%;
+    border: 0;
+    padding: 0;
+    background: transparent !important;
+  }
+  /* The unlabelled first cell (the name / symbol / platform) is the title. */
+  .rst-content
+    table:not(.docutils):not(.feature-grid):not(.inside-grid)
+    td:first-child:not([data-label]) {
+    font-size: 1.1em;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  /* Re-attach the column header inline before each labelled value. */
+  .rst-content
+    table:not(.docutils):not(.feature-grid):not(.inside-grid)
+    td[data-label]::before {
+    content: attr(data-label) ": ";
+    font-weight: 600;
+    color: #5a5a5a;
+  }
 
-/* Persistent GitHub call-to-action in the sidebar, under the project name. */
-.sidebar-github-cta {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  margin: 0.75rem 1rem 0.25rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-background-border);
-  border-radius: 0.5rem;
-  color: var(--color-sidebar-link-text);
-  font-size: 0.85rem;
-  font-weight: 600;
-  line-height: 1;
-  text-decoration: none;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.sidebar-github-cta:hover,
-.sidebar-github-cta:focus-visible {
-  background: var(--color-background-hover);
-  border-color: var(--color-foreground-border);
-  color: var(--color-sidebar-link-text);
-}
-
-.sidebar-github-cta svg {
-  width: 1.15em;
-  height: 1.15em;
-  flex-shrink: 0;
+  /* Markdown (.docutils) tables: let them scroll horizontally instead. */
+  .rst-content table.docutils {
+    display: block;
+    overflow-x: auto;
+  }
 }

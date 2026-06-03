@@ -37,7 +37,7 @@ name or PID.
 <tr>
 <td width="50%" valign="top">
 
-### 🎯 Scanner
+**🎯 Scanner**
 
 - Every `ScanTypesEnum` mode
 - All five value types (`int`, `float`, `bool`, `str`, `bytes`)
@@ -45,13 +45,13 @@ name or PID.
 - AOB / byte signature search
 - Regex search
 
-### 🔁 Refine workflow
+**🔁 Refine workflow**
 
 - **First Scan → Next Scan** (Cheat Engine style)
 - Eight Next Scan comparisons (increased, decreased, changed, unchanged, …)
 - Live progress
 
-### 📋 Cheat table
+**📋 Cheat table**
 
 - Freeze / write values continuously
 - Per-entry custom labels
@@ -60,24 +60,24 @@ name or PID.
 </td>
 <td width="50%" valign="top">
 
-### 🔗 Pointer scan
+**🔗 Pointer scan**
 
 - Same engine as `scan_pointer_paths`
 - Save scans to JSON
 - Rescan / compare scans to narrow them down
 - Build live `RemotePointer` from a result
 
-### 🗺️ Memory map
+**🗺️ Memory map**
 
 - All regions with R/W/X flags
 - Source file / module per region (where available)
 
-### 🔬 Hex viewer
+**🔬 Hex viewer**
 
 - Live dump with write-back
 - Address goto, navigation
 
-### 🪵 Log console
+**🪵 Log console**
 
 - Same stream as `logging.getLogger("PyMemoryEditor")`
 - Toggle DEBUG verbosity at runtime
@@ -140,6 +140,7 @@ The pointer-scan format is documented in [`PointerPath`](api/pointer-path.md).
 
 </div>
 </div>
+<br>
 
 ```{seealso}
 - [Quick Start](quickstart.md) — the same workflow, in code.

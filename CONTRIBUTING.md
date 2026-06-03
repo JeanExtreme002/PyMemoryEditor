@@ -81,4 +81,4 @@ Please include:
 
 ## Security
 
-If you find a security issue, please see [`SECURITY.md`](SECURITY.md). **Do not** report via GitHub issues.
+If you find a security issue, please see [`SECURITY.md`](https://github.com/JeanExtreme002/PyMemoryEditor/blob/main/SECURITY.md). **Do not** report via GitHub issues.
