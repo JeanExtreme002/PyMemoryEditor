@@ -45,6 +45,13 @@ requires-python = ">=3.10"
 dependencies = ["psutil>=5.9,<7"]
 
 [project.optional-dependencies]
+# Vectorized scan acceleration. Pulls in NumPy, which lights up the
+# NumPy fast path in PyMemoryEditor.util.scan automatically — no code change
+# needed. The library works identically without it (pure-Python fallback);
+# this just makes the ordered/range scans ~10-30x faster on large regions.
+speed = [
+  "numpy>=1.24",
+]
 tests = [
   "pytest",
   "pytest-xdist",
@@ -52,6 +59,10 @@ tests = [
 app = [
   "PySide6>=6.5",
 ]
+# NOTE: NumPy is intentionally NOT listed here. The default test suite must
+# run on the pure-Python scan path so it stays covered. The NumPy fast path
+# (the `speed` extra) is exercised by a dedicated CI job that installs
+# `.[dev,speed]` — see the `build-speed` job in python-package.yml.
 dev = [
   "pytest",
   "pytest-xdist",

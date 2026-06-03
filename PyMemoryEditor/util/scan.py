@@ -6,6 +6,7 @@ from bisect import bisect_left
 from typing import Generator, Iterable, Literal, Optional, Sequence, Tuple, Type, Union, cast
 
 from ..enums import ScanTypesEnum
+from . import scan_numpy
 
 
 # Static alias mypy can narrow to int.from_bytes's expected byte-order parameter.
@@ -256,6 +257,28 @@ def scan_memory(
         total = (len(buffer) // target_value_size) * target_value_size
         if total == 0:
             return
+
+        # Optional NumPy fast path (the ``[speed]`` extra). When NumPy is
+        # installed, the per-element comparison loop below is replaced by a
+        # single vectorized comparison over the whole region — same offsets,
+        # same order, ~10-30x faster on the ordered scans. Returns None when
+        # NumPy is absent or the (pytype, size) pair has no fast path, in which
+        # case we fall through to the struct loop unchanged.
+        if scan_numpy.NUMPY_AVAILABLE:
+            offsets = scan_numpy.scan_offsets(
+                buffer[:total],
+                target_value_size,
+                scan_type,
+                pytype,
+                byte_order,
+                target_value_decoded,
+                start_target_value,
+                end_target_value,
+            )
+            if offsets is not None:
+                yield from offsets
+                return
+
         unpacker = struct.iter_unpack(fmt, buffer[:total])
         offset = 0
         step = target_value_size
