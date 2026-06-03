@@ -185,8 +185,6 @@ manually; if you must slice or filter, pass the result of
 missing.
 ```
 
-(scan-acceleration)=
-
 ## Scan acceleration (the `speed` extra)
 
 By default every scan runs in pure Python, with the hottest paths already

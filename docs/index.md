@@ -54,6 +54,50 @@ If the library saved you time, please **[⭐ star it on GitHub](https://github.c
 it's the single easiest way to support the project and help others discover it.
 ```
 
+## Why PyMemoryEditor?
+
+<table class="feature-grid">
+<tr>
+<td width="50%" valign="top">
+
+**🌍 Truly cross-platform**
+
+One identical API on **Windows, Linux and macOS**, 32- and 64-bit. Write your
+script once; it runs everywhere.
+
+**🪶 Zero dependencies**
+
+Pure Python on top of [ctypes](https://docs.python.org/3/library/ctypes.html) —
+no C compiler, no native build step, no wheels to chase.
+
+**🔎 The full Cheat Engine toolkit**
+
+Value scans with eight comparison modes, AOB / regex pattern scans, and the
+classic *first scan → refine* loop.
+
+</td>
+<td width="50%" valign="top">
+
+**🔗 Pointers that survive restarts**
+
+A reverse pointer scan finds the static `module + offsets` chains that beat
+ASLR — save them once and reuse them every launch.
+
+**⚡ Optional NumPy acceleration**
+
+Add the [`speed`](installation.md#install-with-scan-acceleration-speed) extra
+and selective scans get **10–60× faster** — a drop-in fast path, identical
+results.
+
+**🖥️ A GUI app, included**
+
+No code required: the bundled [Cheat Engine-style app](app.md) lets anyone
+explore, scan and freeze values by clicking.
+
+</td>
+</tr>
+</table>
+
 ## User's Guide
 
 This part of the documentation walks you through every workflow, from opening a
@@ -62,6 +106,7 @@ process to following multi-level pointer chains, plus the bundled GUI app.
 ```{toctree}
 :maxdepth: 2
 
+why
 installation
 quickstart
 guide/index
