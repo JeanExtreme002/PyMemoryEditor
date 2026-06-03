@@ -15,3 +15,4 @@ from .scan import (
     scan_memory,
     scan_memory_for_exact_value,
 )
+from .scan_numpy import NUMPY_AVAILABLE

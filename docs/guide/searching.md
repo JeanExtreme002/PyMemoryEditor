@@ -185,6 +185,65 @@ manually; if you must slice or filter, pass the result of
 missing.
 ```
 
+(scan-acceleration)=
+
+## Scan acceleration (the `speed` extra)
+
+By default every scan runs in pure Python, with the hottest paths already
+delegated to C primitives (`bytes.find` for exact matches, `struct.iter_unpack`
+to decode a region). What stays in Python is the per-value **comparison loop**
+of the ordered scans (`BIGGER_THAN`, `SMALLER_THAN`, `VALUE_BETWEEN`, …): for a
+multi-megabyte region it boxes and compares millions of values one at a time.
+
+Installing the optional [`speed`](../installation.md#install-with-scan-acceleration-speed)
+extra replaces that loop with a single vectorized NumPy comparison:
+
+```bash
+pip install "PyMemoryEditor[speed]"
+```
+
+There is **nothing to enable** — PyMemoryEditor detects NumPy at import time and
+routes the typed numeric scans through it automatically. Under the hood, each
+region becomes a zero-copy typed array and the comparison runs once over the
+whole array in C/SIMD:
+
+```python
+arr  = np.frombuffer(region, dtype="<i4")   # bytes -> int32 array, no copy
+mask = arr > target                          # one C-level comparison
+offsets = np.flatnonzero(mask) * 4           # match positions -> byte offsets
+```
+
+```{admonition} Identical results, just faster
+:class: note
+
+The NumPy path returns exactly the same addresses, in the same order, as the
+pure-Python loop — it is a drop-in fast path, not a behavior change. An
+equivalence test suite asserts this across every scan type, byte width and
+signedness. If NumPy is not installed, the pure-Python loop runs instead and
+nothing breaks.
+```
+
+### When it helps (and when it doesn't)
+
+The win scales with how **selective** the scan is, because building the result
+list is work both paths share — the acceleration is in the *comparison*, not in
+emitting matches.
+
+<table>
+<tr><th>Scenario</th><th>Typical speedup</th></tr>
+<tr><td>Selective scan of a large region (few matches — the usual first scan / refine step)</td><td><b>10–60×</b></td></tr>
+<tr><td>Scan where most values match (e.g. <code>&gt; 0</code> on mostly-positive data)</td><td>~2× (result building dominates)</td></tr>
+<tr><td><code>str</code> / <code>bytes</code> scans, or unusual widths (3/6/7 bytes)</td><td>no change (no NumPy fast path; pure-Python loop)</td></tr>
+<tr><td><code>EXACT_VALUE</code> via <code>search_by_value</code></td><td>already <code>bytes.find</code> in C — NumPy not used</td></tr>
+</table>
+
+You can check whether the fast path is active:
+
+```python
+from PyMemoryEditor.util import NUMPY_AVAILABLE
+print("NumPy acceleration:", NUMPY_AVAILABLE)
+```
+
 ## Working with strings and bytes
 
 All of the above methods work with `str` and `bytes` too:

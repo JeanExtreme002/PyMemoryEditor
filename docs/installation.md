@@ -38,6 +38,29 @@ PySide6 in.
 
 See the [GUI App guide](app.md) for a tour of every feature.
 
+## Install with scan acceleration (`speed`)
+
+Scans run in pure Python by default — no dependencies, works everywhere. If you
+scan large processes often, the optional `speed` extra pulls in
+[NumPy](https://pypi.org/project/numpy/) and **automatically** vectorizes the
+inner comparison loop of the typed numeric scans (`BIGGER_THAN`,
+`SMALLER_THAN`, `VALUE_BETWEEN`, …):
+
+```bash
+pip install "PyMemoryEditor[speed]"
+```
+
+That's the only change required — there is no new API and no flag to toggle.
+PyMemoryEditor detects NumPy at import time and switches the fast path on; if
+NumPy is absent it falls back to the pure-Python loop transparently. The results
+are **identical** either way — only the speed changes (typically 10–60× faster
+on selective scans of large regions). See
+[Scan acceleration](guide/searching.md#scan-acceleration) for details and
+benchmarks.
+
+NumPy ships prebuilt wheels for Windows, Linux and macOS, so the `speed` extra
+stays compiler-free and cross-platform — no native build step on any OS.
+
 ## Install from source
 
 ```bash

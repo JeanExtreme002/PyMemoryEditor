@@ -45,6 +45,13 @@ requires-python = ">=3.10"
 dependencies = ["psutil>=5.9,<7"]
 
 [project.optional-dependencies]
+# Vectorized scan acceleration. Pulls in NumPy, which lights up the
+# NumPy fast path in PyMemoryEditor.util.scan automatically — no code change
+# needed. The library works identically without it (pure-Python fallback);
+# this just makes the ordered/range scans ~10-30x faster on large regions.
+speed = [
+  "numpy>=1.24",
+]
 tests = [
   "pytest",
   "pytest-xdist",
@@ -58,6 +65,7 @@ dev = [
   "pytest-cov",
   "pytest-qt",
   "hypothesis",
+  "numpy>=1.24",
   "flake8",
   "mypy",
   "build",

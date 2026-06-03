@@ -48,6 +48,14 @@ pip install "PyMemoryEditor[app]"
 pymemoryeditor
 ```
 
+For faster scans on large processes, add the `speed` extra. It pulls in NumPy
+and automatically vectorizes the numeric scan comparison loop — 10–60× faster on
+selective scans:
+
+```bash
+pip install "PyMemoryEditor[speed]"
+```
+
 ---
 
 ## See it in action
