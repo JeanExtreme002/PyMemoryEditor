@@ -55,8 +55,8 @@ PyMemoryEditor detects NumPy at import time and switches the fast path on; if
 NumPy is absent it falls back to the pure-Python loop transparently. The results
 are **identical** either way — only the speed changes (typically 10–60× faster
 on selective scans of large regions). See
-[Scan acceleration](guide/searching.md#scan-acceleration) for details and
-benchmarks.
+[Scan acceleration](guide/searching.md#scan-acceleration-the-speed-extra) for
+details and benchmarks.
 
 NumPy ships prebuilt wheels for Windows, Linux and macOS, so the `speed` extra
 stays compiler-free and cross-platform — no native build step on any OS.
