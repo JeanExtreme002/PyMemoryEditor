@@ -9,8 +9,8 @@ any platform.
 <table>
 <tr><td><b>Python</b></td><td>3.10 or newer</td></tr>
 <tr><td><b>Operating systems</b></td><td>🪟 Windows · 🐧 Linux · 🍎 macOS (32-bit and 64-bit)</td></tr>
-<tr><td><b>Runtime dependency</b></td><td><a href="https://pypi.org/project/psutil/"><code>psutil</code></a> (installed automatically)</td></tr>
 </table>
+<br>
 
 ## Install the library
 

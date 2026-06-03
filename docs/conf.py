@@ -3,7 +3,8 @@
 
 The docs use the MyST parser so every page can be written in Markdown, with
 optional reStructuredText directives where they help (e.g. ``{toctree}``,
-admonitions). The Furo theme provides a modern dark/light HTML build.
+admonitions). The Read the Docs theme (``sphinx_rtd_theme``) provides the
+familiar, friendly left-sidebar HTML build people expect from Python docs.
 """
 
 import os
@@ -67,36 +68,30 @@ myst_heading_anchors = 3
 
 # -- HTML output -------------------------------------------------------------
 
-html_theme = "furo"
+html_theme = "sphinx_rtd_theme"
 html_title = "PyMemoryEditor"
 
 html_theme_options = {
-    "sidebar_hide_name": False,
-    "navigation_with_keys": True,
-    "source_repository": "https://github.com/JeanExtreme002/PyMemoryEditor/",
-    "source_branch": "main",
-    "source_directory": "docs/",
-    "light_css_variables": {
-        "color-brand-primary": "#0D9488",
-        "color-brand-content": "#0D9488",
-    },
-    "dark_css_variables": {
-        "color-brand-primary": "#2DD4BF",
-        "color-brand-content": "#2DD4BF",
-    },
-    # Persistent GitHub call-to-action, pinned to the sidebar footer on every page.
-    "footer_icons": [
-        {
-            "name": "GitHub",
-            "url": "https://github.com/JeanExtreme002/PyMemoryEditor",
-            "html": """
-                <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
-                    <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
-                </svg>
-            """,
-            "class": "",
-        },
-    ],
+    # Brand-ish accent. The RTD theme defaults to its familiar blue; this just
+    # tints the top sidebar block so it isn't the stock "#2980b9" everywhere.
+    "logo_only": False,
+    "collapse_navigation": False,
+    "sticky_navigation": True,
+    "navigation_depth": 3,
+    "includehidden": True,
+    "titles_only": False,
+    "prev_next_buttons_location": "bottom",
+    "style_external_links": True,
+}
+
+# Wire up the theme's native "Edit on GitHub" link (top-right of every page),
+# plus the data the custom sidebar "Star on GitHub" call-to-action reads.
+html_context = {
+    "display_github": True,
+    "github_user": "JeanExtreme002",
+    "github_repo": "PyMemoryEditor",
+    "github_version": "main",
+    "conf_py_path": "/docs/",
 }
 
 html_static_path = ["_static"]
