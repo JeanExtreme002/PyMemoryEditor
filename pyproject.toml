@@ -59,13 +59,16 @@ tests = [
 app = [
   "PySide6>=6.5",
 ]
+# NOTE: NumPy is intentionally NOT listed here. The default test suite must
+# run on the pure-Python scan path so it stays covered. The NumPy fast path
+# (the `speed` extra) is exercised by a dedicated CI job that installs
+# `.[dev,speed]` — see the `build-speed` job in python-package.yml.
 dev = [
   "pytest",
   "pytest-xdist",
   "pytest-cov",
   "pytest-qt",
   "hypothesis",
-  "numpy>=1.24",
   "flake8",
   "mypy",
   "build",
