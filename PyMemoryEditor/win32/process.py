@@ -3,7 +3,12 @@
 import ctypes
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
-from ..util import prepare_write, resolve_bufflength
+from ..util import (
+    UNSET,
+    prepare_write,
+    resolve_bufflength,
+    resolve_bufflength_for_value,
+)
 
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
@@ -193,14 +198,16 @@ class WindowsProcess(AbstractProcess):
     def search_by_addresses(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        addresses: Sequence[int],
+        bufflength: Optional[int] = None,
+        addresses: Sequence[int] = UNSET,
         *,
         raise_error: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
         self.__require_read()
+        if addresses is UNSET:
+            raise TypeError("addresses is required.")
         return SearchValuesByAddresses(
             self.__process_handle,
             pytype,
@@ -213,8 +220,8 @@ class WindowsProcess(AbstractProcess):
     def search_by_value(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
         scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
         progress_information: bool = False,
@@ -232,7 +239,7 @@ class WindowsProcess(AbstractProcess):
         return SearchAddressesByValue(
             self.__process_handle,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            resolve_bufflength_for_value(pytype, bufflength, value),
             value,
             scan_type,
             progress_information,
@@ -261,9 +268,9 @@ class WindowsProcess(AbstractProcess):
     def search_by_value_between(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        start: Union[bool, int, float, str, bytes],
-        end: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        start: Union[bool, int, float, str, bytes] = UNSET,
+        end: Union[bool, int, float, str, bytes] = UNSET,
         *,
         not_between: bool = False,
         progress_information: bool = False,
@@ -281,7 +288,7 @@ class WindowsProcess(AbstractProcess):
         return SearchAddressesByValue(
             self.__process_handle,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            resolve_bufflength_for_value(pytype, bufflength, start, end),
             (start, end),
             scan_type,
             progress_information,
@@ -308,8 +315,8 @@ class WindowsProcess(AbstractProcess):
         self,
         address: int,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
         self.__require_write()

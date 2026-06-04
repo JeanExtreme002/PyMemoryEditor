@@ -32,12 +32,15 @@ memory.
 ### Method signature
 
 ```{eval-rst}
-.. py:method:: search_by_value(pytype, bufflength, value, scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None)
    :no-index:
 
    :param Type pytype: ``bool``, ``int``, ``float``, ``str`` or ``bytes``.
-   :param int bufflength: value size in bytes (1, 2, 4, 8). Pass ``None`` for
-      numeric types to use the default.
+   :param int bufflength: value size in bytes (1, 2, 4, 8). **Optional** —
+      defaults to ``None``: numeric types use their default width and ``str`` /
+      ``bytes`` infer it from the encoded length of ``value``. Since it is
+      optional, pass ``value`` by keyword when omitting it
+      (``search_by_value(int, value=100)``).
    :param value: the value to look for.
    :param ScanTypesEnum scan_type: comparison mode — see below.
    :param bool progress_information: when ``True``, yields ``(address, info)`` tuples
@@ -108,7 +111,7 @@ for address in process.search_by_value_between(
 ### Method signature
 
 ```{eval-rst}
-.. py:method:: search_by_value_between(pytype, bufflength, start, end, *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None)
    :no-index:
 ```
 
@@ -116,6 +119,9 @@ Same parameters as `search_by_value`, plus:
 
 - `start`, `end` — the range boundaries (inclusive).
 - `not_between` — when `True`, returns values **outside** the range.
+
+`bufflength` is optional here too (defaults to `None`); pass `start` / `end` by
+keyword when you omit it: `search_by_value_between(int, start=100, end=200)`.
 
 ## Search by addresses
 
@@ -136,9 +142,13 @@ If an address falls in an unmapped page, the value is `None` (unless
 ### Method signature
 
 ```{eval-rst}
-.. py:method:: search_by_addresses(pytype, bufflength, addresses, *, raise_error=False, memory_regions=None)
+.. py:method:: search_by_addresses(pytype, bufflength=None, addresses=..., *, raise_error=False, memory_regions=None)
    :no-index:
 
+   :param int bufflength: value size in bytes. **Optional** for numeric types
+      (defaults to ``None`` → int→4, float→8, bool→1). ``str`` / ``bytes`` still
+      require an explicit size — there is no value to infer it from, only
+      addresses to read. Pass ``addresses`` by keyword when omitting it.
    :param Sequence[int] addresses: addresses to inspect.
    :param bool raise_error: when ``True``, raises ``OSError`` instead of yielding
       ``None`` for an unreadable address.
@@ -161,12 +171,12 @@ with OpenProcess(pid=1234) as process:
     regions = process.snapshot_memory_regions()
 
     # First pass — every address holding 100.
-    candidates = list(process.search_by_value(int, None, 100, memory_regions=regions))
+    candidates = list(process.search_by_value(int, value=100, memory_regions=regions))
 
     # Refine — keep only those that now hold 95.
     refined = [
         addr
-        for addr, value in process.search_by_addresses(int, None, candidates, memory_regions=regions)
+        for addr, value in process.search_by_addresses(int, addresses=candidates, memory_regions=regions)
         if value == 95
     ]
 ```

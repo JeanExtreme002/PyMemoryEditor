@@ -80,17 +80,17 @@ If you need the bytes verbatim, pass `pytype=bytes`.
 with OpenProcess(process_name="notepad.exe") as process:
     address = 0x0005000C
 
-    # Write an int (None = default size of 4 bytes)
-    process.write_process_memory(address, int, None, 9999)
+    # Write an int — bufflength is optional, so pass value by keyword.
+    process.write_process_memory(address, int, value=9999)
 
-    # Write a 2-byte int explicitly
+    # Write a 2-byte int explicitly (positional bufflength still works).
     process.write_process_memory(address, int, 2, 42)
 
-    # Write a string — the size is optional; None just stores your text as-is
-    process.write_process_memory(address, str, None, "Hello!")
+    # Write a string — no size needed; your text is stored as-is.
+    process.write_process_memory(address, str, value="Hello!")
 
     # Write raw bytes
-    process.write_process_memory(address, bytes, 4, b"\xDE\xAD\xBE\xEF")
+    process.write_process_memory(address, bytes, value=b"\xDE\xAD\xBE\xEF")
 ```
 
 ```{admonition} Writing text? Count characters, not bytes.
@@ -106,13 +106,16 @@ size to clear a fixed-size field (the extra space is zero-filled).
 ### Method signature
 
 ```{eval-rst}
-.. py:method:: write_process_memory(address, pytype, bufflength, value)
+.. py:method:: write_process_memory(address, pytype, bufflength=None, value=...)
    :no-index:
 
    :param int address: target memory address.
    :param Type pytype: one of ``bool``, ``int``, ``float``, ``str``, ``bytes``.
-   :param int bufflength: value size in bytes (``None`` for numeric types to use
-      the default).
+   :param int bufflength: value size in bytes. **Optional** — defaults to
+      ``None``, which uses the default width for numeric types and writes the
+      exact encoded length for ``str`` / ``bytes``. Since it is optional, pass
+      ``value`` by keyword when you omit it: ``write_process_memory(addr, int,
+      value=9999)``.
    :param value: the value to write.
    :return: the written value.
 ```

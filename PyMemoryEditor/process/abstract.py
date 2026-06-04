@@ -17,6 +17,7 @@ from typing import (
 )
 
 from ..enums import ScanTypesEnum
+from ..util import UNSET
 from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .region import MemoryRegion, MemoryRegionSnapshot
@@ -224,8 +225,8 @@ class AbstractProcess(ABC):
     def search_by_addresses(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        addresses: Sequence[int],
+        bufflength: Optional[int] = None,
+        addresses: Sequence[int] = UNSET,
         *,
         raise_error: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
@@ -234,6 +235,14 @@ class AbstractProcess(ABC):
         Search the whole memory space, accessible to the process,
         for the provided list of addresses, returning their values.
 
+        :param bufflength: value size in bytes. Optional — defaults to ``None``,
+            which uses the default width for numeric types (int→4, float→8,
+            bool→1). ``str`` / ``bytes`` still require an explicit size here:
+            unlike a search by value, there is no value to infer the width
+            from — only addresses to read. Since ``bufflength`` is optional,
+            pass ``addresses`` by keyword when omitting it:
+            ``search_by_addresses(int, addresses=[0x1000, 0x1004])``.
+        :param addresses: the addresses to read. Required.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
         """
@@ -243,8 +252,8 @@ class AbstractProcess(ABC):
     def search_by_value(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
         scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
         progress_information: bool = False,
@@ -256,10 +265,13 @@ class AbstractProcess(ABC):
         for the provided value, returning the found addresses.
 
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8). For numeric types
-            (int, float, bool) you may pass None to use the default
-            (int→4, float→8, bool→1). str and bytes require an explicit value.
+        :param bufflength: value size in bytes (1, 2, 4, 8). Optional — defaults
+            to ``None``: numeric types (int, float, bool) use their default
+            width (int→4, float→8, bool→1) and ``str`` / ``bytes`` infer it from
+            the encoded length of ``value``. Since it is optional, pass ``value``
+            by keyword when omitting it: ``search_by_value(int, value=100)``.
         :param value: value to be queried (bool, int, float, str or bytes).
+            Required.
         :param scan_type: the way to compare the values.
         :param progress_information: if True, a dictionary with the progress information will be returned.
         :param writeable_only: if True, search only at writeable memory regions.
@@ -300,9 +312,9 @@ class AbstractProcess(ABC):
     def search_by_value_between(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        start: Union[bool, int, float, str, bytes],
-        end: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        start: Union[bool, int, float, str, bytes] = UNSET,
+        end: Union[bool, int, float, str, bytes] = UNSET,
         *,
         not_between: bool = False,
         progress_information: bool = False,
@@ -313,7 +325,11 @@ class AbstractProcess(ABC):
         Search the whole memory space, accessible to the process,
         for a value within the provided range, returning the found addresses.
 
-        See `search_by_value` for parameter semantics.
+        See `search_by_value` for parameter semantics. ``bufflength`` is
+        likewise optional (defaults to ``None``): for ``str`` / ``bytes`` it is
+        inferred from the longest of ``start`` / ``end`` (the shorter endpoint
+        is NUL-padded to that width). Pass ``start`` / ``end`` by keyword when
+        omitting ``bufflength``: ``search_by_value_between(int, start=10, end=20)``.
         """
         raise NotImplementedError()
 
@@ -348,28 +364,35 @@ class AbstractProcess(ABC):
         self,
         address: int,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
     ) -> Union[bool, int, float, str, bytes]:
         """
         Write a value to a memory address.
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of value to be written into memory (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes.
+        :param bufflength: value size in bytes. Optional — defaults to ``None``.
 
             * For numeric types (int, float, bool) it is the exact write width;
-              pass ``None`` to use the default — int→4, float→8, bool→1.
+              leave it as ``None`` to use the default — int→4, float→8, bool→1.
             * For ``str`` / ``bytes`` it is a *minimum* field width, not a hard
               cap. The whole value is always written: if its encoded form is
               longer than ``bufflength`` every byte is still written (so
               ``write(addr, str, 3, "olá")`` writes all 4 UTF-8 bytes instead
               of raising — you may count characters, not bytes). If it is
               shorter, the field is NUL-padded up to ``bufflength`` (handy to
-              clear a fixed-size buffer). ``None`` writes exactly the encoded
-              length. ``str`` is encoded as UTF-8; no NUL terminator is
-              appended.
-        :param value: value to be written.
+              clear a fixed-size buffer). ``None`` (the default) writes exactly
+              the encoded length. ``str`` is encoded as UTF-8; no NUL terminator
+              is appended.
+        :param value: value to be written. Required — since ``bufflength`` is
+            now optional, pass it by keyword when omitting ``bufflength``::
+
+                write_process_memory(address, str, value="hi")
+                write_process_memory(address, int, value=99)
+
+            Positional calls keep working unchanged
+            (``write_process_memory(address, int, 4, 99)``).
         :return: the original ``value`` passed in.
         """
         raise NotImplementedError()

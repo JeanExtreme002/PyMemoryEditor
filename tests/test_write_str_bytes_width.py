@@ -21,7 +21,7 @@ if sys.platform not in ("win32", "darwin") and not sys.platform.startswith("linu
 
 
 from PyMemoryEditor import OpenProcess  # noqa: E402
-from PyMemoryEditor.util import prepare_write  # noqa: E402
+from PyMemoryEditor.util import UNSET, prepare_write  # noqa: E402
 
 
 @pytest.fixture
@@ -76,6 +76,12 @@ def test_prepare_write_rejects_non_str_bytes_value():
         prepare_write(bytes, 4, 1234)
 
 
+def test_prepare_write_rejects_missing_value():
+    """The UNSET sentinel (caller never passed ``value``) raises a clear error."""
+    with pytest.raises(TypeError, match="missing required argument: 'value'"):
+        prepare_write(str, None, UNSET)
+
+
 # --- end-to-end writes against our own memory --------------------------- #
 
 
@@ -106,3 +112,41 @@ def test_write_bytes_round_trip_grows(process):
     buffer = (ctypes.c_uint8 * 4)()
     process.write_process_memory(ctypes.addressof(buffer), bytes, 2, b"\xde\xad\xbe\xef")
     assert process.read_bytes(ctypes.addressof(buffer), 4) == b"\xde\xad\xbe\xef"
+
+
+# --- bufflength is now optional: value may be passed by keyword ---------- #
+
+
+def test_write_str_value_by_keyword_without_bufflength(process):
+    """write_process_memory(addr, str, value="hi") — no bufflength needed."""
+    buffer = ctypes.create_string_buffer(8)
+    result = process.write_process_memory(ctypes.addressof(buffer), str, value="hi")
+    assert result == "hi"
+    assert process.read_string(ctypes.addressof(buffer), 8) == "hi"
+
+
+def test_write_int_value_by_keyword_without_bufflength(process):
+    """Numeric writes default to their natural width (int→4) when omitted."""
+    buffer = (ctypes.c_uint8 * 4)()
+    assert process.write_process_memory(ctypes.addressof(buffer), int, value=99) == 99
+    assert process.read_process_memory(ctypes.addressof(buffer), int, 4) == 99
+
+
+def test_write_bytes_value_by_keyword_without_bufflength(process):
+    buffer = (ctypes.c_uint8 * 2)()
+    process.write_process_memory(ctypes.addressof(buffer), bytes, value=b"\x01\x02")
+    assert process.read_bytes(ctypes.addressof(buffer), 2) == b"\x01\x02"
+
+
+def test_write_positional_call_still_works(process):
+    """The original 4-positional-arg form is unchanged."""
+    buffer = (ctypes.c_uint8 * 4)()
+    assert process.write_process_memory(ctypes.addressof(buffer), int, 4, 1234) == 1234
+    assert process.read_process_memory(ctypes.addressof(buffer), int, 4) == 1234
+
+
+def test_write_missing_value_raises(process):
+    """Omitting value entirely is still an error, with a clear message."""
+    buffer = (ctypes.c_uint8 * 4)()
+    with pytest.raises(TypeError, match="missing required argument: 'value'"):
+        process.write_process_memory(ctypes.addressof(buffer), int)

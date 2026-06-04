@@ -6,7 +6,12 @@ from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
-from ..util import prepare_write, resolve_bufflength
+from ..util import (
+    UNSET,
+    prepare_write,
+    resolve_bufflength,
+    resolve_bufflength_for_value,
+)
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
@@ -110,13 +115,15 @@ class LinuxProcess(AbstractProcess):
     def search_by_addresses(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        addresses: Sequence[int],
+        bufflength: Optional[int] = None,
+        addresses: Sequence[int] = UNSET,
         *,
         raise_error: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
+        if addresses is UNSET:
+            raise TypeError("addresses is required.")
         return search_values_by_addresses(
             self.pid,
             pytype,
@@ -129,8 +136,8 @@ class LinuxProcess(AbstractProcess):
     def search_by_value(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
         scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
         progress_information: bool = False,
@@ -147,7 +154,7 @@ class LinuxProcess(AbstractProcess):
         return search_addresses_by_value(
             self.pid,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            resolve_bufflength_for_value(pytype, bufflength, value),
             value,
             scan_type,
             progress_information,
@@ -175,9 +182,9 @@ class LinuxProcess(AbstractProcess):
     def search_by_value_between(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        start: Union[bool, int, float, str, bytes],
-        end: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        start: Union[bool, int, float, str, bytes] = UNSET,
+        end: Union[bool, int, float, str, bytes] = UNSET,
         *,
         not_between: bool = False,
         progress_information: bool = False,
@@ -194,7 +201,7 @@ class LinuxProcess(AbstractProcess):
         return search_addresses_by_value(
             self.pid,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            resolve_bufflength_for_value(pytype, bufflength, start, end),
             (start, end),
             scan_type,
             progress_information,
@@ -206,8 +213,8 @@ class LinuxProcess(AbstractProcess):
         self,
         address: int,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
         w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)

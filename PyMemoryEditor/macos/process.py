@@ -9,7 +9,12 @@ from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
-from ..util import prepare_write, resolve_bufflength
+from ..util import (
+    UNSET,
+    prepare_write,
+    resolve_bufflength,
+    resolve_bufflength_for_value,
+)
 
 from .functions import (
     allocate_memory,
@@ -177,13 +182,15 @@ class MacProcess(AbstractProcess):
     def search_by_addresses(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        addresses: Sequence[int],
+        bufflength: Optional[int] = None,
+        addresses: Sequence[int] = UNSET,
         *,
         raise_error: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
         self.__require_open()
+        if addresses is UNSET:
+            raise TypeError("addresses is required.")
         return search_values_by_addresses(
             self.__task,
             pytype,
@@ -196,8 +203,8 @@ class MacProcess(AbstractProcess):
     def search_by_value(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
         scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
         *,
         progress_information: bool = False,
@@ -214,7 +221,7 @@ class MacProcess(AbstractProcess):
         return search_addresses_by_value(
             self.__task,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            resolve_bufflength_for_value(pytype, bufflength, value),
             value,
             scan_type,
             progress_information,
@@ -242,9 +249,9 @@ class MacProcess(AbstractProcess):
     def search_by_value_between(
         self,
         pytype: Type[T],
-        bufflength: Optional[int],
-        start: Union[bool, int, float, str, bytes],
-        end: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        start: Union[bool, int, float, str, bytes] = UNSET,
+        end: Union[bool, int, float, str, bytes] = UNSET,
         *,
         not_between: bool = False,
         progress_information: bool = False,
@@ -261,7 +268,7 @@ class MacProcess(AbstractProcess):
         return search_addresses_by_value(
             self.__task,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            resolve_bufflength_for_value(pytype, bufflength, start, end),
             (start, end),
             scan_type,
             progress_information,
@@ -284,8 +291,8 @@ class MacProcess(AbstractProcess):
         self,
         address: int,
         pytype: Type[T],
-        bufflength: Optional[int],
-        value: Union[bool, int, float, str, bytes],
+        bufflength: Optional[int] = None,
+        value: Union[bool, int, float, str, bytes] = UNSET,
     ) -> Union[bool, int, float, str, bytes]:
         """
         Write a value to a memory address.
@@ -303,9 +310,11 @@ class MacProcess(AbstractProcess):
 
         :param address: target memory address.
         :param pytype: type of value to be written (bool, int, float, str, bytes).
-        :param bufflength: value size in bytes. ``None`` uses the default for
-            numeric types (int→4, float→8, bool→1); ``str``/``bytes`` require
-            an explicit size.
+        :param bufflength: value size in bytes. Optional — defaults to ``None``,
+            which uses the default width for numeric types (int→4, float→8,
+            bool→1) and writes the exact encoded length for ``str`` / ``bytes``.
+            Since it is optional, pass ``value`` by keyword when omitting it
+            (``write_process_memory(addr, str, value="hi")``).
         :param value: value to be written.
         """
         self.__require_open()
