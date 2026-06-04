@@ -37,8 +37,8 @@ flag needed for the common case.
 
 ## 3. Read and write a value
 
-The building blocks are `read_process_memory` and `write_process_memory`.
-For numeric types (`int`, `float`, `bool`) the size is inferred.
+The easiest way is the **typed shortcuts** — the size is baked into the method
+name, so there's nothing to remember:
 
 ```python
 from PyMemoryEditor import OpenProcess
@@ -46,19 +46,22 @@ from PyMemoryEditor import OpenProcess
 with OpenProcess(process_name="notepad.exe") as process:
     address = 0x0005000C
 
-    # Read 4 bytes as an int
-    value = process.read_process_memory(address, int)
+    value = process.read_int(address)       # read a 4-byte int
     print("Current:", value)
 
-    # Write a new value (pass None to use the default size)
-    process.write_process_memory(address, int, None, value + 7)
+    process.write_int(address, value + 7)   # write it back
 ```
 
-Strings and raw bytes need an explicit size:
+There's a `read_*` / `write_*` pair for every common type — `read_float`,
+`read_bool`, `read_uint`, `read_string`, and more:
 
 ```python
-name = process.read_process_memory(address, str, 32)
+name = process.read_string(address, 32)     # up to 32 bytes, decoded as text
 ```
+
+Prefer to spell out the type yourself? The generic `read_process_memory` /
+`write_process_memory` cover every case too — see
+[Reading and writing memory](guide/read-write.md).
 
 ## 4. Run your first scan
 
@@ -100,7 +103,7 @@ with OpenProcess(process_name="game.exe") as process:
 
     # 4. Overwrite the survivors back to a high value.
     for address in survivors:
-        process.write_process_memory(address, int, 4, 9999)
+        process.write_int(address, 9999)
 ```
 
 For big targets, see [the refine-scan workflow](guide/searching.md#the-refine-scan-workflow)

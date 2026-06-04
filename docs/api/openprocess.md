@@ -110,8 +110,76 @@ with OpenProcess(
    :param int address: target memory address.
    :param Type pytype: one of the five supported types.
    :param int bufflength: value size in bytes (``None`` for numeric defaults).
+      For ``str`` / ``bytes`` it is a *minimum* width — the whole value is
+      always written, and a larger size zero-pads the field.
    :param value: the value to write.
    :returns: the written value.
+```
+
+### Typed shortcuts
+
+Convenience `read_*` / `write_*` pairs with the size and signedness baked into
+the name — see :doc:`../guide/read-write` for examples. Widths are fixed and
+identical on every platform.
+
+```{eval-rst}
+.. py:method:: read_char(address)
+   :no-index:
+
+   Read / write a signed 8-bit integer (1 byte). Pair: ``write_char(address, value)``.
+
+.. py:method:: read_short(address)
+   :no-index:
+
+   Signed 16-bit integer (2 bytes). Pair: ``write_short``.
+
+.. py:method:: read_int(address)
+   :no-index:
+
+   Signed 32-bit integer (4 bytes). Pair: ``write_int``.
+
+.. py:method:: read_long(address)
+   :no-index:
+
+   Signed 32-bit integer (4 bytes, Win32 ``LONG``). Pair: ``write_long``.
+
+.. py:method:: read_longlong(address)
+   :no-index:
+
+   Signed 64-bit integer (8 bytes). Pair: ``write_longlong``.
+
+.. py:method:: read_uchar(address)
+   :no-index:
+
+   Unsigned variants of the above: ``read_uchar`` / ``read_ushort`` /
+   ``read_uint`` / ``read_ulong`` / ``read_ulonglong`` (1 / 2 / 4 / 4 / 8 bytes),
+   each with a matching ``write_*``.
+
+.. py:method:: read_float(address)
+   :no-index:
+
+   32-bit float (4 bytes). Pair: ``write_float``.
+
+.. py:method:: read_double(address)
+   :no-index:
+
+   64-bit double (8 bytes). Pair: ``write_double``.
+
+.. py:method:: read_bool(address)
+   :no-index:
+
+   Boolean (1 byte). Pair: ``write_bool``.
+
+.. py:method:: read_string(address, byte_count)
+   :no-index:
+
+   Read up to ``byte_count`` bytes, decode UTF-8, return the text up to the
+   first NUL. Pair: ``write_string(address, text, *, null_terminator=False)``.
+
+.. py:method:: read_bytes(address, length)
+   :no-index:
+
+   Read ``length`` raw bytes. Pair: ``write_bytes(address, data)``.
 ```
 
 ### Searching

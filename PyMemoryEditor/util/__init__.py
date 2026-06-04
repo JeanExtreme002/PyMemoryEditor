@@ -4,6 +4,7 @@ from .convert import (
     _validate_pytype,
     convert_from_byte_array,
     get_c_type_of,
+    prepare_write,
     resolve_bufflength,
     value_to_bytes,
     values_to_bytes,

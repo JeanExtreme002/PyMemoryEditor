@@ -49,6 +49,49 @@ def resolve_bufflength(pytype: Type, bufflength: Optional[int]) -> int:
     )
 
 
+def prepare_write(
+    pytype: Type, bufflength: Optional[int], value
+) -> Tuple[Type, int, Any]:
+    """
+    Normalize a write request into the ``(pytype, length, value)`` triple a
+    backend ``WriteProcessMemory`` can hand straight to the OS.
+
+    * **Numeric / bool** — returned unchanged, with ``bufflength`` resolved to
+      its default (see :func:`resolve_bufflength`). The backend encodes the
+      value via :func:`get_c_type_of` exactly as before.
+
+    * **str / bytes** — the value is encoded to raw bytes (UTF-8 for ``str``)
+      and routed through the ``bytes`` path. Here ``bufflength`` is a
+      *minimum* field width, not a hard cap:
+
+      - the **whole** value is always written, even when its encoded form is
+        longer than ``bufflength`` — so ``write(addr, str, 3, "olá")`` writes
+        all 4 UTF-8 bytes instead of raising ``ValueError`` because the caller
+        counted characters, not bytes;
+      - when the encoded form is **shorter** than ``bufflength`` the buffer is
+        NUL-padded up to it, which lets you clear a fixed-size field
+        (``write(addr, str, 16, "AB")`` writes ``b"AB"`` + 14 zero bytes);
+      - ``bufflength=None`` writes exactly the encoded length.
+
+    The caller is expected to return its *original* ``value`` to the user, so
+    this routing through ``bytes`` stays invisible at the public API.
+    """
+    _validate_pytype(pytype)
+
+    if pytype is str or pytype is bytes:
+        raw = value.encode("utf-8") if isinstance(value, str) else value
+        if not isinstance(raw, (bytes, bytearray)):
+            raise TypeError(
+                "value must be str or bytes when pytype is str/bytes, got %s."
+                % type(value).__name__
+            )
+        raw = bytes(raw)
+        width = len(raw) if bufflength is None else max(bufflength, len(raw))
+        return bytes, width, raw.ljust(width, b"\x00")
+
+    return pytype, resolve_bufflength(pytype, bufflength), value
+
+
 def convert_from_byte_array(
     byte_array: ctypes.Array, pytype: Type[T], length: int
 ) -> T:

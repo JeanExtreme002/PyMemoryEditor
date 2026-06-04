@@ -9,7 +9,7 @@ from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
-from ..util import resolve_bufflength
+from ..util import prepare_write, resolve_bufflength
 
 from .functions import (
     allocate_memory,
@@ -309,9 +309,9 @@ class MacProcess(AbstractProcess):
         :param value: value to be written.
         """
         self.__require_open()
-        return write_process_memory(
-            self.__task, address, pytype, resolve_bufflength(pytype, bufflength), value
-        )
+        w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
+        write_process_memory(self.__task, address, w_pytype, w_length, w_value)
+        return value
 
     def allocate_memory(self, size: int, *, permission=None) -> int:
         self.__require_open()
