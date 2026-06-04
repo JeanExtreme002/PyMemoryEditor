@@ -56,7 +56,9 @@ class RemotePointer:
         (defaults: int→4, float→8, bool→1); ``str`` and ``bytes`` require an
         explicit size.
     :param ptr_size: pointer width used when walking ``offsets`` — 8 for 64-bit
-        targets (default), 4 for 32-bit. Ignored for a direct handle.
+        targets, 4 for 32-bit. Leave ``None`` (the default) to use the target
+        process's :attr:`~PyMemoryEditor.process.abstract.AbstractProcess.pointer_size`,
+        detected automatically. Ignored for a direct handle.
 
     Example
     -------
@@ -78,7 +80,7 @@ class RemotePointer:
         *,
         pytype: Type = int,
         bufflength: Optional[int] = None,
-        ptr_size: int = 8,
+        ptr_size: Optional[int] = None,
     ):
         self._process = process
         self._base_address = base_address

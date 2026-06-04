@@ -275,6 +275,59 @@ def get_modules(pid: int) -> Generator[ModuleInfo, None, None]:
         )
 
 
+def _read_elf_class(path: str) -> Optional[int]:
+    """
+    Read the ``EI_CLASS`` byte from an ELF file's identification header.
+
+    Returns 1 for ELFCLASS32, 2 for ELFCLASS64, or ``None`` if ``path`` can't
+    be opened or isn't an ELF file (missing ``\\x7fELF`` magic).
+    """
+    try:
+        with open(path, "rb") as elf:
+            ident = elf.read(5)
+    except OSError:
+        return None
+
+    if len(ident) < 5 or ident[:4] != b"\x7fELF":
+        return None
+
+    return ident[4]  # e_ident[EI_CLASS]: 1 = ELFCLASS32, 2 = ELFCLASS64
+
+
+def is_process_64bit(pid: int) -> bool:
+    """
+    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+
+    Reads the ``EI_CLASS`` byte of the process's ELF executable. The primary
+    source is ``/proc/<pid>/exe``; if that symlink can't be read (a different
+    user without ``CAP_SYS_PTRACE``), it falls back to the first file-backed,
+    executable mapping in ``/proc/<pid>/maps`` — the main image or a shared
+    library, which share the process's bitness. As a last resort it assumes the
+    host's word size.
+    """
+    ei_class = _read_elf_class("/proc/{}/exe".format(pid))
+
+    if ei_class is None:
+        # Fallback: probe a file-backed executable mapping's on-disk ELF header.
+        for region in get_memory_regions(pid):
+            if not region.is_executable:
+                continue
+            path = region.path
+            if not path or path.startswith("["):  # skip [heap], [stack], anon
+                continue
+            ei_class = _read_elf_class(path)
+            if ei_class is not None:
+                break
+
+    if ei_class == 2:
+        return True
+    if ei_class == 1:
+        return False
+
+    # Couldn't determine it — assume the host's word size (the usual case).
+    return ctypes.sizeof(ctypes.c_void_p) == 8
+
+
 def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int) -> T:
     """
     Return a value from a memory address.

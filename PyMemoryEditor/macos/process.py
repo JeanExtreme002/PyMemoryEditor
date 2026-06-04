@@ -19,6 +19,7 @@ from .functions import (
     get_modules,
     get_task_for_pid,
     get_threads,
+    is_task_64bit,
     read_process_memory,
     release_task,
     search_addresses_by_pattern,
@@ -124,6 +125,10 @@ class MacProcess(AbstractProcess):
             # __del__ must not raise; the port may already be gone if the
             # interpreter is shutting down.
             pass
+
+    def _detect_is_64bit(self) -> bool:
+        self.__require_open()
+        return is_task_64bit(self.__task)
 
     def get_memory_regions(self) -> Generator[dict, None, None]:
         self.__require_open()

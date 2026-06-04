@@ -14,6 +14,7 @@ from .functions import (
     get_memory_regions,
     get_modules,
     get_threads,
+    is_process_64bit,
     read_process_memory,
     search_addresses_by_pattern,
     search_addresses_by_value,
@@ -78,6 +79,10 @@ class LinuxProcess(AbstractProcess):
     def close(self) -> bool:
         self.__closed = True
         return True
+
+    def _detect_is_64bit(self) -> bool:
+        self.__require_open()
+        return is_process_64bit(self.pid)
 
     def get_memory_regions(self) -> Generator[dict, None, None]:
         self.__require_open()
