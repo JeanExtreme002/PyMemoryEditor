@@ -71,6 +71,10 @@ class AbstractProcess(ABC):
                 "You must pass an argument to one of these parameters (process_name, pid)."
             )
 
+        # Cache for the target's bitness — resolved lazily on first access of
+        # `is_64bit` / `pointer_size` (a syscall per backend) and reused after.
+        self._is_64bit_cache: Optional[bool] = None
+
     def __enter__(self):
         return self
 
@@ -80,6 +84,52 @@ class AbstractProcess(ABC):
     @property
     def pid(self) -> int:
         return self._process_info.pid
+
+    @abstractmethod
+    def _detect_is_64bit(self) -> bool:
+        """
+        Detect whether the target process is 64-bit. Backend-specific:
+
+        * **Windows** — ``IsWow64Process`` on a 64-bit OS (a WOW64 process is
+          32-bit), gated by the native OS architecture.
+        * **Linux** — the ``EI_CLASS`` byte of the executable's ELF header
+          (read from ``/proc/<pid>/exe`` or a file-backed image mapping).
+        * **macOS** — the Mach-O header magic of a loaded image
+          (``MH_MAGIC_64`` vs ``MH_MAGIC``).
+
+        Called once by :attr:`is_64bit`, which caches the result. Implementations
+        may assume the process is still open.
+        """
+        raise NotImplementedError()
+
+    @property
+    def is_64bit(self) -> bool:
+        """
+        ``True`` if the target process is 64-bit, ``False`` if it is 32-bit.
+
+        Detected once on first access (a single syscall per backend — see
+        :meth:`_detect_is_64bit`) and cached for the lifetime of this object.
+        A process never changes bitness, so the cached value stays valid.
+
+        This is what powers the automatic ``ptr_size`` default of
+        :meth:`resolve_pointer_chain`, :meth:`scan_pointer_paths`,
+        :meth:`get_pointer` and :class:`~PyMemoryEditor.RemotePointer`: leave
+        ``ptr_size`` as ``None`` and the right pointer width (4 or 8) is used.
+        """
+        if self._is_64bit_cache is None:
+            self._is_64bit_cache = bool(self._detect_is_64bit())
+        return self._is_64bit_cache
+
+    @property
+    def pointer_size(self) -> int:
+        """
+        Pointer width of the target process in bytes — ``8`` for a 64-bit
+        target, ``4`` for a 32-bit one. Derived from :attr:`is_64bit`.
+
+        Use it as the explicit ``ptr_size`` for the pointer APIs, or simply
+        leave ``ptr_size=None`` (the default) to let them read this value.
+        """
+        return 8 if self.is_64bit else 4
 
     @abstractmethod
     def close(self) -> bool:
@@ -367,7 +417,7 @@ class AbstractProcess(ABC):
         *,
         pytype: Type = int,
         bufflength: Optional[int] = None,
-        ptr_size: int = 8,
+        ptr_size: Optional[int] = None,
     ) -> "RemotePointer":
         """
         Build a :class:`~PyMemoryEditor.RemotePointer` bound to this process —
@@ -376,7 +426,8 @@ class AbstractProcess(ABC):
         Convenience wrapper around the ``RemotePointer(self, ...)`` constructor;
         see that class for the meaning of every parameter (notably ``offsets``,
         whose ``None`` vs ``[]`` distinction selects a direct handle vs a
-        single-dereference chain).
+        single-dereference chain). Leaving ``ptr_size=None`` lets the pointer
+        adopt the target's :attr:`pointer_size` automatically.
 
         Example
         -------
@@ -401,7 +452,7 @@ class AbstractProcess(ABC):
         base_address: int,
         offsets: Sequence[int],
         *,
-        ptr_size: int = 8,
+        ptr_size: Optional[int] = None,
     ) -> int:
         """
         Walk a multi-level pointer chain — the kind of recipe Cheat Engine
@@ -418,8 +469,9 @@ class AbstractProcess(ABC):
             ``module_base + static_offset``.
         :param offsets: sequence of offsets to walk. Pass ``[]`` to dereference
             ``base_address`` once and return that pointer.
-        :param ptr_size: pointer width — 8 for 64-bit targets (default), 4 for
-            32-bit targets.
+        :param ptr_size: pointer width — 8 for 64-bit targets, 4 for 32-bit.
+            Leave ``None`` (the default) to use the target's
+            :attr:`pointer_size`, detected automatically.
 
         Example
         -------
@@ -432,6 +484,9 @@ class AbstractProcess(ABC):
             hp_addr = process.resolve_pointer_chain(0x14010F4F4, [0x0, 0x158])
             hp = process.read_process_memory(hp_addr, int, 4)
         """
+        if ptr_size is None:
+            ptr_size = self.pointer_size
+
         if ptr_size not in (4, 8):
             raise ValueError(
                 "ptr_size must be 4 (32-bit target) or 8 (64-bit target)."
@@ -491,7 +546,7 @@ class AbstractProcess(ABC):
         *,
         max_depth: int = 5,
         max_offset: int = 0x400,
-        ptr_size: int = 8,
+        ptr_size: Optional[int] = None,
         aligned: bool = True,
         writable_only: bool = True,
         static_ranges: Optional[Sequence[Tuple[int, int]]] = None,
@@ -521,8 +576,9 @@ class AbstractProcess(ABC):
         :param max_offset: largest positive offset a single hop may add (the
             struct-size window). Larger values catch fields deeper inside
             objects at the cost of many more candidate paths.
-        :param ptr_size: pointer width — 8 for 64-bit targets (default), 4 for
-            32-bit.
+        :param ptr_size: pointer width — 8 for 64-bit targets, 4 for 32-bit.
+            Leave ``None`` (the default) to use the target's
+            :attr:`pointer_size`, detected automatically.
         :param aligned: only consider pointers at natural alignment (default,
             much faster). Set ``False`` to also scan misaligned slots (slow).
         :param writable_only: build the pointer map from writable memory only
@@ -561,6 +617,9 @@ class AbstractProcess(ABC):
             build_pointer_map,
             find_pointer_paths,
         )
+
+        if ptr_size is None:
+            ptr_size = self.pointer_size
 
         if ptr_size not in (4, 8):
             raise ValueError(

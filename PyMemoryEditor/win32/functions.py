@@ -102,6 +102,13 @@ kernel32.VirtualQueryEx.restype = ctypes.c_size_t
 kernel32.GetSystemInfo.argtypes = (ctypes.POINTER(SYSTEM_INFO),)
 kernel32.GetSystemInfo.restype = None
 
+# void GetNativeSystemInfo(LPSYSTEM_INFO lpSystemInfo);
+# Unlike GetSystemInfo, this reports the *native* architecture even when the
+# caller is a 32-bit (WOW64) process — so it tells us the true OS bitness
+# regardless of how Python itself was built.
+kernel32.GetNativeSystemInfo.argtypes = (ctypes.POINTER(SYSTEM_INFO),)
+kernel32.GetNativeSystemInfo.restype = None
+
 # BOOL IsWow64Process(HANDLE hProcess, PBOOL Wow64Process);
 # True when the target is a 32-bit process running on 64-bit Windows.
 kernel32.IsWow64Process.argtypes = (
@@ -189,6 +196,19 @@ kernel32.GetSystemInfo(ctypes.byref(system_information))
 _HOST_IS_64BIT = ctypes.sizeof(ctypes.c_void_p) == 8
 
 
+# Native OS bitness, independent of how Python was built. GetNativeSystemInfo
+# reports the true architecture even from a 32-bit (WOW64) interpreter.
+_native_system_information = SYSTEM_INFO()
+kernel32.GetNativeSystemInfo(ctypes.byref(_native_system_information))
+
+# wProcessorArchitecture values that imply a 64-bit OS: AMD64 (9), ARM64 (12),
+# IA64 (6). Anything else (notably INTEL = 0) means a 32-bit OS.
+_PROCESSOR_ARCHITECTURE_64BIT = (6, 9, 12)
+_OS_IS_64BIT = (
+    _native_system_information.wProcessorArchitecture in _PROCESSOR_ARCHITECTURE_64BIT
+)
+
+
 def mbi_class_for_handle(process_handle: int):
     """
     Return the appropriate MEMORY_BASIC_INFORMATION layout for the target process.
@@ -210,6 +230,28 @@ def mbi_class_for_handle(process_handle: int):
     return (
         MEMORY_BASIC_INFORMATION_32 if is_wow64.value else MEMORY_BASIC_INFORMATION_64
     )
+
+
+def IsProcess64Bit(process_handle: int) -> bool:
+    """
+    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+
+    On a 32-bit OS every process is 32-bit. On a 64-bit OS a process is 32-bit
+    exactly when it runs under WOW64 (``IsWow64Process`` returns True); a
+    native (non-WOW64) process is 64-bit. The OS bitness is taken from
+    ``GetNativeSystemInfo`` so the answer is correct even from a 32-bit Python.
+    """
+    if not _OS_IS_64BIT:
+        return False
+
+    is_wow64 = ctypes.wintypes.BOOL(0)
+    ok = kernel32.IsWow64Process(process_handle, ctypes.byref(is_wow64))
+    if not ok:
+        # Couldn't query — fall back to the OS bitness (the most likely answer
+        # on a 64-bit host) rather than raise from a simple property access.
+        return True
+
+    return not bool(is_wow64.value)
 
 
 T = TypeVar("T")

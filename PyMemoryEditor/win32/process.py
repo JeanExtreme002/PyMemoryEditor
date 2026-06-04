@@ -21,6 +21,7 @@ from .functions import (
     GetModules,
     GetProcessHandle,
     GetThreads,
+    IsProcess64Bit,
     ReadProcessMemory,
     SearchAddressesByPattern,
     SearchAddressesByValue,
@@ -170,6 +171,10 @@ class WindowsProcess(AbstractProcess):
                 raise ctypes.WinError(last_error, "CloseHandle failed.")
             raise OSError("CloseHandle failed.")
         return True
+
+    def _detect_is_64bit(self) -> bool:
+        self.__require_open()
+        return IsProcess64Bit(self.__process_handle)
 
     def get_memory_regions(self) -> Generator[dict, None, None]:
         self.__require_open()

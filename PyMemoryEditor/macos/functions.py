@@ -569,6 +569,7 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
 
 # Mach-O constants for sizing an image from its load commands.
 _MH_MAGIC_64 = 0xFEEDFACF
+_MH_MAGIC_32 = 0xFEEDFACE  # 32-bit image header magic (host byte order)
 _LC_SEGMENT_64 = 0x19
 _MACH_HEADER_64_SIZE = 32  # sizeof(struct mach_header_64)
 
@@ -805,6 +806,31 @@ def get_modules(task: int) -> Generator[ModuleInfo, None, None]:
             size=_macho_image_size(task, load_address),
             raw=load_address,
         )
+
+
+def is_task_64bit(task: int) -> bool:
+    """
+    Return ``True`` if the target task is 64-bit, ``False`` if 32-bit.
+
+    Reads the Mach-O header magic of a loaded image (every image in a process
+    shares its bitness): ``MH_MAGIC_64`` means 64-bit, ``MH_MAGIC`` means
+    32-bit. macOS has shipped 64-bit only since Catalina (10.15), so if no
+    image header can be read this defaults to ``True``.
+    """
+    for module in get_modules(task):
+        try:
+            magic = int.from_bytes(
+                read_process_memory(task, module.base_address, bytes, 4), "little"
+            )
+        except MachReadError:
+            continue
+        if magic == _MH_MAGIC_64:
+            return True
+        if magic == _MH_MAGIC_32:
+            return False
+
+    # No readable image header — macOS is 64-bit only on every supported release.
+    return True
 
 
 def search_addresses_by_pattern(
