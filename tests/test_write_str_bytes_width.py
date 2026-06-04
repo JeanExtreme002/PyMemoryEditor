@@ -4,10 +4,10 @@
 Tests for the ``str`` / ``bytes`` write-width semantics of
 ``write_process_memory`` (see ``util.convert.prepare_write``).
 
-``bufflength`` is a *minimum* field width for these types, not a hard cap:
-the whole value is always written (counting characters, not bytes, must not
-raise), shorter values NUL-pad up to ``bufflength``, and ``None`` writes
-exactly the encoded length.
+``bufflength`` is a *maximum* width for these types that truncates the value
+and never pads: for ``str`` the cap counts characters (applied before UTF-8
+encoding, so multibyte characters are never split), for ``bytes`` it counts
+bytes, shorter values are written as-is, and ``None`` writes the whole value.
 """
 
 import ctypes
@@ -36,19 +36,32 @@ def process():
 # --- prepare_write unit tests (platform-independent) -------------------- #
 
 
-def test_prepare_write_multibyte_grows_to_fit():
-    """"olá" is 3 characters but 4 UTF-8 bytes — width must grow, not raise."""
+def test_prepare_write_caps_by_characters_not_bytes():
+    """The cap counts characters: "óólá" capped at 2 keeps "óó" (4 UTF-8 bytes)."""
+    pytype, length, raw = prepare_write(str, 2, "óólá")
+    assert pytype is bytes
+    assert raw == "óó".encode("utf-8")
+    assert length == 4
+
+
+def test_prepare_write_multibyte_within_cap_kept_whole():
+    """"olá" is 3 characters (4 bytes); cap of 3 keeps it whole, never splits."""
     pytype, length, raw = prepare_write(str, 3, "olá")
     assert pytype is bytes
-    assert length == 4
     assert raw == "olá".encode("utf-8")
+    assert length == 4
 
 
-def test_prepare_write_pads_up_to_bufflength():
+def test_prepare_write_truncates_to_char_cap():
+    assert prepare_write(str, 3, "ola") == (bytes, 3, b"ola")
+    assert prepare_write(str, 2, "ola") == (bytes, 2, b"ol")
+
+
+def test_prepare_write_shorter_than_cap_is_not_padded():
     pytype, length, raw = prepare_write(str, 16, "AB")
     assert pytype is bytes
-    assert length == 16
-    assert raw == b"AB" + b"\x00" * 14
+    assert length == 2
+    assert raw == b"AB"
 
 
 def test_prepare_write_none_uses_encoded_length():
@@ -58,9 +71,9 @@ def test_prepare_write_none_uses_encoded_length():
     assert raw == "héllo".encode("utf-8")
 
 
-def test_prepare_write_bytes_grows_and_pads():
-    assert prepare_write(bytes, 2, b"\x01\x02\x03\x04") == (bytes, 4, b"\x01\x02\x03\x04")
-    assert prepare_write(bytes, 4, b"\x01\x02") == (bytes, 4, b"\x01\x02\x00\x00")
+def test_prepare_write_bytes_caps_by_bytes():
+    assert prepare_write(bytes, 2, b"\x01\x02\x03\x04") == (bytes, 2, b"\x01\x02")
+    assert prepare_write(bytes, 4, b"\x01\x02") == (bytes, 2, b"\x01\x02")
     assert prepare_write(bytes, None, b"\x01\x02") == (bytes, 2, b"\x01\x02")
 
 
@@ -88,9 +101,17 @@ def test_prepare_write_rejects_missing_value():
 def test_write_multibyte_string_does_not_raise(process):
     """The headline case: counting characters must not raise on multibyte."""
     buffer = ctypes.create_string_buffer(8)
-    # 3 characters, 4 bytes — would have raised ValueError before.
+    # 3 characters, 4 bytes — the cap counts characters, so it stays whole.
     assert process.write_process_memory(ctypes.addressof(buffer), str, 3, "olá") == "olá"
     assert process.read_string(ctypes.addressof(buffer), 8) == "olá"
+
+
+def test_write_caps_string_to_char_count(process):
+    """A string longer than the cap is truncated by character count."""
+    buffer = ctypes.create_string_buffer(8)
+    assert process.write_process_memory(ctypes.addressof(buffer), str, 2, "óólá") == "óólá"
+    # Only the first 2 characters ("óó", 4 bytes) reach memory.
+    assert process.read_string(ctypes.addressof(buffer), 4) == "óó"
 
 
 def test_write_returns_original_value_not_bytes(process):
@@ -101,17 +122,19 @@ def test_write_returns_original_value_not_bytes(process):
     assert isinstance(result, str)
 
 
-def test_write_pads_fixed_field(process):
-    """Writing a short string into a wider field clears the trailing bytes."""
+def test_write_shorter_than_cap_does_not_pad(process):
+    """A string shorter than the cap writes only its own bytes — no padding."""
     buffer = (ctypes.c_uint8 * 8)(*([0xFF] * 8))
     process.write_process_memory(ctypes.addressof(buffer), str, 8, "AB")
-    assert process.read_bytes(ctypes.addressof(buffer), 8) == b"AB" + b"\x00" * 6
+    # Only the 2 written bytes change; the rest keep their previous value.
+    assert process.read_bytes(ctypes.addressof(buffer), 8) == b"AB" + b"\xff" * 6
 
 
-def test_write_bytes_round_trip_grows(process):
+def test_write_bytes_capped_to_bufflength(process):
     buffer = (ctypes.c_uint8 * 4)()
     process.write_process_memory(ctypes.addressof(buffer), bytes, 2, b"\xde\xad\xbe\xef")
-    assert process.read_bytes(ctypes.addressof(buffer), 4) == b"\xde\xad\xbe\xef"
+    # Only the first 2 bytes are written; the rest stay zero.
+    assert process.read_bytes(ctypes.addressof(buffer), 4) == b"\xde\xad\x00\x00"
 
 
 # --- bufflength is now optional: value may be passed by keyword ---------- #

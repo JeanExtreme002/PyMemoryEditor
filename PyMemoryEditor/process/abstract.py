@@ -376,15 +376,15 @@ class AbstractProcess(ABC):
 
             * For numeric types (int, float, bool) it is the exact write width;
               leave it as ``None`` to use the default — int→4, float→8, bool→1.
-            * For ``str`` / ``bytes`` it is a *minimum* field width, not a hard
-              cap. The whole value is always written: if its encoded form is
-              longer than ``bufflength`` every byte is still written (so
-              ``write(addr, str, 3, "olá")`` writes all 4 UTF-8 bytes instead
-              of raising — you may count characters, not bytes). If it is
-              shorter, the field is NUL-padded up to ``bufflength`` (handy to
-              clear a fixed-size buffer). ``None`` (the default) writes exactly
-              the encoded length. ``str`` is encoded as UTF-8; no NUL terminator
-              is appended.
+            * For ``str`` / ``bytes`` it is a *maximum* width that truncates the
+              value; it never pads. For a ``str`` the cap counts **characters**,
+              applied before UTF-8 encoding, so multibyte characters are never
+              split: ``write(addr, str, 2, "óólá")`` keeps ``"óó"`` and writes
+              its 4 bytes, while ``write(addr, str, 2, "ola")`` writes ``b"ol"``.
+              For ``bytes`` the cap counts **bytes**. A value shorter than the
+              cap is written as-is (no NUL padding). ``None`` (the default)
+              writes the whole value. ``str`` is encoded as UTF-8; no NUL
+              terminator is appended.
         :param value: value to be written. Required — since ``bufflength`` is
             now optional, pass it by keyword when omitting ``bufflength``::
 
@@ -574,11 +574,11 @@ class AbstractProcess(ABC):
         — useful when overwriting a longer string in place so :meth:`read_string`
         stops where you intend rather than reading the stale tail.
 
-        Multi-byte characters are handled correctly — the field grows to the
-        encoded byte length, so you never have to count bytes yourself.
-        Returns ``text``. For a fixed-width / NUL-padded field, call
-        :meth:`write_process_memory` with ``pytype=str`` and an explicit
-        ``bufflength`` instead.
+        Multi-byte characters are handled correctly — the whole string is
+        encoded and written, so you never have to count bytes yourself.
+        Returns ``text``. To cap the write to a maximum number of characters,
+        call :meth:`write_process_memory` with ``pytype=str`` and an explicit
+        ``bufflength`` instead (it truncates, it does not pad).
         """
         payload = text + "\x00" if null_terminator else text
         self.write_process_memory(address, str, None, payload)
