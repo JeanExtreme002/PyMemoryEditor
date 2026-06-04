@@ -119,6 +119,9 @@ class ScannerPanel(QWidget):
         self._value_edit = QLineEdit()
         self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
         self._value_edit.returnPressed.connect(self._on_value_submitted)
+        # For String (UTF-8) the length is dictated by the typed text, so keep
+        # the (disabled) length field in sync as the user types.
+        self._value_edit.textChanged.connect(self._on_value_text_changed)
         value_form.addRow("Value:", self._value_edit)
 
         self._second_value_edit = QLineEdit()
@@ -249,13 +252,20 @@ class ScannerPanel(QWidget):
             return
 
         is_pattern = spec.is_pattern
+        is_string = spec.pytype is str and not is_pattern
 
         # AOB pattern mode reuses the "Value" line for the pattern string and
         # hides / forces the rest of the value-shape controls (length,
         # second value, scan-type combo) because none of them apply to
         # pattern matching.
+        #
+        # String (UTF-8) also locks the length field: the buffer width is the
+        # UTF-8 byte length of the typed text (multi-byte aware), so letting the
+        # user override it would only allow truncating or over-allocating the
+        # value they entered. The field stays visible as a read-only readout
+        # kept in sync by _sync_string_length / _on_value_text_changed.
         self._length_spin.setEnabled(
-            spec.accepts_length_override and not is_pattern
+            spec.accepts_length_override and not is_pattern and not is_string
         )
 
         if is_pattern:
@@ -267,16 +277,21 @@ class ScannerPanel(QWidget):
 
         if is_pattern:
             # No meaningful length for an AOB pattern; the scanner derives it.
+            self._length_spin.setMaximum(1024)
             self._length_spin.setValue(1)
             self._length_spin.setSuffix("  bytes")
-        elif spec.accepts_length_override:
-            if spec.pytype is bytes:
-                self._length_spin.setValue(max(4, self._length_spin.value()))
-                self._length_spin.setSuffix("  bytes")
-            else:
-                self._length_spin.setValue(16)
-                self._length_spin.setSuffix("  chars")
+        elif is_string:
+            # Length tracks the typed text — raise the ceiling so long strings
+            # aren't visually clamped, then mirror the current text's byte size.
+            self._length_spin.setMaximum(2_147_483_647)
+            self._length_spin.setSuffix("  bytes")
+            self._sync_string_length()
+        elif spec.accepts_length_override:  # Byte Array (Hex)
+            self._length_spin.setMaximum(1024)
+            self._length_spin.setValue(max(4, self._length_spin.value()))
+            self._length_spin.setSuffix("  bytes")
         else:
+            self._length_spin.setMaximum(1024)
             self._length_spin.setValue(spec.length)
             self._length_spin.setSuffix("  bytes")
 
@@ -301,6 +316,23 @@ class ScannerPanel(QWidget):
         # The pattern/non-pattern flag also drives Next-Scan availability, so
         # let _refresh_buttons re-evaluate now that the type has flipped.
         self._refresh_buttons()
+
+    def _on_value_text_changed(self, text: str) -> None:
+        # Only String (UTF-8) derives its length from the value text; every
+        # other type owns its length field independently.
+        spec = find_spec(self._type_combo.currentText())
+        if spec is not None and spec.pytype is str and not spec.is_pattern:
+            self._sync_string_length(text)
+
+    def _sync_string_length(self, text: Optional[str] = None) -> None:
+        """Mirror the UTF-8 byte length of the value text into the length field.
+
+        Matches ``parse_value``'s str rule (byte length, not character count)
+        so the read-only readout shows exactly the buffer width the scan uses.
+        """
+        if text is None:
+            text = self._value_edit.text()
+        self._length_spin.setValue(max(1, len(text.encode("utf-8"))))
 
     def _on_scan_type_changed(self, index: int) -> None:
         _, scan_type = SCAN_TYPE_CHOICES[index]
@@ -354,8 +386,13 @@ class ScannerPanel(QWidget):
                 writeable_only=self._writable_check.isChecked(),
             )
 
+        # String (UTF-8) ignores the (disabled) length field: pass None so
+        # parse_value derives the buffer width from the typed text's UTF-8
+        # byte length. Byte Array still honours the user-set override.
         length_override = (
-            self._length_spin.value() if spec.accepts_length_override else None
+            self._length_spin.value()
+            if spec.accepts_length_override and spec.pytype is not str
+            else None
         )
 
         # Increased/Decreased/Changed/Unchanged compare current vs previous and

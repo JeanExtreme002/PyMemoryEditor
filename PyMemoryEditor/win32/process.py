@@ -3,7 +3,7 @@
 import ctypes
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
-from ..util import resolve_bufflength
+from ..util import prepare_write, resolve_bufflength
 
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
@@ -313,13 +313,15 @@ class WindowsProcess(AbstractProcess):
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
         self.__require_write()
-        return WriteProcessMemory(
+        w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
+        WriteProcessMemory(
             self.__process_handle,
             address,
-            pytype,
-            resolve_bufflength(pytype, bufflength),
-            value,
+            w_pytype,
+            w_length,
+            w_value,
         )
+        return value
 
     def allocate_memory(self, size: int, *, permission=None) -> int:
         self.__require_open()

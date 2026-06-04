@@ -6,7 +6,7 @@ from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
-from ..util import resolve_bufflength
+from ..util import prepare_write, resolve_bufflength
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
@@ -210,9 +210,9 @@ class LinuxProcess(AbstractProcess):
         value: Union[bool, int, float, str, bytes],
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_open()
-        return write_process_memory(
-            self.pid, address, pytype, resolve_bufflength(pytype, bufflength), value
-        )
+        w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
+        write_process_memory(self.pid, address, w_pytype, w_length, w_value)
+        return value
 
     def allocate_memory(self, size: int, *, permission=None) -> int:
         self.__require_open()

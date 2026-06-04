@@ -356,12 +356,219 @@ class AbstractProcess(ABC):
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of value to be written into memory (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes. For numeric types (int, float,
-            bool) you may pass None to use the default — int→4, float→8, bool→1.
-            str and bytes require an explicit size.
+        :param bufflength: value size in bytes.
+
+            * For numeric types (int, float, bool) it is the exact write width;
+              pass ``None`` to use the default — int→4, float→8, bool→1.
+            * For ``str`` / ``bytes`` it is a *minimum* field width, not a hard
+              cap. The whole value is always written: if its encoded form is
+              longer than ``bufflength`` every byte is still written (so
+              ``write(addr, str, 3, "olá")`` writes all 4 UTF-8 bytes instead
+              of raising — you may count characters, not bytes). If it is
+              shorter, the field is NUL-padded up to ``bufflength`` (handy to
+              clear a fixed-size buffer). ``None`` writes exactly the encoded
+              length. ``str`` is encoded as UTF-8; no NUL terminator is
+              appended.
         :param value: value to be written.
+        :return: the original ``value`` passed in.
         """
         raise NotImplementedError()
+
+    # ------------------------------------------------------------------ #
+    # Typed convenience read/write helpers
+    # ------------------------------------------------------------------ #
+    #
+    # Thin, self-documenting wrappers over ``read_process_memory`` /
+    # ``write_process_memory`` with the type and byte width baked into the
+    # method name — ``read_int(addr)`` instead of
+    # ``read_process_memory(addr, int, 4)``. They add no new capability (the
+    # generic methods already cover every case) but spell out the exact C
+    # type the caller wants, so the IDE can offer them by name and beginners
+    # don't have to remember which width and signedness a type uses.
+    #
+    # Widths are FIXED and identical on every platform and target bitness —
+    # ``long``/``ulong`` are always 4 bytes here (matching Win32 ``LONG``),
+    # ``longlong``/``ulonglong`` always 8 — so the same call reads the same
+    # number of bytes regardless of OS. For a platform-/target-dependent
+    # pointer width use :attr:`pointer_size` with the generic methods.
+    #
+    # ``int`` decodes as *signed* (see ``util.convert.get_c_type_of``), so the
+    # signed family delegates straight to it. The unsigned family reads/writes
+    # raw bytes and reinterprets them with ``signed=False`` in the target's
+    # native byte order (``sys.byteorder`` — the convention the rest of the
+    # library follows, e.g. ``resolve_pointer_chain``).
+
+    def _read_unsigned(self, address: int, size: int) -> int:
+        raw = self.read_process_memory(address, bytes, size)
+        return int.from_bytes(raw, sys.byteorder, signed=False)
+
+    def _write_unsigned(self, address: int, size: int, value: int) -> int:
+        raw = int(value).to_bytes(size, sys.byteorder, signed=False)
+        self.write_process_memory(address, bytes, size, raw)
+        return value
+
+    # --- signed integers ---------------------------------------------- #
+
+    def read_char(self, address: int) -> int:
+        """Read a signed 8-bit integer (1 byte). See :meth:`read_uchar` for unsigned."""
+        return self.read_process_memory(address, int, 1)
+
+    def read_short(self, address: int) -> int:
+        """Read a signed 16-bit integer (2 bytes)."""
+        return self.read_process_memory(address, int, 2)
+
+    def read_int(self, address: int) -> int:
+        """Read a signed 32-bit integer (4 bytes)."""
+        return self.read_process_memory(address, int, 4)
+
+    def read_long(self, address: int) -> int:
+        """Read a signed 32-bit integer (4 bytes, matching Win32 ``LONG``)."""
+        return self.read_process_memory(address, int, 4)
+
+    def read_longlong(self, address: int) -> int:
+        """Read a signed 64-bit integer (8 bytes)."""
+        return self.read_process_memory(address, int, 8)
+
+    def write_char(self, address: int, value: int) -> int:
+        """Write a signed 8-bit integer (1 byte). Returns ``value``."""
+        self.write_process_memory(address, int, 1, value)
+        return value
+
+    def write_short(self, address: int, value: int) -> int:
+        """Write a signed 16-bit integer (2 bytes). Returns ``value``."""
+        self.write_process_memory(address, int, 2, value)
+        return value
+
+    def write_int(self, address: int, value: int) -> int:
+        """Write a signed 32-bit integer (4 bytes). Returns ``value``."""
+        self.write_process_memory(address, int, 4, value)
+        return value
+
+    def write_long(self, address: int, value: int) -> int:
+        """Write a signed 32-bit integer (4 bytes, Win32 ``LONG``). Returns ``value``."""
+        self.write_process_memory(address, int, 4, value)
+        return value
+
+    def write_longlong(self, address: int, value: int) -> int:
+        """Write a signed 64-bit integer (8 bytes). Returns ``value``."""
+        self.write_process_memory(address, int, 8, value)
+        return value
+
+    # --- unsigned integers -------------------------------------------- #
+
+    def read_uchar(self, address: int) -> int:
+        """Read an unsigned 8-bit integer (1 byte, 0..255)."""
+        return self._read_unsigned(address, 1)
+
+    def read_ushort(self, address: int) -> int:
+        """Read an unsigned 16-bit integer (2 bytes)."""
+        return self._read_unsigned(address, 2)
+
+    def read_uint(self, address: int) -> int:
+        """Read an unsigned 32-bit integer (4 bytes)."""
+        return self._read_unsigned(address, 4)
+
+    def read_ulong(self, address: int) -> int:
+        """Read an unsigned 32-bit integer (4 bytes, matching Win32 ``ULONG``)."""
+        return self._read_unsigned(address, 4)
+
+    def read_ulonglong(self, address: int) -> int:
+        """Read an unsigned 64-bit integer (8 bytes)."""
+        return self._read_unsigned(address, 8)
+
+    def write_uchar(self, address: int, value: int) -> int:
+        """Write an unsigned 8-bit integer (1 byte). Returns ``value``."""
+        return self._write_unsigned(address, 1, value)
+
+    def write_ushort(self, address: int, value: int) -> int:
+        """Write an unsigned 16-bit integer (2 bytes). Returns ``value``."""
+        return self._write_unsigned(address, 2, value)
+
+    def write_uint(self, address: int, value: int) -> int:
+        """Write an unsigned 32-bit integer (4 bytes). Returns ``value``."""
+        return self._write_unsigned(address, 4, value)
+
+    def write_ulong(self, address: int, value: int) -> int:
+        """Write an unsigned 32-bit integer (4 bytes, Win32 ``ULONG``). Returns ``value``."""
+        return self._write_unsigned(address, 4, value)
+
+    def write_ulonglong(self, address: int, value: int) -> int:
+        """Write an unsigned 64-bit integer (8 bytes). Returns ``value``."""
+        return self._write_unsigned(address, 8, value)
+
+    # --- floating point ----------------------------------------------- #
+
+    def read_float(self, address: int) -> float:
+        """Read a 32-bit IEEE-754 float (4 bytes)."""
+        return self.read_process_memory(address, float, 4)
+
+    def read_double(self, address: int) -> float:
+        """Read a 64-bit IEEE-754 double (8 bytes)."""
+        return self.read_process_memory(address, float, 8)
+
+    def write_float(self, address: int, value: float) -> float:
+        """Write a 32-bit IEEE-754 float (4 bytes). Returns ``value``."""
+        self.write_process_memory(address, float, 4, value)
+        return value
+
+    def write_double(self, address: int, value: float) -> float:
+        """Write a 64-bit IEEE-754 double (8 bytes). Returns ``value``."""
+        self.write_process_memory(address, float, 8, value)
+        return value
+
+    # --- boolean ------------------------------------------------------- #
+
+    def read_bool(self, address: int) -> bool:
+        """Read a boolean (1 byte)."""
+        return self.read_process_memory(address, bool, 1)
+
+    def write_bool(self, address: int, value: bool) -> bool:
+        """Write a boolean (1 byte). Returns ``value``."""
+        self.write_process_memory(address, bool, 1, value)
+        return value
+
+    # --- strings & raw bytes ------------------------------------------ #
+
+    def read_string(self, address: int, byte_count: int) -> str:
+        """
+        Read up to ``byte_count`` bytes, decode them as UTF-8 and return the
+        text up to the first NUL terminator (C-string semantics).
+
+        Goes through the ``str`` read path, so invalid UTF-8 becomes ``U+FFFD``
+        (``errors="replace"``). ``byte_count`` is the maximum field width to
+        read; the NUL terminator and everything after it are dropped. To make a
+        shorter :meth:`write_string` read back cleanly here, write it with
+        ``null_terminator=True`` (or into an already-zeroed field).
+        """
+        return self.read_process_memory(address, str, byte_count).split("\x00", 1)[0]
+
+    def write_string(
+        self, address: int, text: str, *, null_terminator: bool = False
+    ) -> str:
+        """
+        Write ``text`` as a UTF-8 string, writing exactly its bytes and nothing
+        else. Pass ``null_terminator=True`` to also append a trailing ``\\x00``
+        — useful when overwriting a longer string in place so :meth:`read_string`
+        stops where you intend rather than reading the stale tail.
+
+        Multi-byte characters are handled correctly — the field grows to the
+        encoded byte length, so you never have to count bytes yourself.
+        Returns ``text``. For a fixed-width / NUL-padded field, call
+        :meth:`write_process_memory` with ``pytype=str`` and an explicit
+        ``bufflength`` instead.
+        """
+        payload = text + "\x00" if null_terminator else text
+        self.write_process_memory(address, str, None, payload)
+        return text
+
+    def read_bytes(self, address: int, length: int) -> bytes:
+        """Read ``length`` raw bytes verbatim (no decoding)."""
+        return self.read_process_memory(address, bytes, length)
+
+    def write_bytes(self, address: int, data: bytes) -> bytes:
+        """Write the raw byte string ``data`` verbatim. Returns ``data``."""
+        self.write_process_memory(address, bytes, len(data), data)
+        return data
 
     @abstractmethod
     def allocate_memory(self, size: int, *, permission=None) -> int:

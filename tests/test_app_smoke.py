@@ -96,6 +96,46 @@ def test_qapplication_starts_under_offscreen(qtbot):
 
 
 @pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_string_type_locks_length_to_value_text(qtbot):
+    """
+    Selecting "String (UTF-8)" disables the length field and drives it from the
+    UTF-8 byte length of the typed value, so the buffer width always matches the
+    text the user entered (multi-byte aware). Other types keep an editable length.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor.app.scanner_panel import ScannerPanel
+
+    QApplication.instance() or QApplication([])
+    panel = ScannerPanel()
+    qtbot.addWidget(panel)
+
+    # Byte Array exposes an editable length field (user-set buffer width).
+    panel._type_combo.setCurrentText("Byte Array (Hex)")
+    assert panel._length_spin.isEnabled()
+
+    # Switching to String locks the length field...
+    panel._type_combo.setCurrentText("String (UTF-8)")
+    assert not panel._length_spin.isEnabled()
+
+    # ...and the length tracks the UTF-8 byte size of the value text. "olá" is
+    # 3 characters but 4 bytes (the 'á' is two bytes).
+    panel._value_edit.setText("olá")
+    assert panel._length_spin.value() == 4
+
+    request = panel._build_request()
+    assert request is not None
+    assert request.value == "olá"
+    assert request.length == 4  # derived from the text, not the spin override
+
+    # Switching back to Byte Array re-enables the field.
+    panel._type_combo.setCurrentText("Byte Array (Hex)")
+    assert panel._length_spin.isEnabled()
+
+    panel.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
 def test_pointer_scan_dialog_constructs_and_prefills(qtbot):
     """
     The Pointer Scan dialog starts no background thread in ``__init__`` (the

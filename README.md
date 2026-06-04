@@ -69,8 +69,9 @@ with OpenProcess(process_name="game.exe") as process:
     for address in process.search_by_value(int, 4, 100):
         print(f"Found at 0x{address:X}")
 
-    # Write a new value at a known address.
-    process.write_process_memory(0x006A9EC0, int, 4, 9999)
+    # Read the current value, then write a new one back.
+    current = process.read_int(address)
+    process.write_int(address, current + 500)
 ```
 
 That's it — read, write or scan another process in three lines, the same way on every platform.
