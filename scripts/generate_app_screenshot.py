@@ -18,8 +18,22 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import (
+    QApplication,
+    QGraphicsDropShadowEffect,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
+)
 
 from PyMemoryEditor import OpenProcess
 from PyMemoryEditor.app._icon import app_icon
@@ -31,6 +45,111 @@ from PyMemoryEditor.app.value_types import find_spec
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = str(REPO_ROOT / "assets" / "screenshots" / "app.png")
+
+# macOS-style window chrome, tuned to match the app's dark "Kali Teal" theme.
+# The margin is kept just large enough to hold the (soft) drop shadow.
+TITLE_BAR_HEIGHT = 40
+CORNER_RADIUS = 11
+SHADOW_BLUR = 30
+SHADOW_OFFSET_Y = 10
+SHADOW_MARGIN = 26
+TITLE_BAR_TOP = "#11161C"
+TITLE_BAR_BOTTOM = "#0A0E12"
+TITLE_BAR_BORDER = "#1F2A33"
+TITLE_TEXT = "PyMemoryEditor"
+TITLE_TEXT_COLOR = "#6E7681"
+TRAFFIC_LIGHTS = ("#FF5F57", "#FEBC2E", "#28C840")
+
+
+def wrap_in_macos_frame(content: QPixmap) -> QPixmap:
+    """Composite *content* into a macOS-style window (traffic lights, title
+    bar, rounded corners, drop shadow) on a transparent canvas, with the
+    tightest margin that still fits the shadow."""
+    dpr = content.devicePixelRatio() or 1.0
+    content.setDevicePixelRatio(1.0)  # draw the grab 1:1 in physical pixels
+
+    def s(value):  # scale chrome metrics to match a possibly-retina grab
+        return int(round(value * dpr))
+
+    title_h = s(TITLE_BAR_HEIGHT)
+    radius = s(CORNER_RADIUS)
+    margin = s(SHADOW_MARGIN)
+
+    win_w = content.width()
+    win_h = content.height() + title_h
+
+    window_pix = QPixmap(win_w, win_h)
+    window_pix.fill(Qt.transparent)
+
+    p = QPainter(window_pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, win_w, win_h), radius, radius)
+    p.setClipPath(path)
+
+    # Title bar gradient + content below it.
+    gradient = QLinearGradient(0, 0, 0, title_h)
+    gradient.setColorAt(0.0, QColor(TITLE_BAR_TOP))
+    gradient.setColorAt(1.0, QColor(TITLE_BAR_BOTTOM))
+    p.fillRect(QRectF(0, 0, win_w, title_h), gradient)
+    p.drawPixmap(0, title_h, content)
+
+    # Separator under the title bar.
+    p.setPen(QPen(QColor(TITLE_BAR_BORDER), s(1)))
+    p.drawLine(0, title_h, win_w, title_h)
+
+    # Traffic lights.
+    p.setPen(Qt.NoPen)
+    dot_r = s(6.5)
+    spacing = s(20)
+    cx = s(22)
+    cy = title_h / 2
+    for color in TRAFFIC_LIGHTS:
+        p.setBrush(QColor(color))
+        p.drawEllipse(QPointF(cx, cy), dot_r, dot_r)
+        cx += spacing
+
+    # Centered title text.
+    font = QFont(p.font())
+    font.setPixelSize(s(13))
+    font.setBold(True)
+    p.setFont(font)
+    p.setPen(QColor(TITLE_TEXT_COLOR))
+    p.drawText(QRectF(0, 0, win_w, title_h), Qt.AlignCenter, TITLE_TEXT)
+
+    # Hairline border around the whole window.
+    p.setClipping(False)
+    p.setBrush(Qt.NoBrush)
+    p.setPen(QPen(QColor(TITLE_BAR_BORDER), s(1)))
+    inset = s(0.5)
+    p.drawRoundedRect(
+        QRectF(inset, inset, win_w - s(1), win_h - s(1)), radius, radius
+    )
+    p.end()
+
+    # Drop shadow on a transparent canvas via a graphics scene.
+    scene = QGraphicsScene()
+    item = QGraphicsPixmapItem(window_pix)
+    shadow = QGraphicsDropShadowEffect()
+    shadow.setBlurRadius(s(SHADOW_BLUR))
+    shadow.setColor(QColor(0, 0, 0, 130))
+    shadow.setOffset(0, s(SHADOW_OFFSET_Y))
+    item.setGraphicsEffect(shadow)
+    scene.addItem(item)
+
+    final = QPixmap(win_w + margin * 2, win_h + margin * 2)
+    final.fill(Qt.transparent)
+    fp = QPainter(final)
+    fp.setRenderHint(QPainter.Antialiasing)
+    scene.render(
+        fp,
+        QRectF(0, 0, final.width(), final.height()),
+        QRectF(-margin, -margin, final.width(), final.height()),
+    )
+    fp.end()
+    return final
 
 rows = [
     (0x000055EF6A1C0008, 100, 87),
@@ -166,7 +285,7 @@ def main():
             pass
 
         app.processEvents()
-        pixmap = window.grab()
+        pixmap = wrap_in_macos_frame(window.grab())
         ok = pixmap.save(OUTPUT_PATH, "PNG")
         print(f"saved={ok} path={OUTPUT_PATH} size={pixmap.width()}x{pixmap.height()}")
         QTimer.singleShot(50, app.quit)
