@@ -103,15 +103,19 @@ with OpenProcess(
    :param int bufflength: value size in bytes (optional for numeric types).
    :returns: the decoded value.
 
-.. py:method:: write_process_memory(address, pytype, bufflength, value)
+.. py:method:: write_process_memory(address, pytype, bufflength=None, value=...)
 
    Write a value to memory.
 
    :param int address: target memory address.
    :param Type pytype: one of the five supported types.
-   :param int bufflength: value size in bytes (``None`` for numeric defaults).
-      For ``str`` / ``bytes`` it is a *minimum* width — the whole value is
-      always written, and a larger size zero-pads the field.
+   :param int bufflength: value size in bytes. **Optional** (defaults to
+      ``None``): numeric types fall back to their default width and ``str`` /
+      ``bytes`` write the exact encoded length. For ``str`` / ``bytes`` a value
+      *larger* than the data is a *minimum* width — the whole value is always
+      written, and the extra space zero-pads the field. Because it is optional,
+      pass ``value`` by keyword when omitting it (``write_process_memory(addr,
+      int, value=9999)``).
    :param value: the value to write.
    :returns: the written value.
 ```
@@ -185,20 +189,25 @@ identical on every platform.
 ### Searching
 
 ```{eval-rst}
-.. py:method:: search_by_value(pytype, bufflength, value, scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None)
 
    Yield every address holding ``value`` (compared per ``scan_type``).
-   See :doc:`../guide/searching` for a full walkthrough.
+   ``bufflength`` is optional (numeric types use their default width; ``str`` /
+   ``bytes`` infer it from ``value``) — pass ``value`` by keyword when omitting
+   it. See :doc:`../guide/searching` for a full walkthrough.
 
-.. py:method:: search_by_value_between(pytype, bufflength, start, end, *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None)
 
    Yield every address whose value is in ``[start, end]`` (or outside, with
    ``not_between=True``).
 
-.. py:method:: search_by_addresses(pytype, bufflength, addresses, *, raise_error=False, memory_regions=None)
+.. py:method:: search_by_addresses(pytype, bufflength=None, addresses=..., *, raise_error=False, memory_regions=None)
 
    Read each address in ``addresses`` once, yielding ``(address, value)``.
-   Far faster than looping over :py:meth:`read_process_memory`.
+   Far faster than looping over :py:meth:`read_process_memory`. ``bufflength``
+   is optional for numeric types; ``str`` / ``bytes`` still need an explicit
+   size (no value to infer from) — pass ``addresses`` by keyword when omitting
+   it.
 
 .. py:method:: search_by_pattern(pattern, *, byte_length=0, progress_information=False, memory_regions=None)
 

@@ -43,8 +43,9 @@ with OpenProcess(process_name="game.exe") as process:
     for address in process.search_by_value(int, 4, 100):
         print(f"Found at 0x{address:X}")
 
-    # Write a new value at a known address.
-    process.write_process_memory(address, int, 4, 9999)
+    # Read the current value, then write a new one back.
+    current = process.read_int(address)
+    process.write_int(address, current + 500)
 ```
 
 ```{admonition} Enjoying PyMemoryEditor?

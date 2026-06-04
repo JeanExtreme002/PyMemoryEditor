@@ -13,6 +13,23 @@ T = TypeVar("T")
 _SUPPORTED_PYTYPES = (bool, int, float, str, bytes)
 
 
+# Sentinel marking a `value` argument that the caller never supplied. It lets
+# `write_process_memory(address, pytype, value=...)` keep `bufflength` optional
+# (defaulting to None) while still leaving `value` required — a plain `None`
+# default would be ambiguous since None can't be told apart from "not passed",
+# and a required positional can't follow an optional one.
+class _Unset:
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return "<unset>"
+
+
+# Typed as ``Any`` so it can stand in as the default for parameters whose real
+# type is ``Sequence[int]`` / ``bool | int | ...`` without mypy flagging an
+# incompatible default — the sentinel is swapped out (or rejected) before the
+# value is ever used as its declared type.
+UNSET: Any = _Unset()
+
+
 def _validate_pytype(pytype: Type) -> None:
     """
     Raise ``ValueError`` when ``pytype`` is not one of the five supported
@@ -49,6 +66,43 @@ def resolve_bufflength(pytype: Type, bufflength: Optional[int]) -> int:
     )
 
 
+def resolve_bufflength_for_value(pytype: Type, bufflength: Optional[int], *values) -> int:
+    """
+    Like :func:`resolve_bufflength`, but for operations that already carry the
+    value(s) being matched (the search methods). When ``bufflength`` is ``None``:
+
+    * **numeric / bool** — fall back to the default width (int→4, float→8,
+      bool→1), exactly like :func:`resolve_bufflength`;
+    * **str / bytes** — infer the width from the longest encoded value instead
+      of raising, so ``search_by_value(str, value="hi")`` works without the
+      caller counting bytes. ``str`` is encoded as UTF-8. For a range search the
+      shorter endpoint is NUL-padded up to this width (the fixed-width
+      comparison the backend performs).
+
+    A read can't infer this (it has no value to measure), which is why
+    :func:`resolve_bufflength` still requires an explicit size there.
+    """
+    if any(isinstance(v, _Unset) for v in values):
+        raise TypeError("a search value is required (none was provided).")
+
+    if bufflength is not None:
+        return bufflength
+
+    if pytype is str or pytype is bytes:
+        lengths = []
+        for v in values:
+            raw = v.encode("utf-8") if isinstance(v, str) else v
+            if not isinstance(raw, (bytes, bytearray)):
+                raise TypeError(
+                    "value must be str or bytes when pytype is str/bytes, got %s."
+                    % type(v).__name__
+                )
+            lengths.append(len(raw))
+        return max(lengths) if lengths else 0
+
+    return resolve_bufflength(pytype, bufflength)
+
+
 def prepare_write(
     pytype: Type, bufflength: Optional[int], value
 ) -> Tuple[Type, int, Any]:
@@ -76,6 +130,11 @@ def prepare_write(
     The caller is expected to return its *original* ``value`` to the user, so
     this routing through ``bytes`` stays invisible at the public API.
     """
+    if isinstance(value, _Unset):
+        raise TypeError(
+            "write_process_memory() missing required argument: 'value'."
+        )
+
     _validate_pytype(pytype)
 
     if pytype is str or pytype is bytes:
