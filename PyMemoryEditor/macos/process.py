@@ -312,9 +312,11 @@ class MacProcess(AbstractProcess):
         :param pytype: type of value to be written (bool, int, float, str, bytes).
         :param bufflength: value size in bytes. Optional — defaults to ``None``,
             which uses the default width for numeric types (int→4, float→8,
-            bool→1) and writes the exact encoded length for ``str`` / ``bytes``.
-            Since it is optional, pass ``value`` by keyword when omitting it
-            (``write_process_memory(addr, str, value="hi")``).
+            bool→1) and writes the whole value for ``str`` / ``bytes``. For
+            ``str`` / ``bytes`` an explicit value is a *maximum* that truncates
+            the value (``str`` counts characters, ``bytes`` counts bytes) and
+            never pads. Since it is optional, pass ``value`` by keyword when
+            omitting it (``write_process_memory(addr, str, value="hi")``).
         :param value: value to be written.
         """
         self.__require_open()

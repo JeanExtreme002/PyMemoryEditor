@@ -111,11 +111,12 @@ with OpenProcess(
    :param Type pytype: one of the five supported types.
    :param int bufflength: value size in bytes. **Optional** (defaults to
       ``None``): numeric types fall back to their default width and ``str`` /
-      ``bytes`` write the exact encoded length. For ``str`` / ``bytes`` a value
-      *larger* than the data is a *minimum* width — the whole value is always
-      written, and the extra space zero-pads the field. Because it is optional,
-      pass ``value`` by keyword when omitting it (``write_process_memory(addr,
-      int, value=9999)``).
+      ``bytes`` write the whole value. For ``str`` / ``bytes`` an explicit value
+      is a *maximum* width that truncates the value and never pads — ``str``
+      counts characters (applied before UTF-8 encoding, so multibyte characters
+      are never split), ``bytes`` counts bytes. Because it is optional, pass
+      ``value`` by keyword when omitting it (``write_process_memory(addr, int,
+      value=9999)``).
    :param value: the value to write.
    :returns: the written value.
 ```

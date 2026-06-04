@@ -96,11 +96,12 @@ with OpenProcess(process_name="notepad.exe") as process:
 ```{admonition} Writing text? Count characters, not bytes.
 :class: tip
 
-For `str` / `bytes` writes, `bufflength` is just a **minimum** width — your
-value is always written in full. So `write_process_memory(addr, str, 3, "olá")`
-writes all of `"olá"` even though the `á` takes 2 bytes (4 bytes total): you can
-think in characters and never worry about UTF-8 byte math. Pass a *larger*
-size to clear a fixed-size field (the extra space is zero-filled).
+For `str` writes, `bufflength` is a **maximum** number of *characters* — the
+value is truncated to that many characters and then encoded, so you never have
+to do UTF-8 byte math. `write_process_memory(addr, str, 2, "óólá")` writes just
+`"óó"` (4 bytes), and `write_process_memory(addr, str, 3, "olá")` keeps all of
+`"olá"` whole. A shorter value is written as-is (no padding); pass `None` to
+write the whole string. For `bytes`, the cap counts bytes instead.
 ```
 
 ### Method signature
@@ -113,9 +114,10 @@ size to clear a fixed-size field (the extra space is zero-filled).
    :param Type pytype: one of ``bool``, ``int``, ``float``, ``str``, ``bytes``.
    :param int bufflength: value size in bytes. **Optional** — defaults to
       ``None``, which uses the default width for numeric types and writes the
-      exact encoded length for ``str`` / ``bytes``. Since it is optional, pass
-      ``value`` by keyword when you omit it: ``write_process_memory(addr, int,
-      value=9999)``.
+      whole value for ``str`` / ``bytes``. For ``str`` / ``bytes`` an explicit
+      value is a *maximum* that truncates (``str`` counts characters, ``bytes``
+      counts bytes) and never pads. Since it is optional, pass ``value`` by
+      keyword when you omit it: ``write_process_memory(addr, int, value=9999)``.
    :param value: the value to write.
    :return: the written value.
 ```

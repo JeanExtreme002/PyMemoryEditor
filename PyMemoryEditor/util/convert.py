@@ -115,17 +115,18 @@ def prepare_write(
       value via :func:`get_c_type_of` exactly as before.
 
     * **str / bytes** — the value is encoded to raw bytes (UTF-8 for ``str``)
-      and routed through the ``bytes`` path. Here ``bufflength`` is a
-      *minimum* field width, not a hard cap:
+      and routed through the ``bytes`` path. Here ``bufflength`` is a *maximum*
+      width that truncates the value; it never pads:
 
-      - the **whole** value is always written, even when its encoded form is
-        longer than ``bufflength`` — so ``write(addr, str, 3, "olá")`` writes
-        all 4 UTF-8 bytes instead of raising ``ValueError`` because the caller
-        counted characters, not bytes;
-      - when the encoded form is **shorter** than ``bufflength`` the buffer is
-        NUL-padded up to it, which lets you clear a fixed-size field
-        (``write(addr, str, 16, "AB")`` writes ``b"AB"`` + 14 zero bytes);
-      - ``bufflength=None`` writes exactly the encoded length.
+      - for a ``str`` value the cap counts **characters**, applied *before*
+        encoding — ``write(addr, str, 2, "óólá")`` keeps ``"óó"`` and writes
+        its 4 UTF-8 bytes, while ``write(addr, str, 2, "ola")`` keeps ``"ol"``
+        and writes 2 bytes;
+      - for a ``bytes`` value the cap counts **bytes** (there are no
+        characters) — ``write(addr, bytes, 2, b"abc")`` writes ``b"ab"``;
+      - a value shorter than the cap is written as-is, with no NUL padding —
+        ``write(addr, str, 10, "ola")`` writes just ``b"ola"`` (3 bytes);
+      - ``bufflength=None`` writes the whole value (no cap).
 
     The caller is expected to return its *original* ``value`` to the user, so
     this routing through ``bytes`` stays invisible at the public API.
@@ -138,15 +139,23 @@ def prepare_write(
     _validate_pytype(pytype)
 
     if pytype is str or pytype is bytes:
-        raw = value.encode("utf-8") if isinstance(value, str) else value
-        if not isinstance(raw, (bytes, bytearray)):
+        if isinstance(value, str):
+            # str: bufflength caps the number of *characters*, applied before
+            # encoding so multi-byte characters are never split mid-sequence.
+            if bufflength is not None:
+                value = value[:bufflength]
+            raw = value.encode("utf-8")
+        elif isinstance(value, (bytes, bytearray)):
+            # bytes: bufflength caps the number of *bytes*.
+            raw = bytes(value)
+            if bufflength is not None:
+                raw = raw[:bufflength]
+        else:
             raise TypeError(
                 "value must be str or bytes when pytype is str/bytes, got %s."
                 % type(value).__name__
             )
-        raw = bytes(raw)
-        width = len(raw) if bufflength is None else max(bufflength, len(raw))
-        return bytes, width, raw.ljust(width, b"\x00")
+        return bytes, len(raw), raw
 
     return pytype, resolve_bufflength(pytype, bufflength), value
 
