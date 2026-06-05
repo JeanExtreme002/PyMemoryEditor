@@ -7,10 +7,14 @@ Thanks for your interest in contributing!
 ```bash
 python -m venv venv
 source venv/bin/activate    # On Windows: venv\Scripts\activate
-pip install -e ".[dev]"
+make install-dev            # pip install -e ".[dev]"
 ```
 
 The `dev` extra includes `pytest`, `pytest-cov`, `flake8`, `mypy`, `build` and `twine`.
+
+The `Makefile` is the single source of truth for the dev commands below — run
+`make help` to see every target (docs, build, coverage, etc.). The raw command
+each target wraps is shown in parentheses if you'd rather run it directly.
 
 ## Running the test suite
 
@@ -18,25 +22,35 @@ The tests read and write the memory of the test process itself; they should run
 on any supported platform without elevated privileges.
 
 ```bash
-pytest tests -v
+make test                   # pytest tests -v
 ```
 
 ## Linting
 
 ```bash
-flake8 PyMemoryEditor tests
+make lint                   # flake8 PyMemoryEditor tests
 ```
 
 ## Type checking
 
 ```bash
-mypy PyMemoryEditor
+make type-check             # mypy PyMemoryEditor
 ```
 
-The CI pipeline runs lint, mypy and tests, and blocks merges on failure.
-macOS is intentionally not included in CI (free-tier runner congestion);
-contributors with macOS hardware should run `pytest tests` locally before
-submitting changes that touch the Mach backend.
+## Before you push
+
+Run lint, type-check and the test suite in one go:
+
+```bash
+make pre-commit             # lint + type-check + test
+```
+
+The CI pipeline runs the same lint, mypy and tests, and blocks merges on failure.
+The test matrix runs on Ubuntu, Windows and macOS across multiple Python versions, so
+all three platform backends are exercised on every push. A dedicated job also
+runs the suite with the `speed` extra (NumPy) to keep the vectorized scan path
+covered. Even so, contributors touching a specific backend are encouraged to
+run `pytest tests` locally on that platform before submitting.
 
 ## Project layout
 
@@ -68,7 +82,7 @@ The public alias `OpenProcess` is chosen at import time in `__init__.py` based o
 
 1. Open an issue first for bug reports or substantial features.
 2. Branch from `main`. Keep commits focused.
-3. Run lint + tests locally before pushing.
+3. Run `make pre-commit` (lint + type-check + tests) locally before pushing.
 4. Open a PR describing the change and how it was tested.
 
 ## Reporting bugs
