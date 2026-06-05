@@ -83,6 +83,57 @@ def test_scan_memory_value_between():
     assert results == [4, 8]
 
 
+def test_scan_memory_not_value_between():
+    """NOT_VALUE_BETWEEN yields the exact complement of VALUE_BETWEEN.
+
+    Exercises the bytewise fallback path (pytype not in int/float/bool, so no
+    struct shortcut) — the mirror of test_scan_memory_value_between.
+    """
+    data = bytearray()
+    for value in (5, 15, 25, 35, 45):
+        data.extend(_pack(value))
+
+    results = list(
+        scan_memory(
+            data,
+            len(data),
+            (_pack(10), _pack(30)),
+            4,
+            ScanTypesEnum.NOT_VALUE_BETWEEN,
+            False,
+        )
+    )
+
+    # Everything except the in-range 15 (offset 4) and 25 (offset 8).
+    assert results == [0, 12, 16]
+
+
+def test_scan_memory_not_value_between_signed_fast_path():
+    """NOT_VALUE_BETWEEN on the typed-int fast path, including a negative value.
+
+    pytype=int selects the struct (and, when installed, NumPy) fast path at the
+    top of scan_memory, and the negative endpoint checks that the range is
+    compared as a signed integer rather than its unsigned bit pattern.
+    """
+    data = bytearray()
+    for value in (-50, 5, 15, 25, 35):
+        data.extend(_pack(value))
+
+    results = list(
+        scan_memory(
+            data,
+            len(data),
+            (_pack(0), _pack(30)),
+            4,
+            ScanTypesEnum.NOT_VALUE_BETWEEN,
+            int,
+        )
+    )
+
+    # Inside [0, 30]: 5, 15, 25. Outside: -50 (offset 0) and 35 (offset 16).
+    assert results == [0, 16]
+
+
 def test_scan_memory_for_exact_value_finds_all_matches():
     target = _pack(7)
     data = bytearray(_pack(7)) + bytearray(_pack(0)) + bytearray(_pack(7))
