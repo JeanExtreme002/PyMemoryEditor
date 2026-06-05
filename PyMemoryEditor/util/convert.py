@@ -50,6 +50,52 @@ _DEFAULT_BUFFLENGTH = {
 }
 
 
+def _check_int_fits(value: int, length: int, *, signed: bool = True) -> None:
+    """
+    Reject an ``int`` write whose value does not fit in ``length`` bytes,
+    raising a clear ``ValueError`` instead of letting the value be corrupted or
+    a raw ``OverflowError`` leak out. Shared by both numeric write paths:
+
+    * the generic / signed path (``write_process_memory(int, ...)`` and the
+      ``write_char/short/int/long/longlong`` helpers) routes through
+      ``prepare_write`` → ``get_c_type_of(int, length)``, whose fixed-width
+      ``c_int*`` ``.value`` setter **silently wraps** out-of-range values
+      (``2**40`` into a 4-byte slot stores ``0``) and would then report success
+      while having corrupted the target;
+
+    * the unsigned helpers (``write_uchar/ushort/uint/ulong/ulonglong``) route
+      through ``AbstractProcess._write_unsigned`` → ``int.to_bytes(signed=False)``,
+      which already raises — but as a bare ``OverflowError`` with a cryptic
+      message. Validating here gives both paths the same explicit error.
+
+    ``signed`` selects the accepted window for ``length`` bytes:
+
+    * ``signed=True`` (default) accepts the **union** of the signed and unsigned
+      ranges — ``[-2**(bits-1), 2**bits - 1]`` — because the generic ``c_int*``
+      slot stores either representation by the same bit pattern (``0xFFFFFFFF``
+      in a 4-byte field is the bits of ``-1`` and stays allowed);
+    * ``signed=False`` accepts the strict unsigned range ``[0, 2**bits - 1]``,
+      matching the unsigned helpers' contract (a negative value is rejected).
+
+    ``bool`` is a subclass of ``int`` but is written through its own ``c_bool``
+    path, so it never reaches the signed call here. Non-int values for an
+    ``int`` write (e.g. a float) are left for the ctypes assignment to reject.
+    """
+    if not isinstance(value, int) or isinstance(value, bool):
+        return
+
+    bits = length * 8
+    low = -(1 << (bits - 1)) if signed else 0
+    high = (1 << bits) - 1
+    if not (low <= value <= high):
+        kind = "integer" if signed else "unsigned integer"
+        raise ValueError(
+            "value %d does not fit in a %d-byte %s (allowed range %d..%d). "
+            "Use a wider bufflength to write a larger value."
+            % (value, length, kind, low, high)
+        )
+
+
 def resolve_bufflength(pytype: Type, bufflength: Optional[int]) -> int:
     """
     Return a concrete bufflength: the caller-provided value, or the default for
@@ -157,7 +203,10 @@ def prepare_write(
             )
         return bytes, len(raw), raw
 
-    return pytype, resolve_bufflength(pytype, bufflength), value
+    length = resolve_bufflength(pytype, bufflength)
+    if pytype is int:
+        _check_int_fits(value, length)
+    return pytype, length, value
 
 
 def convert_from_byte_array(
@@ -191,7 +240,16 @@ def value_to_bytes(pytype: Type, bufflength: int, value) -> bytes:
     Strings are utf-8 encoded; bytes pass through; numerics are written into a
     ctypes value and cast back. Shared by the three platform backends to avoid
     duplicating ~10 lines per call site.
+
+    An ``int`` target that does not fit in ``bufflength`` bytes is rejected here
+    (same check as the write path): otherwise the ``c_int*`` setter would wrap
+    it silently — e.g. ``search_by_value(int, value=2**40)`` with the default
+    4-byte width would encode the target as ``0`` and quietly match every zeroed
+    slot in memory instead of erroring.
     """
+    if pytype is int:
+        _check_int_fits(value, bufflength)
+
     target_value = get_c_type_of(pytype, bufflength)
     target_value.value = value.encode() if isinstance(value, str) else value
 
