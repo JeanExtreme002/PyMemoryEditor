@@ -541,3 +541,41 @@ def get_threads(pid: int) -> Generator[ThreadInfo, None, None]:
             priority=priority,
             raw=entry,
         )
+
+
+def get_processes() -> Generator[Tuple[int, str], None, None]:
+    """
+    Yield ``(pid, name)`` for every process by listing ``/proc`` — each numeric
+    subdirectory is a live pid.
+
+    ``name`` comes from ``/proc/<pid>/comm`` (the kernel truncates it to 15
+    characters via ``TASK_COMM_LEN``). Processes that vanish mid-scan are
+    skipped silently (logged at DEBUG).
+    """
+    try:
+        entries = os.listdir("/proc")
+    except OSError as exc:
+        _logger.debug("get_processes: could not list /proc: %s", exc)
+        return
+
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+
+        try:
+            with open("/proc/{}/comm".format(entry), "r") as fh:
+                name = fh.readline().rstrip("\n")
+        except OSError as exc:
+            # Race (process exited) or permission issue — skip it.
+            _logger.debug("get_processes: could not read comm for pid=%s: %s", entry, exc)
+            continue
+
+        yield pid, name
+
+
+def process_exists(pid: int) -> bool:
+    """Return whether a process with ``pid`` currently exists (``/proc/<pid>``)."""
+    if pid < 0:
+        return False
+    return os.path.isdir("/proc/{}".format(pid))

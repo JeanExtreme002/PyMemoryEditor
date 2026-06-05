@@ -1,37 +1,47 @@
 # -*- coding: utf-8 -*-
 
 """
-Tests for the ``exact_match`` flag on process-name lookup. Uses ``psutil``
-directly to derive the current process's real name from the OS, then
-verifies that:
+Tests for the ``exact_match`` flag on process-name lookup. Derives the current
+process's real name from PyMemoryEditor's own native enumeration (the same
+``(pid, name)`` source the lookup uses — Toolhelp on Windows, /proc on Linux,
+libproc on macOS), then verifies that:
 
 * an exact-name lookup finds it,
 * a partial (substring) lookup finds it,
 * a substring lookup that cannot match anything returns nothing.
 
-Avoids relying on a specific executable being installed.
+Avoids relying on a specific executable being installed, and on any third-party
+dependency.
 """
 
 import os
 import sys
 
-import psutil
 import pytest
 
 from PyMemoryEditor.process.util import (
+    _iter_processes,
     get_process_id_by_process_name,
     get_process_ids_by_process_name,
 )
 
 
-_OWN_PROCESS_NAME = psutil.Process(os.getpid()).name() or ""
+def _own_process_name() -> str:
+    """The OS-reported name of the test process, via native enumeration."""
+    for pid, name in _iter_processes():
+        if pid == os.getpid():
+            return name or ""
+    return ""
+
+
+_OWN_PROCESS_NAME = _own_process_name()
 
 
 @pytest.fixture(scope="module")
 def own_name():
     """The OS-reported name of the test process (e.g. ``python3.12``)."""
     if not _OWN_PROCESS_NAME:
-        pytest.skip("psutil cannot read this process's name on this platform")
+        pytest.skip("could not read this process's name on this platform")
     return _OWN_PROCESS_NAME
 
 

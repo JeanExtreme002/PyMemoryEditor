@@ -29,8 +29,9 @@ class ThreadInfo:
     """A single thread inside a target process.
 
     :param tid: thread identifier (see module docstring — meaning is platform-dependent).
-    :param start_address: entry point of the thread, when the OS exposes it
-        cheaply. ``None`` when not available.
+    :param start_address: reserved for the thread's entry point. Currently
+        always ``None`` on every platform (no backend fetches it); kept as a
+        stable field for forward compatibility.
     :param state: short human-readable state — e.g. ``"R"`` / ``"S"`` on Linux.
         ``None`` when not available.
     :param priority: scheduling priority value as reported by the OS. The scale

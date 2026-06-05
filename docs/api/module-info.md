@@ -19,13 +19,17 @@ Linux, `.dylib` on macOS).
    .. py:attribute:: name
       :type: str
 
-      File name of the module (e.g. ``"game.exe"``, ``"libc.so.6"``).
+      File name of the module (e.g. ``"game.exe"``, ``"libc.so.6"``). May be an
+      empty string on macOS for an image whose path can't be resolved (see
+      ``path``).
 
    .. py:attribute:: path
       :type: str
 
-      Full path of the backing file on disk when the OS exposes it; falls
-      back to ``name`` when only the name is available.
+      Full path of the backing file on disk. On Windows it falls back to
+      ``name`` when only the name is available. On macOS ``name`` is derived
+      from ``path``, so when the path can't be read **both** ``path`` and
+      ``name`` are empty strings (no fallback is possible).
 
    .. py:attribute:: base_address
       :type: int

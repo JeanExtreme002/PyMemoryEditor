@@ -33,8 +33,9 @@ from .process.thread_info import ThreadInfo
 # Package-wide logger. Silent by default (NullHandler) — embedding apps opt in
 # with `logging.basicConfig(level=logging.DEBUG)` or by attaching a handler to
 # the "PyMemoryEditor" logger. Backends emit DEBUG for transient skips (pages
-# vanished mid-scan) and WARNING for surprising-but-recovered conditions
-# (partial reads, mach_vm_protect restore failure).
+# vanished mid-scan, unreadable chunks) and WARNING for surprising-but-recovered
+# conditions (the macOS mach_vm_protect restore failure). A partial read raises
+# OSError rather than logging.
 logger = logging.getLogger("PyMemoryEditor")
 logger.addHandler(logging.NullHandler())
 

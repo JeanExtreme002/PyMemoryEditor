@@ -24,8 +24,10 @@ class ModuleInfo:
     """A single module (executable or shared library) loaded in a process.
 
     :param name: file name of the module (e.g. ``"game.exe"``, ``"libc.so.6"``).
-    :param path: full path of the backing file on disk when the OS exposes it;
-        falls back to ``name`` when only the name is available.
+        May be empty on macOS when the image path can't be resolved.
+    :param path: full path of the backing file on disk. On Windows it falls back
+        to ``name`` when only the name is available; on macOS ``name`` derives
+        from ``path``, so an unresolvable image yields both as empty strings.
     :param base_address: address where the module is loaded for this run — the
         value to add static offsets to. Defeats ASLR for ``base + offset``
         addressing.

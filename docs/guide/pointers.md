@@ -33,13 +33,13 @@ module = next(m for m in process.get_modules() if m.name == "game.exe")
 base = module.base_address + 0x10F4F4
 
 hp_address = process.resolve_pointer_chain(base, [0x0, 0x158])
-hp = process.read_process_memory(hp_address, int, 4)
+hp = process.read_int(hp_address)
 ```
 
 ### Method signature
 
 ```{eval-rst}
-.. py:method:: resolve_pointer_chain(base_address, offsets, *, ptr_size=8)
+.. py:method:: resolve_pointer_chain(base_address, offsets, *, ptr_size=None)
    :no-index:
 
    Walk a multi-level pointer chain.
@@ -53,17 +53,19 @@ hp = process.read_process_memory(hp_address, int, 4)
       ``module_base + static_offset``.
    :param Sequence[int] offsets: sequence of offsets to walk. Pass ``[]`` to
       dereference ``base_address`` once and return that pointer.
-   :param int ptr_size: pointer width — ``8`` for 64-bit targets (default),
-      ``4`` for 32-bit.
+   :param int ptr_size: pointer width — ``8`` for 64-bit targets, ``4`` for
+      32-bit. Leave ``None`` (the default) to use the target's
+      ``pointer_size``, detected automatically.
    :returns: the final address (an ``int``).
 ```
 
 ```{admonition} 32-bit vs 64-bit
 :class: warning
 
-Pass `ptr_size=4` when the target is a 32-bit process; pass `ptr_size=8` (the
-default) for 64-bit. Mixing them up reads pointers of the wrong width and
-yields garbage addresses.
+By default (`ptr_size=None`) the pointer width is detected from the target —
+`4` bytes for a 32-bit process, `8` for 64-bit. Pass `ptr_size` explicitly only
+to override that; setting it to the wrong width reads pointers of the wrong
+size and yields garbage addresses.
 ```
 
 ## Live pointers: `RemotePointer`
@@ -85,6 +87,10 @@ hp_ptr = process.get_pointer(
 print(hp_ptr.value)   # read it
 hp_ptr.value = 9999   # write it
 ```
+
+`process.get_pointer(...)` is a convenience wrapper around the
+`RemotePointer` constructor — it accepts the same arguments
+(`base_address`, `offsets`, `pytype`, `bufflength`, `ptr_size`).
 
 ### Direct vs chained handles
 
@@ -117,7 +123,7 @@ distance = mp_ptr - hp_ptr   # 4
 ### `RemotePointer` API
 
 ```{eval-rst}
-.. py:class:: RemotePointer(process, base_address, offsets=None, *, pytype=int, bufflength=None, ptr_size=8)
+.. py:class:: RemotePointer(process, base_address, offsets=None, *, pytype=int, bufflength=None, ptr_size=None)
    :no-index:
 
    A re-resolving, read/write handle to a typed value in a target process.
@@ -176,20 +182,6 @@ distance = mp_ptr - hp_ptr   # 4
       :no-index:
 
       The resolved :py:attr:`address` — handy for arithmetic and logging.
-```
-
-## Building a handle from `process.get_pointer()`
-
-A small convenience wrapper around the constructor:
-
-```python
-ptr = process.get_pointer(
-    base_address=module.base_address + 0x10F4F4,
-    offsets=[0x0, 0x158],
-    pytype=int,
-    bufflength=4,
-    ptr_size=8,
-)
 ```
 
 ```{seealso}

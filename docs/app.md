@@ -17,8 +17,8 @@ If you're new to memory editing, **start with the app** before writing code.
 pip install "PyMemoryEditor[app]"
 ```
 
-The `app` extra adds PySide6 to the install. The library itself stays
-dependency-free.
+The `app` extra adds PySide6 and psutil to the install (psutil powers the
+GUI's process picker). The library itself stays dependency-free.
 
 ## Launch
 

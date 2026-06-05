@@ -20,16 +20,21 @@ You'll start seeing messages like:
 
 ```
 DEBUG    PyMemoryEditor: skipping region 0x7FFD0000–0x7FFD2000 (read failed)
-WARNING  PyMemoryEditor: partial read at 0x14010F4F4 (got 6 of 8 bytes)
+WARNING  PyMemoryEditor: mach_vm_protect could not restore protection at 0x14010F4F4
 ```
 
 ## Log levels
 
 <table>
 <tr><th>Level</th><th>When it fires</th></tr>
-<tr><td><code>DEBUG</code></td><td>Transient skips (pages vanished mid-scan, unreadable chunks).</td></tr>
-<tr><td><code>WARNING</code></td><td>Surprising-but-recovered conditions (partial reads, <code>mach_vm_protect</code> restore failure on macOS).</td></tr>
+<tr><td><code>DEBUG</code></td><td>Transient skips during enumeration/scans (pages vanished mid-scan, unreadable chunks, a thread/module/image that couldn't be read).</td></tr>
+<tr><td><code>WARNING</code></td><td>Surprising-but-recovered conditions — currently the macOS <code>mach_vm_protect</code> restore failure after a write to a read-only page.</td></tr>
 </table>
+
+```{note}
+A **partial read** (fewer bytes returned than requested) is *not* a log event —
+it raises ``OSError`` so you never silently decode a half-populated buffer.
+```
 
 ## Routing logs
 

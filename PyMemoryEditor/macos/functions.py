@@ -32,7 +32,7 @@ from ..util import (
 )
 from ..util.pattern import PatternLike, compile_pattern
 
-from .libsystem import libsystem, mach_error_message, mach_task_self_
+from .libsystem import PROC_ALL_PIDS, libsystem, mach_error_message, mach_task_self_
 from .types import (
     KERN_INVALID_ADDRESS,
     KERN_INVALID_ARGUMENT,
@@ -905,3 +905,75 @@ def search_values_by_addresses(
         raise_error=raise_error,
         transient_error_check=_is_transient,
     )
+
+
+def get_processes() -> Generator[Tuple[int, str], None, None]:
+    """
+    Yield ``(pid, name)`` for every process via libproc's ``proc_listpids`` +
+    ``proc_name`` — no ``task_for_pid`` (and thus no debugger entitlement)
+    required, since both operate on the BSD process table.
+
+    ``name`` is the executable name ``proc_name`` reports, falling back to the
+    basename of ``proc_pidpath``; for the rare process that denies both it is an
+    empty string. Needs no special privileges.
+    """
+    # First call sizes the pid array: proc_listpids(.., NULL, 0) returns the
+    # number of bytes that would be written.
+    nbytes = libsystem.proc_listpids(PROC_ALL_PIDS, 0, None, 0)
+    if nbytes <= 0:
+        _logger.debug("get_processes: proc_listpids sizing returned %d", nbytes)
+        return
+
+    count = nbytes // ctypes.sizeof(ctypes.c_int)
+    # Over-allocate slightly: the table can grow between the two calls.
+    pids = (ctypes.c_int * (count + 16))()
+    written = libsystem.proc_listpids(
+        PROC_ALL_PIDS, 0, pids, ctypes.sizeof(pids)
+    )
+    if written <= 0:
+        _logger.debug("get_processes: proc_listpids returned %d", written)
+        return
+
+    name_buffer = ctypes.create_string_buffer(256)
+    path_buffer = ctypes.create_string_buffer(4096)
+    for pid in pids[: written // ctypes.sizeof(ctypes.c_int)]:
+        # pid 0 is the kernel and shows up as a zero-filled slot — skip it.
+        if pid <= 0:
+            continue
+
+        length = libsystem.proc_name(pid, name_buffer, ctypes.sizeof(name_buffer))
+        if length > 0:
+            name = name_buffer.raw[:length].decode("utf-8", errors="replace")
+        else:
+            # proc_name is denied for many root-owned processes; recover the
+            # name from the executable path's basename instead.
+            plen = libsystem.proc_pidpath(pid, path_buffer, ctypes.sizeof(path_buffer))
+            if plen > 0:
+                path = path_buffer.raw[:plen].decode("utf-8", errors="replace")
+                name = os.path.basename(path)
+            else:
+                name = ""
+
+        yield int(pid), name
+
+
+def process_exists(pid: int) -> bool:
+    """
+    Return whether a process with ``pid`` currently exists.
+
+    Uses ``os.kill(pid, 0)``: it sends no signal but performs the existence /
+    permission check — ``ESRCH`` means no such process, ``EPERM`` means it
+    exists but is owned by another user (still True).
+    """
+    # ``pid <= 0`` is rejected outright: os.kill(0, 0) targets the *caller's
+    # process group* (not "pid 0"), which would spuriously report True and
+    # diverge from the Linux/Windows backends.
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True

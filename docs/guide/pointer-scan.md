@@ -24,7 +24,7 @@ It carries everything you need to reconstruct the chain in another run.
 ## Method signature
 
 ```{eval-rst}
-.. py:method:: scan_pointer_paths(target_address, *, max_depth=5, max_offset=0x400, ptr_size=8, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
+.. py:method:: scan_pointer_paths(target_address, *, max_depth=5, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
    :no-index:
 
    :param int target_address: the dynamic address to find pointer paths to
@@ -34,7 +34,9 @@ It carries everything you need to reconstruct the chain in another run.
    :param int max_offset: largest positive offset a single hop may add (the
       struct-size window). Bigger values catch fields deeper inside objects at
       the cost of many more candidate paths.
-   :param int ptr_size: pointer width — ``8`` (default) for 64-bit, ``4`` for 32-bit.
+   :param int ptr_size: pointer width — ``8`` for 64-bit, ``4`` for 32-bit.
+      Leave ``None`` (the default) to use the target's ``pointer_size``,
+      detected automatically.
    :param bool aligned: only consider pointers at natural alignment (default,
       much faster). Set ``False`` to also scan misaligned slots (slow).
    :param bool writable_only: build the pointer map from writable memory only

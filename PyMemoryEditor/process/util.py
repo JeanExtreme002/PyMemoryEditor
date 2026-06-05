@@ -1,10 +1,35 @@
 # -*- coding: utf-8 -*-
 
-from typing import List, Optional
-
-import psutil
+import sys
+from typing import Iterator, List, Optional, Tuple
 
 from .errors import AmbiguousProcessNameError
+
+
+# Native, dependency-free process enumeration. Each backend exposes:
+#   iter_processes() -> Iterator[(pid, name)]   (name = executable name only)
+#   backend_process_exists(pid) -> bool
+# Windows uses CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS); Linux walks /proc;
+# macOS uses libproc's proc_listpids/proc_name. This is the same per-platform
+# dispatch PyMemoryEditor already does for OpenProcess.
+if sys.platform == "win32":
+    from ..win32.functions import GetProcesses as _iter_processes
+    from ..win32.functions import ProcessExists as _backend_process_exists
+
+elif sys.platform.startswith("linux"):
+    from ..linux.functions import get_processes as _iter_processes
+    from ..linux.functions import process_exists as _backend_process_exists
+
+elif sys.platform == "darwin":
+    from ..macos.functions import get_processes as _iter_processes
+    from ..macos.functions import process_exists as _backend_process_exists
+
+else:  # pragma: no cover - importing the package already raises on these.
+    def _iter_processes() -> Iterator[Tuple[int, str]]:
+        return iter(())
+
+    def _backend_process_exists(pid: int) -> bool:
+        return False
 
 
 def get_process_ids_by_process_name(
@@ -30,12 +55,8 @@ def get_process_ids_by_process_name(
 
     matches: List[int] = []
 
-    for process in psutil.process_iter(["name", "pid"]):
-        try:
-            name = process.info["name"] or ""
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
+    for pid, name in _iter_processes():
+        name = name or ""
         name_cmp = name if case_sensitive else name.casefold()
 
         if exact_match:
@@ -44,7 +65,7 @@ def get_process_ids_by_process_name(
             hit = process_name_cmp in name_cmp
 
         if hit:
-            matches.append(process.info["pid"])
+            matches.append(pid)
 
     return matches
 
@@ -77,4 +98,4 @@ def pid_exists(pid: int) -> bool:
     """
     Check if the process ID exists.
     """
-    return psutil.pid_exists(pid)
+    return _backend_process_exists(pid)

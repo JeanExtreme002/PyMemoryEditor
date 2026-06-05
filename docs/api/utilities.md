@@ -90,14 +90,19 @@ print(byte_length)     # 5
 .. py:data:: DEFAULT_MAX_REGION_CHUNK
 
    Maximum chunk size used by :py:func:`iter_region_chunks` (currently
-   16 MiB). Tunes the trade-off between syscall overhead (small chunks) and
+   256 MiB). Tunes the trade-off between syscall overhead (small chunks) and
    peak memory use (huge chunks).
 
-.. py:function:: iter_region_chunks(region_size, item_size)
+.. py:function:: iter_region_chunks(region_size, target_value_size, max_chunk=DEFAULT_MAX_REGION_CHUNK)
 
    Yield ``(offset, chunk_size)`` pairs that walk a single memory region in
-   bounded-size chunks. The chunks slightly **overlap** so a pattern straddling
-   a boundary is still emitted by the higher-level scanner.
+   bounded-size chunks. Regions up to ``max_chunk`` yield a single chunk; larger
+   ones are split into **contiguous, non-overlapping** chunks whose size is a
+   multiple of ``target_value_size`` so a typed numeric scan never splits a value
+   across a boundary. Boundary handling for *patterns* is done one level up by
+   the scanner (it overlaps consecutive chunks by ``pattern_length - 1`` bytes);
+   arbitrary ``str`` matches in a region larger than ``max_chunk`` may still be
+   missed at a chunk boundary — a documented limitation.
 
 .. py:function:: scan_memory(...)
 .. py:function:: scan_memory_for_exact_value(...)

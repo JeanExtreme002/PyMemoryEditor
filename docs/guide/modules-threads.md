@@ -41,8 +41,9 @@ with OpenProcess(process_name="game.exe") as process:
       :no-index:
       :type: str
 
-      Full path of the backing file on disk when the OS exposes it; falls back
-      to ``name`` when only the name is available.
+      Full path of the backing file on disk. On Windows it falls back to
+      ``name`` when only the name is available; on macOS ``name`` derives from
+      ``path``, so an unresolvable image yields both as empty strings.
 
    .. py:attribute:: base_address
       :no-index:
@@ -120,7 +121,8 @@ with OpenProcess(process_name="game.exe") as process:
       :no-index:
       :type: Optional[int]
 
-      Thread entry point when the OS exposes it cheaply; ``None`` otherwise.
+      Reserved for the thread entry point — **currently always ``None``** on
+      every platform (no backend fetches it).
 
    .. py:attribute:: state
       :no-index:

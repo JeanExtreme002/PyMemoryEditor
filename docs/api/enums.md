@@ -31,9 +31,7 @@ from PyMemoryEditor import ScanTypesEnum
 from PyMemoryEditor import OpenProcess, ScanTypesEnum
 
 with OpenProcess(process_name="game.exe") as process:
-    for address in process.search_by_value(
-        int, 4, 1000, scan_type=ScanTypesEnum.BIGGER_THAN,
-    ):
+    for address in process.search_by_value(int, value=1000, scan_type=ScanTypesEnum.BIGGER_THAN):
         print(hex(address))
 ```
 

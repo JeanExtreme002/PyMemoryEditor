@@ -42,7 +42,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 requires-python = ">=3.10"
-dependencies = ["psutil>=5.9,<7"]
+# The core library is dependency-free: process discovery and read/write/scan
+# are implemented natively per platform (CreateToolhelp32Snapshot on Windows,
+# /proc on Linux, libproc/Mach on macOS) via ctypes. Optional extras below add
+# acceleration (NumPy) and the desktop app (PySide6 + psutil).
+dependencies = []
 
 [project.optional-dependencies]
 # Vectorized scan acceleration. Pulls in NumPy, which lights up the
@@ -58,6 +62,10 @@ tests = [
 ]
 app = [
   "PySide6>=6.5",
+  # The desktop app uses psutil's richer per-process info (username, memory
+  # footprint) in the process picker — beyond the pid/name the core library
+  # needs. The library itself does not depend on psutil.
+  "psutil>=5.9,<7",
 ]
 # NOTE: NumPy is intentionally NOT listed here. The default test suite must
 # run on the pure-Python scan path so it stays covered. The NumPy fast path
@@ -73,7 +81,10 @@ dev = [
   "mypy",
   "build",
   "twine",
+  # GUI deps: the app smoke/worker tests import the desktop modules, which use
+  # PySide6 and psutil (the latter only in the app, not the core library).
   "PySide6>=6.5",
+  "psutil>=5.9,<7",
 ]
 
 [project.scripts]

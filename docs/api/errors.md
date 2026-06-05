@@ -139,7 +139,7 @@ from PyMemoryEditor import (
 
 try:
     with OpenProcess(process_name="game.exe") as process:
-        for address in process.search_by_value(int, 4, 100):
+        for address in process.search_by_value(int, value=100):
             try:
                 value = process.read_process_memory(address, int)
             except OSError:

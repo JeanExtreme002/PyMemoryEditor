@@ -107,7 +107,7 @@ writable = [r for r in process.get_memory_regions() if r.is_writable]
 snapshot = process.snapshot_memory_regions()
 assert isinstance(snapshot, MemoryRegionSnapshot)
 # Reuse across many scans:
-for addr in process.search_by_value(int, 4, 100, memory_regions=snapshot):
+for addr in process.search_by_value(int, value=100, memory_regions=snapshot):
     ...
 ```
 

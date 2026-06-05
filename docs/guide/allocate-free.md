@@ -13,7 +13,7 @@ size:
 ```python
 with OpenProcess(process_name="game.exe") as process:
     address = process.allocate_memory(64)
-    process.write_process_memory(address, int, 4, 1337)
+    process.write_int(address, 1337)
 ```
 
 ## Freeing

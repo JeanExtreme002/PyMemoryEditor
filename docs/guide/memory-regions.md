@@ -68,8 +68,8 @@ calls can reuse it:
 regions = process.snapshot_memory_regions()
 
 # Pass the same snapshot to as many scans as you want.
-candidates = list(process.search_by_value(int, 4, 100, memory_regions=regions))
-refined = list(process.search_by_addresses(int, 4, candidates, memory_regions=regions))
+candidates = list(process.search_by_value(int, value=100, memory_regions=regions))
+refined = list(process.search_by_addresses(int, addresses=candidates, memory_regions=regions))
 ```
 
 The return type is `MemoryRegionSnapshot` — a thin `list` subclass that
@@ -98,7 +98,7 @@ it to a scan:
 # Only writable regions (skip read-only static data — much faster).
 writable = [r for r in regions if r.is_writable]
 
-for address in process.search_by_value(int, 4, target, memory_regions=writable):
+for address in process.search_by_value(int, value=target, memory_regions=writable):
     ...
 ```
 

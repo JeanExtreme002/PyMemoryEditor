@@ -53,8 +53,10 @@ class RemotePointer:
     :param pytype: how to interpret the bytes at the resolved address (bool,
         int, float, str or bytes). Defaults to ``int``.
     :param bufflength: value size in bytes. May be ``None`` for numeric types
-        (defaults: int→4, float→8, bool→1); ``str`` and ``bytes`` require an
-        explicit size.
+        (defaults: int→4, float→8, bool→1). For ``str`` / ``bytes`` it is
+        required only to **read** (``.value`` / :meth:`read`) — there is no
+        value to infer the width from; **writing** accepts ``None`` and stores
+        the whole value (a set ``bufflength`` then caps the width, truncating).
     :param ptr_size: pointer width used when walking ``offsets`` — 8 for 64-bit
         targets, 4 for 32-bit. Leave ``None`` (the default) to use the target
         process's :attr:`~PyMemoryEditor.process.abstract.AbstractProcess.pointer_size`,

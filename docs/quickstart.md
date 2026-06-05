@@ -70,7 +70,7 @@ You rarely know the address of a value up front — you **find it by scanning**.
 
 ```python
 with OpenProcess(process_name="game.exe") as process:
-    for address in process.search_by_value(int, 4, 100):
+    for address in process.search_by_value(int, value=100):
         print(f"Found at 0x{address:X}")
 ```
 
@@ -92,12 +92,12 @@ The classic loop is:
 ```python
 with OpenProcess(process_name="game.exe") as process:
     # 1. First scan — every address currently holding 100.
-    candidates = list(process.search_by_value(int, 4, 100))
+    candidates = list(process.search_by_value(int, value=100))
 
     # 3. After the value drops to 95 in-game, keep only the matches that agree.
     survivors = [
         address
-        for address, value in process.search_by_addresses(int, 4, candidates)
+        for address, value in process.search_by_addresses(int, addresses=candidates)
         if value == 95
     ]
 
