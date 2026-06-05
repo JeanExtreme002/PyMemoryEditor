@@ -1,0 +1,38 @@
+# Path-based labels applied to PRs by .github/workflows/labeler.yml.
+# Uses actions/labeler@v5 match rules.
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+
+app:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "PyMemoryEditor/app/**"
+
+linux:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "PyMemoryEditor/linux/**"
+
+win32:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "PyMemoryEditor/win32/**"
+
+macOS:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "PyMemoryEditor/macos/**"
+
+# Any change inside the PyMemoryEditor package.
+lib:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "PyMemoryEditor/**"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
