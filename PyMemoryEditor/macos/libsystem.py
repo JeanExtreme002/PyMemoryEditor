@@ -199,6 +199,42 @@ libsystem.proc_pid_rusage.argtypes = (
 )
 libsystem.proc_pid_rusage.restype = ctypes.c_int
 
+# libproc process enumeration (in <libproc.h>, exported by libSystem).
+# PROC_ALL_PIDS lists every pid; the buffer is an array of pid_t (c_int).
+PROC_ALL_PIDS = 1
+
+# int proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer, int buffersize);
+# With buffer=NULL/buffersize=0 it returns the number of bytes that would be
+# written, letting the caller size the pid array. Returns bytes written (or -1).
+libsystem.proc_listpids.argtypes = (
+    ctypes.c_uint32,
+    ctypes.c_uint32,
+    ctypes.c_void_p,
+    ctypes.c_int,
+)
+libsystem.proc_listpids.restype = ctypes.c_int
+
+# int proc_name(int pid, void *buffer, uint32_t buffersize);
+# Fills buffer with the executable name and returns its length. Returns 0 for
+# processes the caller can't query (e.g. root-owned daemons as a normal user).
+libsystem.proc_name.argtypes = (
+    ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.c_uint32,
+)
+libsystem.proc_name.restype = ctypes.c_int
+
+# int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
+# Full executable path; its basename is the fallback name source when proc_name
+# is denied — proc_pidpath succeeds for many processes proc_name refuses,
+# including root-owned ones.
+libsystem.proc_pidpath.argtypes = (
+    ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.c_uint32,
+)
+libsystem.proc_pidpath.restype = ctypes.c_int
+
 # char *mach_error_string(mach_error_t error_value);
 libsystem.mach_error_string.argtypes = (ctypes.c_int,)
 libsystem.mach_error_string.restype = ctypes.c_char_p

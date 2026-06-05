@@ -137,8 +137,12 @@ without a live process:
 from PyMemoryEditor.util.pattern import compile_pattern
 
 regex, byte_length = compile_pattern("48 8B ? 00 00")
-print(regex.pattern, byte_length)
-# b'\\x48\\x8B.\\x00\\x00' 5
+print(repr(regex.pattern), byte_length)
+# b'H\x8b.\x00\x00' 5
 ```
+
+The compiled regex matches the right bytes regardless of how they print:
+``re.escape`` renders a printable byte as its ASCII character (``0x48`` → ``H``)
+and a non-printable one as ``\xNN`` (``0x8B`` → ``\x8b``); ``?`` becomes ``.``.
 
 See [Utilities API](../api/utilities.md) for the full reference.

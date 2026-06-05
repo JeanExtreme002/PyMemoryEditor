@@ -554,14 +554,16 @@ class AbstractProcess(ABC):
 
     def read_string(self, address: int, byte_count: int) -> str:
         """
-        Read up to ``byte_count`` bytes, decode them as UTF-8 and return the
+        Read exactly ``byte_count`` bytes, decode them as UTF-8 and return the
         text up to the first NUL terminator (C-string semantics).
 
         Goes through the ``str`` read path, so invalid UTF-8 becomes ``U+FFFD``
-        (``errors="replace"``). ``byte_count`` is the maximum field width to
-        read; the NUL terminator and everything after it are dropped. To make a
-        shorter :meth:`write_string` read back cleanly here, write it with
-        ``null_terminator=True`` (or into an already-zeroed field).
+        (``errors="replace"``). ``byte_count`` is the field width to read, not an
+        upper bound — those bytes must all be readable or an ``OSError`` is
+        raised; the NUL terminator and everything after it are then dropped from
+        the returned text. To make a shorter :meth:`write_string` read back
+        cleanly here, write it with ``null_terminator=True`` (or into an
+        already-zeroed field).
         """
         return self.read_process_memory(address, str, byte_count).split("\x00", 1)[0]
 

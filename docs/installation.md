@@ -33,8 +33,8 @@ Once installed, launch the app from any terminal:
 pymemoryeditor
 ```
 
-The library itself stays dependency-free — only the `app` extra pulls
-PySide6 in.
+The library itself stays dependency-free — only the `app` extra pulls in its
+dependencies (PySide6 and psutil, used by the GUI's process picker).
 
 See the [GUI App guide](app.md) for a tour of every feature.
 

@@ -170,13 +170,14 @@ with OpenProcess(process_name="game.exe") as process:
     # Write your text — UTF-8 encoding (accents, emoji…) is handled for you.
     process.write_string(0x7FF40020, "Pedro")
 
-    # Read it back: read up to 32 bytes, stop at the first NUL terminator.
+    # Read it back: read a 32-byte field, stop at the first NUL terminator.
     name = process.read_string(0x7FF40020, 32)   # -> "Pedro"
 ```
 
-`read_string` reads up to the size you pass and returns everything **before the
-first `\0`**, so a generous size like `32` gives you the real string without the
-trailing padding. `write_string` writes exactly your text — pass
+`read_string` reads exactly the size you pass — that many bytes must be
+readable or it raises `OSError` — and returns everything **before the first
+`\0`**, so a generous field width like `32` gives you the real string without
+the trailing padding. `write_string` writes exactly your text — pass
 `null_terminator=True` if you're overwriting a longer value and want a clean
 cut-off:
 

@@ -12,7 +12,7 @@ constructor is documented here for completeness.
 ## Construction
 
 ```{eval-rst}
-.. py:class:: RemotePointer(process, base_address, offsets=None, *, pytype=int, bufflength=None, ptr_size=8)
+.. py:class:: RemotePointer(process, base_address, offsets=None, *, pytype=int, bufflength=None, ptr_size=None)
 
    :param AbstractProcess process: the open process the value lives in.
    :param int base_address: starting address. For a direct handle this is the
@@ -32,9 +32,14 @@ constructor is documented here for completeness.
    :param Type pytype: how to interpret the bytes — ``bool``, ``int``,
       ``float``, ``str`` or ``bytes``. Defaults to ``int``.
    :param int bufflength: value size in bytes. Optional for numeric types
-      (int→4, float→8, bool→1); required for ``str`` / ``bytes``.
+      (int→4, float→8, bool→1). For ``str`` / ``bytes`` it is required only to
+      **read** (nothing to infer the width from); **writing** accepts ``None``
+      and stores the whole value, while a set ``bufflength`` caps the width
+      (truncating).
    :param int ptr_size: pointer width used when walking ``offsets`` — 8 for
-      64-bit targets (default), 4 for 32-bit. Ignored for direct handles.
+      64-bit targets, 4 for 32-bit. Leave ``None`` (the default) to use the
+      target's ``pointer_size``, detected automatically. Ignored for direct
+      handles.
 ```
 
 ## Properties

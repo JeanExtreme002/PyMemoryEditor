@@ -114,3 +114,30 @@ class MODULEENTRY32(Structure):
         ("szModule", c_char * (MAX_MODULE_NAME32 + 1)),
         ("szExePath", c_char * MAX_PATH),
     ]
+
+
+# TH32CS_SNAPPROCESS flag for CreateToolhelp32Snapshot — used by get_processes()
+# to enumerate every process in the system (pid + executable name).
+TH32CS_SNAPPROCESS = 0x00000002
+
+
+class PROCESSENTRY32(Structure):
+    """Layout matching the ANSI Win32 ``PROCESSENTRY32`` (Process32First/Next).
+
+    ``th32DefaultHeapID`` is a ``ULONG_PTR`` — declared as a void pointer so it
+    stays pointer-sized on both 32- and 64-bit builds. ``szExeFile`` is a
+    ``c_char`` array holding the NUL-terminated executable name (no path).
+    """
+
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", c_void_p),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", c_char * MAX_PATH),
+    ]

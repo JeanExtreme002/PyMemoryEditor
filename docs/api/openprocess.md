@@ -23,9 +23,14 @@ All three subclass `AbstractProcess` and share the API documented below.
 ## Construction
 
 ```{eval-rst}
-.. py:class:: OpenProcess(*, process_name=None, pid=None, permission=None, case_sensitive=None, exact_match=True)
+.. py:class:: OpenProcess(*, process_name=None, pid=None, permission=<platform default>, case_sensitive=<platform default>, exact_match=True)
 
-   Open a target process.
+   Open a target process. ``OpenProcess`` resolves to the concrete backend for
+   the host OS, so the ``permission`` and ``case_sensitive`` defaults are
+   platform-specific (see below): on Windows ``permission`` defaults to the
+   read+write mask and ``case_sensitive`` to ``False``; on Linux/macOS
+   ``permission`` defaults to ``None`` (ignored) and ``case_sensitive`` to
+   ``True``.
 
    :param str process_name: name of the target process.
    :param int pid: process ID. Takes precedence over ``process_name``.
@@ -178,8 +183,10 @@ identical on every platform.
 .. py:method:: read_string(address, byte_count)
    :no-index:
 
-   Read up to ``byte_count`` bytes, decode UTF-8, return the text up to the
-   first NUL. Pair: ``write_string(address, text, *, null_terminator=False)``.
+   Read exactly ``byte_count`` bytes (a short read raises ``OSError``), decode
+   UTF-8, and return the text up to the first NUL — so ``byte_count`` is the
+   field width to read, not an upper bound. Pair:
+   ``write_string(address, text, *, null_terminator=False)``.
 
 .. py:method:: read_bytes(address, length)
    :no-index:
@@ -246,16 +253,16 @@ identical on every platform.
 ### Pointers
 
 ```{eval-rst}
-.. py:method:: resolve_pointer_chain(base_address, offsets, *, ptr_size=8)
+.. py:method:: resolve_pointer_chain(base_address, offsets, *, ptr_size=None)
 
    Walk a multi-level pointer chain and return the final address.
 
-.. py:method:: get_pointer(base_address, offsets=None, *, pytype=int, bufflength=None, ptr_size=8)
+.. py:method:: get_pointer(base_address, offsets=None, *, pytype=int, bufflength=None, ptr_size=None)
 
    Build a :py:class:`RemotePointer` bound to this process — a live,
    re-resolving handle. See :doc:`../guide/pointers`.
 
-.. py:method:: scan_pointer_paths(target_address, *, max_depth=5, max_offset=0x400, ptr_size=8, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
+.. py:method:: scan_pointer_paths(target_address, *, max_depth=5, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
 
    Reverse pointer scan — yield :py:class:`PointerPath` recipes that resolve
    to ``target_address``. See :doc:`../guide/pointer-scan`.

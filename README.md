@@ -66,7 +66,7 @@ from PyMemoryEditor import OpenProcess
 with OpenProcess(process_name="game.exe") as process:
 
     # Scan the whole process for every address holding the value 100.
-    for address in process.search_by_value(int, 4, 100):
+    for address in process.search_by_value(int, value=100):
         print(f"Found at 0x{address:X}")
 
     # Read the current value, then write a new one back.

@@ -38,9 +38,11 @@ from .types import (
     MEMORY_BASIC_INFORMATION_32,
     MEMORY_BASIC_INFORMATION_64,
     MODULEENTRY32,
+    PROCESSENTRY32,
     SYSTEM_INFO,
     TH32CS_SNAPMODULE,
     TH32CS_SNAPMODULE32,
+    TH32CS_SNAPPROCESS,
     TH32CS_SNAPTHREAD,
     THREADENTRY32,
 )
@@ -149,6 +151,18 @@ kernel32.Module32Next.argtypes = (
     ctypes.POINTER(MODULEENTRY32),
 )
 kernel32.Module32Next.restype = ctypes.wintypes.BOOL
+
+kernel32.Process32First.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(PROCESSENTRY32),
+)
+kernel32.Process32First.restype = ctypes.wintypes.BOOL
+
+kernel32.Process32Next.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(PROCESSENTRY32),
+)
+kernel32.Process32Next.restype = ctypes.wintypes.BOOL
 
 # LPVOID VirtualAllocEx(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize,
 #                       DWORD flAllocationType, DWORD flProtect);
@@ -670,6 +684,64 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
                 break
     finally:
         kernel32.CloseHandle(snapshot)
+
+
+def GetProcesses() -> Generator[Tuple[int, str], None, None]:
+    """
+    Yield ``(pid, name)`` for every process in the system.
+
+    Uses ``CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS)`` followed by
+    Process32First/Next — the documented user-mode way to enumerate processes
+    without an extra dependency, mirroring how GetThreads/GetModules already
+    work. ``szExeFile`` is the executable name only (no path).
+    """
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snapshot or snapshot == ctypes.wintypes.HANDLE(-1).value:
+        _raise_last_error("CreateToolhelp32Snapshot")
+
+    entry = PROCESSENTRY32()
+    entry.dwSize = ctypes.sizeof(entry)
+
+    try:
+        if not kernel32.Process32First(snapshot, ctypes.byref(entry)):
+            # Empty snapshot is theoretically possible; log and bail.
+            _logger.debug("GetProcesses: Process32First returned 0 (empty snapshot)")
+            return
+
+        while True:
+            name = entry.szExeFile.decode("utf-8", errors="replace")
+            yield int(entry.th32ProcessID), name
+            if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+                break
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+# Minimal right that lets OpenProcess succeed for a probe; available on every
+# supported Windows version.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ERROR_ACCESS_DENIED = 5
+
+
+def ProcessExists(pid: int) -> bool:
+    """
+    Return whether a process with ``pid`` currently exists.
+
+    O(1) probe via ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)``: a handle
+    means it exists; ``ERROR_ACCESS_DENIED`` means it exists but is protected
+    (still True); any other failure (notably ``ERROR_INVALID_PARAMETER`` for an
+    unknown pid) means it does not.
+    """
+    if pid < 0:
+        return False
+
+    ctypes.set_last_error(0)
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if handle:
+        kernel32.CloseHandle(handle)
+        return True
+
+    return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
 
 
 def AllocateMemory(process_handle: int, size: int, permission=None) -> int:

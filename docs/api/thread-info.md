@@ -30,8 +30,10 @@ mean "this platform does not expose that attribute via the API we use".
    .. py:attribute:: start_address
       :type: Optional[int]
 
-      Entry point of the thread, when the OS exposes it cheaply. ``None``
-      when not available.
+      Reserved for the thread's entry point. **Currently always ``None``** on
+      every platform — none of the backends fetch it, since obtaining it cheaply
+      isn't possible across Windows/Linux/macOS. Kept as a stable field for
+      forward compatibility.
 
    .. py:attribute:: state
       :type: Optional[str]
