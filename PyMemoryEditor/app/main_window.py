@@ -796,6 +796,10 @@ class MainWindow(QMainWindow):
         self._region_snapshot = None
         self._results_model.clear()
         self._scanner.set_has_results(False)
+        # If the previous target exited, _check_process_alive locked the scanner
+        # via set_busy(True). Switching to a live process must release that lock,
+        # otherwise the scan controls stay disabled against the new target.
+        self._scanner.set_busy(False)
 
         # Tear down auxiliary dialogs that hold a reference to the old
         # process — reopening them rebuilds against the new target.
