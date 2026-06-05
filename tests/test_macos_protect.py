@@ -20,6 +20,7 @@ if sys.platform != "darwin":
 from ctypes.util import find_library  # noqa: E402
 
 from PyMemoryEditor import OpenProcess  # noqa: E402
+from PyMemoryEditor.process.region import default_scan_filter  # noqa: E402
 
 
 # Page size on macOS arm64 is 16 KB; x86_64 is 4 KB. mmap will pick the right one.
@@ -66,6 +67,41 @@ def _mmap_readonly(size: int) -> int:
         raise OSError("mprotect failed")
 
     return addr
+
+
+def test_dyld_shared_cache_excluded_from_value_scans():
+    """The dyld shared cache must be flagged shared so value scans skip it.
+
+    macOS maps the read-only library blob (the dyld shared cache, ~6 GB) into
+    every process. Its ``vm_region_basic_info`` ``shared`` flag is FALSE, so
+    before the ``VM_MEMORY_SHARED_PMAP`` user_tag fix a default scan walked all
+    ~6 GB of it — making macOS scans (and this suite) 4-6x slower than the
+    other OSes, which exclude their equivalent file-backed library mappings.
+
+    Regression guard: there is at least one large readable region flagged
+    ``is_shared``, and ``default_scan_filter`` drops enough that the scanned set
+    is a small fraction of all readable memory.
+    """
+    process = OpenProcess(pid=os.getpid())
+    try:
+        regions = list(process.get_memory_regions())
+    finally:
+        process.close()
+
+    readable = [r for r in regions if r.is_readable]
+    readable_bytes = sum(r.size for r in readable)
+    scanned_bytes = sum(r.size for r in readable if default_scan_filter(r))
+
+    # The dyld shared cache shows up as one or more large readable regions that
+    # must now be classified as shared (256 MB is well below its real size).
+    big_shared = [
+        r for r in readable if r.is_shared and r.size >= 256 * 1024 * 1024
+    ]
+    assert big_shared, "dyld shared cache not recognized as a shared mapping"
+
+    # With the cache excluded the scanned set is a small slice of all readable
+    # memory — guards against a regression that scans the whole address space.
+    assert scanned_bytes < readable_bytes * 0.5
 
 
 def test_write_to_readonly_page_via_protect_flip():

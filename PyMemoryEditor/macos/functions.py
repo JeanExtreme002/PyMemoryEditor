@@ -43,17 +43,21 @@ from .types import (
     TASK_DYLD_INFO,
     TASK_DYLD_INFO_COUNT,
     VM_FLAGS_ANYWHERE,
+    VM_MEMORY_SHARED_PMAP,
     VM_PROT_COPY,
     VM_PROT_READ,
     VM_PROT_WRITE,
     VM_REGION_BASIC_INFO_64,
     VM_REGION_BASIC_INFO_COUNT_64,
+    VM_REGION_EXTENDED_INFO,
+    VM_REGION_EXTENDED_INFO_COUNT,
     mach_msg_type_number_t,
     mach_port_t,
     mach_vm_address_t,
     mach_vm_size_t,
     task_dyld_info_data_t,
     vm_region_basic_info_64,
+    vm_region_extended_info,
 )
 
 
@@ -119,6 +123,53 @@ def release_task(task: int) -> None:
         libsystem.mach_port_deallocate(mach_task_self_.value, task)
 
 
+def _region_user_tag(task: int, address: int) -> int:
+    """Return the ``vm_region_extended_info.user_tag`` for the region at ``address``.
+
+    A second, extended-info ``mach_vm_region`` query (the enumeration uses
+    basic info, which has no ``user_tag``). Returns 0 — an unassigned tag — on
+    any failure, so callers treat an unknown region as "not the shared cache".
+    """
+    addr = mach_vm_address_t(address)
+    size = mach_vm_size_t(0)
+    info = vm_region_extended_info()
+    info_count = mach_msg_type_number_t(VM_REGION_EXTENDED_INFO_COUNT)
+    object_name = mach_port_t(0)
+
+    kr = libsystem.mach_vm_region(
+        task,
+        ctypes.byref(addr),
+        ctypes.byref(size),
+        VM_REGION_EXTENDED_INFO,
+        ctypes.cast(ctypes.byref(info), ctypes.c_void_p),
+        ctypes.byref(info_count),
+        ctypes.byref(object_name),
+    )
+
+    if kr != KERN_SUCCESS:
+        return 0
+    if object_name.value:
+        libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
+    return info.user_tag
+
+
+def _region_is_shared(task: int, address: int, basic_shared: int) -> bool:
+    """Whether the region is a shared/file-backed mapping value scans should skip.
+
+    The basic-info ``shared`` flag is honored when set, but it reports FALSE for
+    the dyld shared cache — the multi-GB read-only library blob the kernel maps
+    into every process through a shared submap (tagged
+    :data:`VM_MEMORY_SHARED_PMAP`). Recognizing it here lets
+    :func:`default_scan_filter` exclude it, so a default value/pattern scan walks
+    only the target's own ~1 GB of private memory instead of ~6 GB — matching
+    the Linux/Win32 exclusion of file-backed library mappings and keeping macOS
+    scans (and the test suite) from running 4-6x slower than the other OSes.
+    """
+    if basic_shared:
+        return True
+    return _region_user_tag(task, address) == VM_MEMORY_SHARED_PMAP
+
+
 def get_memory_regions(task: int) -> Generator[MemoryRegion, None, None]:
     """
     Yield {address, size, struct} dicts describing each memory region of the task.
@@ -143,7 +194,7 @@ def get_memory_regions(task: int) -> Generator[MemoryRegion, None, None]:
             ctypes.byref(address),
             ctypes.byref(size),
             VM_REGION_BASIC_INFO_64,
-            ctypes.byref(info),
+            ctypes.cast(ctypes.byref(info), ctypes.c_void_p),
             ctypes.byref(info_count),
             ctypes.byref(object_name),
         )
@@ -168,7 +219,7 @@ def get_memory_regions(task: int) -> Generator[MemoryRegion, None, None]:
             size.value,
             info.protection,
             info.max_protection,
-            info.shared,
+            _region_is_shared(task, address.value, info.shared),
             info.reserved,
         )
 
@@ -357,7 +408,7 @@ def _query_region(task: int, address: int):
         ctypes.byref(addr),
         ctypes.byref(size),
         VM_REGION_BASIC_INFO_64,
-        ctypes.byref(info),
+        ctypes.cast(ctypes.byref(info), ctypes.c_void_p),
         ctypes.byref(info_count),
         ctypes.byref(object_name),
     )
@@ -381,7 +432,7 @@ def _query_region(task: int, address: int):
             size.value,
             info.protection,
             info.max_protection,
-            info.shared,
+            _region_is_shared(task, addr.value, info.shared),
             info.reserved,
         ),
     )
