@@ -280,6 +280,10 @@ class CheatTable(QWidget):
 
         entry = self._entries[row]
         item = self._table.item(row, column)
+        if item is None:
+            # cellChanged can fire mid-teardown for a cell whose item was
+            # already cleared; nothing to read.
+            return
 
         if column == self.COL_ACTIVE:
             entry.frozen = item.checkState() == Qt.Checked

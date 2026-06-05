@@ -52,7 +52,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, PointerPath
 from PyMemoryEditor.process.pointer_scan import intersect_pointer_paths
 
-from ._widgets import NumericItem, parse_hex_address
+from ._widgets import NumericItem, parse_hex_address, shutdown_worker_thread
 from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec
 
 
@@ -993,14 +993,9 @@ class PointerScanDialog(QDialog):
         self._export_btn.setEnabled(True)
 
     def closeEvent(self, event):  # noqa: N802 — Qt naming
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.cancel()
-            try:
-                self._worker.rows_ready.disconnect()
-                self._worker.progress.disconnect()
-                self._worker.status.disconnect()
-                self._worker.finished_ok.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            self._worker.wait(2000)
+        # Unhook every signal (the previous code missed `error`/`finished`, so
+        # a late emit could land on a destroyed dialog) and join the worker; if
+        # it can't stop in time it's detached rather than destroyed under us.
+        shutdown_worker_thread(self._worker, wait_ms=2000)
+        self._worker = None
         super().closeEvent(event)

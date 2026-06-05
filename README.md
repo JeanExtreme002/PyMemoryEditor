@@ -1,15 +1,8 @@
 # PyMemoryEditor
 
-A pure-Python library (built on [ctypes](https://docs.python.org/3/library/ctypes.html)) that lets you **inspect, modify and search the memory of any running process in a few lines of Python** — Cheat Engine workflows on Windows, Linux and macOS. 
+A pure-Python library (built on [ctypes](https://docs.python.org/3/library/ctypes.html)) that lets you **inspect, modify and search the memory of any running process in a few lines of Python** — Cheat Engine workflows on Windows, Linux and macOS!
 
-📖 Full guide at **[Read the Docs](https://pymemoryeditor.readthedocs.io)**.
-
-[![Python Package](https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml/badge.svg)](https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml)
-[![Pypi](https://img.shields.io/pypi/v/PyMemoryEditor)](https://pypi.org/project/PyMemoryEditor/)
-[![License](https://img.shields.io/pypi/l/PyMemoryEditor)](https://pypi.org/project/PyMemoryEditor/)
-[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-red)](https://pypi.org/project/PyMemoryEditor/)
-[![Python Version](https://img.shields.io/badge/python-3.10+-8A2BE2)](https://pypi.org/project/PyMemoryEditor/)
-[![Downloads](https://static.pepy.tech/personalized-badge/pymemoryeditor?period=total&units=international_system&left_color=grey&right_color=orange&left_text=Downloads)](https://pypi.org/project/PyMemoryEditor/)
+---
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/JeanExtreme002/PyMemoryEditor/main/PyMemoryEditor/app/assets/icon.svg" alt="PyMemoryEditor logo" width="120" />
@@ -21,8 +14,15 @@ A pure-Python library (built on [ctypes](https://docs.python.org/3/library/ctype
 </p>
 
 <p align="center">
-  Tweak a value in a running game · inspect a live program's state ·
-  harvest data straight from RAM.
+  Runs on <b>🪟 Windows</b> · <b>🐧 Linux</b> · <b>🍎 macOS</b> — 32-bit and 64-bit.
+</p>
+
+<p align="center">
+  <a href="https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml"><img src="https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml/badge.svg" alt="Python Package" /></a>
+  <a href="https://pypi.org/project/PyMemoryEditor/"><img src="https://img.shields.io/pypi/v/PyMemoryEditor" alt="Pypi" /></a>
+  <a href="https://github.com/JeanExtreme002/PyMemoryEditor"><img src="https://img.shields.io/pypi/l/PyMemoryEditor" alt="License" /></a>
+  <a href="https://github.com/JeanExtreme002/PyMemoryEditor"><img src="https://img.shields.io/badge/python-3.10+-8A2BE2" alt="Python Version" /></a>
+  <a href="https://pypi.org/project/PyMemoryEditor/"><img src="https://static.pepy.tech/personalized-badge/pymemoryeditor?period=total&units=international_system&left_color=grey&right_color=orange&left_text=Downloads" alt="Downloads" /></a>
 </p>
 
 <p align="center">
@@ -30,7 +30,8 @@ A pure-Python library (built on [ctypes](https://docs.python.org/3/library/ctype
 </p>
 
 <p align="center">
-  Runs on <b>🪟 Windows</b> · <b>🐧 Linux</b> · <b>🍎 macOS</b> — 32-bit and 64-bit, with the same code on all three.
+  Tweak a value in a running game · inspect a live program's state ·
+  harvest data straight from RAM.
 </p>
 
 ---
@@ -55,6 +56,7 @@ selective scans:
 ```bash
 pip install "PyMemoryEditor[speed]"
 ```
+📖 Full guide at **[Read the Docs](https://pymemoryeditor.readthedocs.io)**.
 
 ---
 

@@ -155,6 +155,11 @@ class MemoryViewerDialog(QDialog):
         size = int(self._size_spin.value())
         try:
             data = self._process.read_process_memory(addr, bytes, size)
+            # The conversion/format must stay inside the guard: a backend that
+            # returns a non-buffer object would make bytes(data) raise TypeError,
+            # which (outside the try) escapes this slot and crashes the app.
+            if not isinstance(data, (bytes, bytearray)):
+                data = bytes(data)
         except Exception as exc:  # noqa: BLE001 — surface every backend error
             self._dump.setPlainText("")
             self._status.setText(f"Read failed: {type(exc).__name__}: {exc}")
@@ -167,8 +172,6 @@ class MemoryViewerDialog(QDialog):
             )
             return
 
-        if not isinstance(data, (bytes, bytearray)):
-            data = bytes(data)
         self._dump.setPlainText(_format_hex_dump(addr, bytes(data)))
         self._status.setText(f"Read {len(data):,} bytes from 0x{addr:X}")
 

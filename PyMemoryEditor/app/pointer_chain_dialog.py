@@ -501,6 +501,18 @@ class PointerChainDialog(QDialog):
                 else f"base + sum of {len(offsets)} offset(s)"
             )
 
+        # The resolved address is later emitted through a "qulonglong" signal
+        # and formatted as hex; a negative or >= 2**64 value (raw mode with
+        # large/negative offsets) would raise OverflowError/ValueError. Reject
+        # it cleanly instead of crashing.
+        if not 0 <= resolved < 2 ** 64:
+            self._resolved_address = None
+            self._output_label.setText("Resolved address: <out of 64-bit range>")
+            self._value_label.setText("Value: —")
+            self._copy_addr_btn.setEnabled(False)
+            self._add_to_cheat_btn.setEnabled(False)
+            return
+
         self._resolved_address = resolved
         self._output_label.setText(
             f"Resolved address: 0x{resolved:X}  ({hop_summary})"
