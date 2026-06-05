@@ -198,10 +198,13 @@ missing.
 ## Scan acceleration (the `speed` extra)
 
 By default every scan runs in pure Python, with the hottest paths already
-delegated to C primitives (`bytes.find` for exact matches, `struct.iter_unpack`
-to decode a region). What stays in Python is the per-value **comparison loop**
-of the ordered scans (`BIGGER_THAN`, `SMALLER_THAN`, `VALUE_BETWEEN`, …): for a
-multi-megabyte region it boxes and compares millions of values one at a time.
+delegated to C primitives: `bytes.find` for exact matches, `struct.iter_unpack`
+to decode a region, and a **regex byte-class prefilter** for ordered *string*
+comparisons (`BIGGER_THAN` / `SMALLER_THAN` / `VALUE_BETWEEN` on `str`), which
+skips the long runs of non-matching bytes in C instead of stepping every offset.
+What stays in Python is the per-value **comparison loop** of the ordered
+*numeric* scans: for a multi-megabyte region it boxes and compares millions of
+values one at a time.
 
 Installing the optional [`speed`](../installation.md#install-with-scan-acceleration-speed)
 extra replaces that loop with a single vectorized NumPy comparison:
@@ -241,7 +244,8 @@ emitting matches.
 <tr><th>Scenario</th><th>Typical speedup</th></tr>
 <tr><td>Selective scan of a large region (few matches — the usual first scan / refine step)</td><td><b>10–60×</b></td></tr>
 <tr><td>Scan where most values match (e.g. <code>&gt; 0</code> on mostly-positive data)</td><td>~2× (result building dominates)</td></tr>
-<tr><td><code>str</code> / <code>bytes</code> scans, or unusual widths (3/6/7 bytes)</td><td>no change (no NumPy fast path; pure-Python loop)</td></tr>
+<tr><td><code>str</code> ordered scans (<code>&gt;</code>, <code>&lt;</code>, <code>between</code>)</td><td>no NumPy fast path — instead C-accelerated by the regex byte-class prefilter (independent of the <code>speed</code> extra)</td></tr>
+<tr><td><code>bytes</code> scans, or unusual widths (3/6/7 bytes)</td><td>no change (no NumPy fast path; pure-Python loop)</td></tr>
 <tr><td><code>EXACT_VALUE</code> via <code>search_by_value</code></td><td>already <code>bytes.find</code> in C — NumPy not used</td></tr>
 </table>
 
@@ -262,9 +266,14 @@ for address in process.search_by_value(str, 6, "PLAYER"):
     print(hex(address))
 ```
 
-For `bytes`, comparison ordering depends on your system's `byteorder` —
-something to keep in mind when using `BIGGER_THAN` / `SMALLER_THAN` on raw
-bytes.
+Ordering for the comparison modes differs by type:
+
+- **`str`** compares the UTF-8 bytes **lexicographically** (big-endian), so
+  `"AA" < "AB" < "B"`. The shorter of two values is NUL-padded to `bufflength`
+  before comparing, and a reversed `VALUE_BETWEEN` range (`start > end`) simply
+  matches nothing.
+- **`bytes`** compares using your system's `byteorder` — something to keep in
+  mind when using `BIGGER_THAN` / `SMALLER_THAN` on raw bytes.
 
 ```{seealso}
 - [Pattern scan](pattern-scan.md) — find data by **shape** with regex and AOB
