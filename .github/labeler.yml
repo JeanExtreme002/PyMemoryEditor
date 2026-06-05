@@ -21,7 +21,7 @@ win32:
       - any-glob-to-any-file:
           - "PyMemoryEditor/win32/**"
 
-macos:
+macOS:
   - changed-files:
       - any-glob-to-any-file:
           - "PyMemoryEditor/macos/**"
