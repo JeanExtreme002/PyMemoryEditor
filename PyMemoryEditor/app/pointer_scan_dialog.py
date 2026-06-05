@@ -369,7 +369,7 @@ class PointerScanDialog(QDialog):
 
         self._depth_spin = QSpinBox()
         self._depth_spin.setRange(1, 12)
-        self._depth_spin.setValue(5)
+        self._depth_spin.setValue(3)
         self._depth_spin.setToolTip(
             "Maximum pointer levels (offsets) in a chain. Deeper finds more "
             "paths but costs exponentially more time."
@@ -487,16 +487,16 @@ class PointerScanDialog(QDialog):
 
         button_row.addStretch(1)
 
-        self._count_label = QLabel("")
-        self._count_label.setObjectName("hint")
-        button_row.addWidget(self._count_label)
-
         close_btn = QPushButton("Close")
         close_btn.setStyleSheet(_equal_height)
         close_btn.clicked.connect(self.accept)
         button_row.addWidget(close_btn)
 
         layout.addLayout(button_row)
+
+        self._count_label = QLabel("")
+        self._count_label.setObjectName("hint")
+        layout.addWidget(self._count_label)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)

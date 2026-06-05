@@ -346,7 +346,7 @@ def find_pointer_paths(
     is_static: Callable[[int], bool],
     module_resolver: Callable[[int], Optional[Tuple[str, int]]],
     *,
-    max_depth: int = 5,
+    max_depth: int = 3,
     max_offset: int = 0x400,
     ptr_size: int = 8,
     max_results: Optional[int] = None,

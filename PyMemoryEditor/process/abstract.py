@@ -776,7 +776,7 @@ class AbstractProcess(ABC):
         self,
         target_address: int,
         *,
-        max_depth: int = 5,
+        max_depth: int = 3,
         max_offset: int = 0x400,
         ptr_size: Optional[int] = None,
         aligned: bool = True,
@@ -836,7 +836,7 @@ class AbstractProcess(ABC):
         ::
 
             hp_addr = next(process.search_by_value(int, 4, 1234))
-            for path in process.scan_pointer_paths(hp_addr, max_depth=5, max_results=20):
+            for path in process.scan_pointer_paths(hp_addr, max_depth=3, max_results=20):
                 print(path)                 # "game.exe"+0x10F4F4 -> [+0x0] -> +0x158
                 assert path.resolve(process) == hp_addr
 
