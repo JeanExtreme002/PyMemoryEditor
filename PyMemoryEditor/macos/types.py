@@ -10,7 +10,7 @@ References:
 - mach/kern_return.h
 """
 
-from ctypes import Structure, c_int, c_uint, c_uint64, c_ushort, sizeof
+from ctypes import Structure, c_int, c_ubyte, c_uint, c_uint64, c_ushort, sizeof
 
 
 # `info_count` in mach_vm_region is measured in mach_msg_type_number_t units
@@ -33,6 +33,17 @@ memory_object_offset_t = c_uint64
 
 # Region info flavors
 VM_REGION_BASIC_INFO_64 = 9
+VM_REGION_EXTENDED_INFO = 13
+
+# user_tag (from vm_region_extended_info) of the dyld shared cache regions —
+# the read-only library text/data blob the kernel maps into *every* process
+# via a shared submap. On this machine it totals ~5.8 GB across three regions.
+# Crucially, the basic-info `shared` flag reports FALSE for these regions, so
+# without recognizing the tag a default value scan walks all ~6 GB of library
+# memory — making macOS scans (and the test suite) 4-6x slower than Linux/Win32,
+# which exclude the equivalent file-backed/shared mappings. See VM_MEMORY_*
+# constants in <mach/vm_statistics.h>.
+VM_MEMORY_SHARED_PMAP = 32
 
 # task_info() flavor that returns dyld's image-list pointer (mach/task_info.h).
 TASK_DYLD_INFO = 17
@@ -74,6 +85,34 @@ class vm_region_basic_info_64(Structure):
 # Number of mach_msg_type_number_t units in vm_region_basic_info_64.
 # Used as the in/out `info_count` parameter to mach_vm_region.
 VM_REGION_BASIC_INFO_COUNT_64 = sizeof(vm_region_basic_info_64) // _NATURAL_T_SIZE
+
+
+class vm_region_extended_info(Structure):
+    """Layout of struct vm_region_extended_info_data_t from <mach/vm_region.h>.
+
+    Only ``user_tag`` is consumed today (to recognize the dyld shared cache —
+    see :data:`VM_MEMORY_SHARED_PMAP`); the remaining fields are declared so the
+    struct size — and therefore :data:`VM_REGION_EXTENDED_INFO_COUNT` — matches
+    what the kernel expects.
+    """
+
+    _fields_ = [
+        ("protection", vm_prot_t),
+        ("user_tag", c_uint),
+        ("pages_resident", c_uint),
+        ("pages_shared_now_private", c_uint),
+        ("pages_swapped_out", c_uint),
+        ("pages_dirtied", c_uint),
+        ("ref_count", c_uint),
+        ("shadow_depth", c_ushort),
+        ("external_pager", c_ubyte),
+        ("share_mode", c_ubyte),
+        ("pages_reusable", c_uint),
+    ]
+
+
+# Number of mach_msg_type_number_t units in vm_region_extended_info.
+VM_REGION_EXTENDED_INFO_COUNT = sizeof(vm_region_extended_info) // _NATURAL_T_SIZE
 
 
 class task_dyld_info_data_t(Structure):

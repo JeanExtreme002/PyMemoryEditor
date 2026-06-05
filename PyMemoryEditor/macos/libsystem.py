@@ -24,7 +24,6 @@ from .types import (
     mach_vm_size_t,
     task_t,
     vm_map_t,
-    vm_region_basic_info_64,
 )
 
 
@@ -82,7 +81,10 @@ libsystem.mach_vm_region.argtypes = (
     POINTER(mach_vm_address_t),
     POINTER(mach_vm_size_t),
     ctypes.c_int,
-    POINTER(vm_region_basic_info_64),
+    # `vm_region_info_t` is a generic `int *` the caller sizes via `flavor` —
+    # declare it as an opaque pointer so both vm_region_basic_info_64 and
+    # vm_region_extended_info can be passed (each via ctypes.cast(byref, ...)).
+    ctypes.c_void_p,
     POINTER(mach_msg_type_number_t),
     POINTER(mach_port_t),
 )
