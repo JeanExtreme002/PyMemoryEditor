@@ -16,8 +16,8 @@
 <p align="center">
   <a href="https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml"><img src="https://github.com/JeanExtreme002/PyMemoryEditor/actions/workflows/python-package.yml/badge.svg" alt="Python Package" /></a>
   <a href="https://pypi.org/project/PyMemoryEditor/"><img src="https://img.shields.io/pypi/v/PyMemoryEditor" alt="Pypi" /></a>
-  <a href="https://pypi.org/project/PyMemoryEditor/"><img src="https://img.shields.io/pypi/l/PyMemoryEditor" alt="License" /></a>
-  <a href="https://pypi.org/project/PyMemoryEditor/"><img src="https://img.shields.io/badge/python-3.10+-8A2BE2" alt="Python Version" /></a>
+  <a href="https://github.com/JeanExtreme002/PyMemoryEditor"><img src="https://img.shields.io/pypi/l/PyMemoryEditor" alt="License" /></a>
+  <a href="https://github.com/JeanExtreme002/PyMemoryEditor"><img src="https://img.shields.io/badge/python-3.10+-8A2BE2" alt="Python Version" /></a>
   <a href="https://pypi.org/project/PyMemoryEditor/"><img src="https://static.pepy.tech/personalized-badge/pymemoryeditor?period=total&units=international_system&left_color=grey&right_color=orange&left_text=Downloads" alt="Downloads" /></a>
 </p>
 

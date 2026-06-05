@@ -22,7 +22,7 @@ from typing import List, Optional, Union
 
 import psutil
 
-from PySide6.QtCore import Qt, QSettings, QTimer, Signal
+from PySide6.QtCore import Qt, QEventLoop, QSettings, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -81,6 +81,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._process = process
         self._worker: Optional[Union[FirstScanWorker, RefineScanWorker]] = None
+        # Workers that wouldn't stop in time on shutdown are detached here so
+        # the closing window can't destroy a still-running QThread.
+        self._zombie_workers: List[QThread] = []
         self._region_snapshot: Optional[list] = None
         self._memory_map: Optional[MemoryMapDialog] = None
         self._hex_viewers: List[MemoryViewerDialog] = []
@@ -781,10 +784,10 @@ class MainWindow(QMainWindow):
         if picker.exec() != picker.DialogCode.Accepted or picker.process is None:
             return
 
-        try:
-            self._process.close()
-        except Exception:
-            pass
+        # Keep the old handle open until the old cheat poller has been joined
+        # (see below). Closing it here would let the still-running poller thread
+        # read from a closed handle in the window before shutdown().
+        old_process = self._process
 
         self._process = picker.process
         self._proc_name = self._read_proc_name()
@@ -817,6 +820,11 @@ class MainWindow(QMainWindow):
             old_cheat.shutdown()
         except Exception:
             pass
+        # The old poller is joined now, so it's safe to release the old handle.
+        try:
+            old_process.close()
+        except Exception:
+            pass
         old_index = self._right_splitter.indexOf(old_cheat)
         self._cheat = CheatTable(self._process)
         self._cheat.pointer_scan_for_address.connect(self._open_pointer_scan_dialog)
@@ -830,6 +838,11 @@ class MainWindow(QMainWindow):
         self._status.showMessage(f"Now targeting PID {self._process.pid}.")
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # Stop the heartbeat *first*: _shutdown_worker pumps the event loop
+        # below, and a heartbeat firing during that pump could pop a modal
+        # dialog mid-teardown.
+        self._heartbeat.stop()
+
         # The cheat poller is a child widget but its closeEvent is *not*
         # guaranteed to fire on a top-level window close — only on an explicit
         # close of the child. Drive it directly so the QThread is stopped
@@ -840,7 +853,21 @@ class MainWindow(QMainWindow):
             pass
 
         self._shutdown_worker()
-        self._heartbeat.stop()
+
+        # Close worker-bearing auxiliary dialogs so their own closeEvent stops
+        # and joins the background thread. Otherwise the imminent destruction of
+        # this window would destroy those still-running QThreads and abort the
+        # process ("QThread: Destroyed while thread is still running").
+        for attr in (
+            "_memory_map",
+            "_threads_dialog",
+            "_modules_dialog",
+            "_pointer_scan_dialog",
+        ):
+            dialog = getattr(self, attr, None)
+            if dialog is not None:
+                dialog.close()
+
         self.closing.emit()
         super().closeEvent(event)
 
@@ -848,14 +875,28 @@ class MainWindow(QMainWindow):
         """
         Stop the active scan worker safely.
 
-        Disconnect every signal **before** waiting — if the wait times out
-        (long scan that ignores cancel), a late ``chunk_ready`` / ``finished``
-        emit would otherwise land on a half-destroyed UI. Then wait the
-        capped time and forcibly forget the worker either way.
+        Two hazards make a naive ``worker.wait()`` here both deadlock-prone and
+        crash-prone:
+
+        * ``chunk_ready`` is a *BlockingQueuedConnection* — the worker parks
+          inside ``emit()`` until this (GUI) thread services the slot. If we
+          just call ``wait()`` the GUI thread is stuck in ``wait()`` and can
+          never run the event loop to release the worker → deadlock until the
+          timeout. We therefore *pump the event loop* while waiting.
+        * Destroying a still-running ``QThread`` aborts the process
+          ("QThread: Destroyed while thread is still running"). If the worker
+          is wedged in a long backend syscall and won't stop in time, we must
+          **not** let the closing window take it down — we detach it and keep a
+          reference until it finishes on its own.
+
+        Disconnect every signal up front: a late ``chunk_ready``/``finished``
+        must not touch the closing UI, and ``finished`` must not kick off the
+        ``_fill_initial_values`` follow-up scan during teardown.
         """
         worker = self._worker
         if worker is None:
             return
+        self._worker = None
         worker.cancel()
         try:
             worker.chunk_ready.disconnect()
@@ -867,8 +908,32 @@ class MainWindow(QMainWindow):
         except (RuntimeError, TypeError):
             # Already disconnected / no slots — fine, we just want them gone.
             pass
-        worker.wait(_WORKER_SHUTDOWN_WAIT_MS)
-        self._worker = None
+
+        # Pump queued cross-thread calls so any in-flight blocking emit is
+        # dispatched (which releases the worker even though we just
+        # disconnected the slot) and the worker can observe cancel() and unwind.
+        waited = 0
+        step_ms = 25
+        while worker.isRunning() and waited < _WORKER_SHUTDOWN_WAIT_MS:
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, step_ms)
+            worker.wait(step_ms)
+            waited += step_ms
+
+        if worker.isRunning():
+            # Still wedged in a backend call. Detach it from this window so the
+            # imminent window destruction can't destroy a live QThread, and
+            # keep it referenced until it finishes on its own.
+            worker.setParent(None)
+            self._zombie_workers.append(worker)
+            worker.finished.connect(lambda: self._reap_worker(worker))
+        else:
+            worker.deleteLater()
+
+    def _reap_worker(self, worker: QThread) -> None:
+        """Drop our reference to a detached worker once it has finished."""
+        if worker in self._zombie_workers:
+            self._zombie_workers.remove(worker)
+        worker.deleteLater()
 
 
 def _safe_for_json(value) -> object:

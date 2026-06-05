@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess, ThreadInfo
 
-from ._widgets import NumericItem
+from ._widgets import NumericItem, shutdown_worker_thread
 
 
 class _ThreadsWorker(QThread):
@@ -195,7 +195,8 @@ class ThreadsDialog(QDialog):
     def _select_tid(self, tid: int) -> None:
         """Re-select the row whose TID matches (no scrolling)."""
         for row in range(self._model.rowCount()):
-            if self._model.item(row, 0).data(Qt.UserRole) == tid:
+            item = self._model.item(row, 0)
+            if item is not None and item.data(Qt.UserRole) == tid:
                 self._table.selectRow(row)
                 return
 
@@ -213,12 +214,6 @@ class ThreadsDialog(QDialog):
 
     def closeEvent(self, event):  # noqa: N802 — Qt naming
         self._timer.stop()
-        if self._worker is not None and self._worker.isRunning():
-            try:
-                self._worker.threads_ready.disconnect()
-                self._worker.threads_failed.disconnect()
-                self._worker.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            self._worker.wait(1000)
+        shutdown_worker_thread(self._worker, wait_ms=1000)
+        self._worker = None
         super().closeEvent(event)

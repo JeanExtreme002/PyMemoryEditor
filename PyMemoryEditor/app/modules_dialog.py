@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess, ModuleInfo
 
-from ._widgets import NumericItem
+from ._widgets import NumericItem, shutdown_worker_thread
 from .memory_map_dialog import _format_size
 
 
@@ -239,7 +239,8 @@ class ModulesDialog(QDialog):
     def _select_address(self, address: int) -> None:
         """Re-select the row whose base address matches (no scrolling)."""
         for row in range(self._model.rowCount()):
-            if self._model.item(row, 1).data(Qt.UserRole) == address:
+            item = self._model.item(row, 1)
+            if item is not None and item.data(Qt.UserRole) == address:
                 self._table.selectRow(row)
                 return
 
@@ -260,8 +261,12 @@ class ModulesDialog(QDialog):
         if not rows:
             return None
         row = rows[0].row()
-        base = self._model.item(row, 1).data(Qt.UserRole)
-        size = self._model.item(row, 2).data(Qt.UserRole)
+        base_item = self._model.item(row, 1)
+        size_item = self._model.item(row, 2)
+        if base_item is None or size_item is None:
+            return None
+        base = base_item.data(Qt.UserRole)
+        size = size_item.data(Qt.UserRole)
         return {"base_address": int(base), "size": int(size)}
 
     def _show_context_menu(self, pos) -> None:
@@ -323,14 +328,8 @@ class ModulesDialog(QDialog):
 
     def closeEvent(self, event):  # noqa: N802 — Qt naming
         self._auto_timer.stop()
-        # If the enumeration is still in flight, let it finish but unhook our
-        # slots so a late emit doesn't touch a destroyed dialog.
-        if self._worker is not None and self._worker.isRunning():
-            try:
-                self._worker.modules_ready.disconnect()
-                self._worker.modules_failed.disconnect()
-                self._worker.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            self._worker.wait(1000)
+        # Unhook + join the enumeration worker; if it can't stop in time it's
+        # detached rather than destroyed under us.
+        shutdown_worker_thread(self._worker, wait_ms=1000)
+        self._worker = None
         super().closeEvent(event)

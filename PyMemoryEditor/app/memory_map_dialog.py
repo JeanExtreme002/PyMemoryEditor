@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess, MemoryRegion, MemoryRegionSnapshot
 
-from ._widgets import NumericItem
+from ._widgets import NumericItem, shutdown_worker_thread
 
 
 class _SnapshotWorker(QThread):
@@ -471,7 +471,8 @@ class MemoryMapDialog(QDialog):
     def _select_address(self, address: int, *, scroll: bool = True) -> None:
         """Select the row whose base address equals ``address`` (if present)."""
         for row in range(self._model.rowCount()):
-            if self._model.item(row, 0).data(Qt.UserRole) == address:
+            item = self._model.item(row, 0)
+            if item is not None and item.data(Qt.UserRole) == address:
                 self._table.selectRow(row)
                 if scroll:
                     self._table.scrollTo(self._model.index(row, 0))
@@ -491,17 +492,10 @@ class MemoryMapDialog(QDialog):
 
     def closeEvent(self, event):  # noqa: N802 — Qt naming
         self._auto_timer.stop()
-        # If the snapshot is still in flight, let it finish without holding
-        # the UI hostage but unhook our slots so a late emit doesn't touch
-        # a destroyed dialog.
-        if self._worker is not None and self._worker.isRunning():
-            try:
-                self._worker.snapshot_ready.disconnect()
-                self._worker.snapshot_failed.disconnect()
-                self._worker.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            self._worker.wait(1000)
+        # Unhook + join the snapshot worker; if it can't stop in time it's
+        # detached rather than destroyed under us.
+        shutdown_worker_thread(self._worker, wait_ms=1000)
+        self._worker = None
         super().closeEvent(event)
 
     def _selected_region(self) -> Optional[MemoryRegion]:
@@ -509,7 +503,10 @@ class MemoryMapDialog(QDialog):
         if not rows:
             return None
         row = rows[0].row()
-        addr = int(self._model.item(row, 0).data(Qt.UserRole))
+        item = self._model.item(row, 0)
+        if item is None:
+            return None
+        addr = int(item.data(Qt.UserRole))
         # Look up the real MemoryRegion from the snapshot so callers get the
         # full set of fields (is_writable, struct, path, …). Falls back to a
         # minimal stub if the row's address is no longer in the snapshot
