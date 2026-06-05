@@ -374,3 +374,64 @@ def test_scan_memory_double_bigger_than_negative():
 
     # -1.0 (offset 8), 1.0 (16), 3.0 (24) match; -3.0 (offset 0) does not.
     assert results == [8, 16, 24]
+
+
+# --- String ordered-comparison fast path (regex byte-class prefilter) ---------
+#
+# These exercise the prefilter directly with hand-checked expected offsets, on
+# top of the property-based equivalence tests in test_scan_properties.py.
+
+
+def _scan_str(data, target, size, scan_type):
+    return list(scan_memory(data, len(data), target, size, scan_type, str))
+
+
+def test_scan_string_bigger_than_first_byte_dominates():
+    # 2-byte windows, step 1. Target "MA" (0x4D41). Accept windows > it.
+    data = b"AAZZMAMBLZ"
+    results = _scan_str(data, b"MA", 2, ScanTypesEnum.BIGGER_THAN)
+    # Windows (big-endian) and whether > "MA": AA<,AZ<,ZZ>,ZM>,MA=,AM<,MB>,BL<,LZ<
+    assert results == [2, 3, 6]
+
+
+def test_scan_string_smaller_than_includes_low_bytes():
+    data = b"AAMAZZ"
+    results = _scan_str(data, b"MA", 2, ScanTypesEnum.SMALLER_THAN)
+    # AA<,AM<,MA=,AZ<,ZZ>  -> offsets 0,1,3 are smaller.
+    assert results == [0, 1, 3]
+
+
+def test_scan_string_value_between_skips_noise():
+    # Only windows whose value lands in ["EA","WZ"] inclusive should match.
+    data = b"AB" + b"EM" + b"ZZ" + b"WZ" + b"  "
+    results = _scan_str(data, (b"EA", b"WZ"), 2, ScanTypesEnum.VALUE_BETWEEN)
+    # offsets: 0 AB(no) 1 BE(no) 2 EM(yes) 3 MZ(yes) 4 ZZ(no) 5 ZW(no) 6 WZ(yes)
+    #          7 Z?(no) 8 ' '..(no)
+    assert results == [2, 3, 6]
+
+
+def test_scan_string_value_between_reversed_range_is_empty():
+    """Regression: a reversed range (start > end) must yield nothing, not crash.
+
+    The fast path builds a regex class ``[start_byte-end_byte]``; a reversed
+    range would compile to ``[hi-lo]`` and raise ``re.error: bad character
+    range``. The byte-by-byte loop returns [] for start > end, so the fast path
+    must too.
+    """
+    data = b"MMMMMM"
+    assert _scan_str(data, (b"ZZ", b"AA"), 2, ScanTypesEnum.VALUE_BETWEEN) == []
+    # Reversed but sharing a first byte still resolves to empty.
+    assert _scan_str(data, (b"MZ", b"MA"), 2, ScanTypesEnum.VALUE_BETWEEN) == []
+
+
+def test_scan_string_regex_special_bytes_as_bounds():
+    """Bytes that are special inside a regex class (]^-\\[) must be literal."""
+    data = bytes([0x5D, 0x5E, 0x2D, 0x5C, 0x5B, 0x41, 0xFF])  # ] ^ - \\ [ A 0xff
+    # 1-byte EXACT-equivalent via BIGGER_THAN_OR_EXACT over a special boundary:
+    # bytes >= '-' (0x2D): all except none here are below 0x2D.
+    results = _scan_str(data, b"\x2d", 1, ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE)
+    assert results == [0, 1, 2, 3, 4, 5, 6]
+    # SMALLER_THAN ']' (0x5D): bytes < 0x5D are
+    #   '-'(0x2d=off2), '\\'(0x5c=off3), '['(0x5b=off4), 'A'(0x41=off5).
+    results = _scan_str(data, b"\x5d", 1, ScanTypesEnum.SMALLER_THAN)
+    assert results == [2, 3, 4, 5]

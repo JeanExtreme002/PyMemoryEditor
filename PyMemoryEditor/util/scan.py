@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import re
 import struct
 import sys
 from bisect import bisect_left
@@ -206,6 +207,57 @@ def scan_memory_for_exact_value(
             yield offset
 
 
+def _scan_string_ordered(
+    data: bytes,
+    end: int,
+    target_value_size: int,
+    lo_byte: int,
+    hi_byte: int,
+    boundary_bytes: frozenset,
+    predicate,
+) -> Generator[int, None, None]:
+    """C-accelerated string scan for ordered comparisons (>, <, >=, <=, between).
+
+    Strings compare big-endian, so a fixed-width window can only satisfy an
+    ordered comparison when its *first* byte lies in ``[lo_byte, hi_byte]``.
+    Those candidate positions are located with a regex byte class whose C engine
+    skips the long NUL runs of reserved/zeroed memory orders of magnitude faster
+    than a per-offset Python loop — the same idea that makes the EXACT path's
+    ``bytes.find`` fast. A candidate is accepted outright unless its first byte
+    *ties* a comparison bound (``boundary_bytes``), in which case the full window
+    is decoded and checked with ``predicate``. Yields offsets in ascending order
+    (``re.finditer`` walks left to right), identical to the byte-by-byte loop.
+
+    ``lo_byte > hi_byte`` denotes an empty candidate range — it arises for a
+    reversed VALUE_BETWEEN (``start > end``), where the byte-by-byte loop's
+    ``start <= v <= end`` also matches nothing. Return empty rather than let
+    ``re`` raise "bad character range" on a ``[hi-lo]`` class.
+    """
+    if end <= 0 or lo_byte > hi_byte:
+        return
+
+    # re.escape keeps every byte (incl. class-specials like ] ^ - [ and NUL)
+    # literal inside the class; the unescaped `-` between them is the range op.
+    # Compile with NO flags: on a bytes pattern `[lo-hi]` is the exact inclusive
+    # ordinal range. In particular do NOT pass re.IGNORECASE — it folds ASCII
+    # case *inside* a class, so a range overlapping A-Z/a-z would match the
+    # opposite case too and silently return non-matching offsets.
+    matcher = re.compile(
+        b"[" + re.escape(bytes((lo_byte,))) + b"-" + re.escape(bytes((hi_byte,))) + b"]"
+    )
+
+    for match in matcher.finditer(data):
+        offset = match.start()
+        if offset >= end:
+            break
+        if data[offset] in boundary_bytes:
+            value = int.from_bytes(data[offset : offset + target_value_size], "big")
+            if predicate(value):
+                yield offset
+        else:
+            yield offset
+
+
 def scan_memory(
     memory_region_data: Sequence,
     memory_region_data_size: int,
@@ -236,14 +288,25 @@ def scan_memory(
     # narrowing for the downstream int.from_bytes / struct.unpack calls.
     byte_order: _ByteOrder = cast(_ByteOrder, "big" if is_string else sys.byteorder)
 
+    # First byte of each target, used by the string fast path below to build the
+    # candidate-byte regex class. Captured here where `target_value`'s type is
+    # narrowed (tuple vs bytes); `None` means "empty target, no fast path".
+    first_byte: Optional[int]
+    start_first_byte: Optional[int]
+    end_first_byte: Optional[int]
     if isinstance(target_value, tuple):
         start_target_value = _decode_target(target_value[0], byte_order, pytype)
         end_target_value = _decode_target(target_value[1], byte_order, pytype)
         target_value_decoded: Union[int, float] = 0
+        first_byte = None
+        start_first_byte = target_value[0][0] if target_value[0] else None
+        end_first_byte = target_value[1][0] if target_value[1] else None
     else:
         target_value_decoded = _decode_target(target_value, byte_order, pytype)
         start_target_value = 0
         end_target_value = 0
+        first_byte = target_value[0] if target_value else None
+        start_first_byte = end_first_byte = None
 
     fmt = None if is_string else _struct_format(byte_order, target_value_size, pytype)
 
@@ -333,6 +396,37 @@ def scan_memory(
     end = memory_region_data_size - target_value_size + 1
     int_from_bytes = int.from_bytes
     signed = pytype is int
+
+    # Fast path for ordered string comparisons. Strings compare big-endian, so a
+    # window can only match when its first byte falls in a known range; a regex
+    # byte-class prefilter finds those candidates in C, skipping the huge NUL
+    # runs of reserved memory instead of stepping every byte in Python. Numerics
+    # with unusual sizes (3/6/7) decode little-endian and fall through unchanged.
+    if is_string:
+        spec = None
+        if first_byte is not None and scan_type is ScanTypesEnum.BIGGER_THAN:
+            spec = (first_byte, 0xFF, frozenset((first_byte,)),
+                    lambda v: v > target_value_decoded)
+        elif first_byte is not None and scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
+            spec = (first_byte, 0xFF, frozenset((first_byte,)),
+                    lambda v: v >= target_value_decoded)
+        elif first_byte is not None and scan_type is ScanTypesEnum.SMALLER_THAN:
+            spec = (0x00, first_byte, frozenset((first_byte,)),
+                    lambda v: v < target_value_decoded)
+        elif first_byte is not None and scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
+            spec = (0x00, first_byte, frozenset((first_byte,)),
+                    lambda v: v <= target_value_decoded)
+        elif (
+            scan_type is ScanTypesEnum.VALUE_BETWEEN
+            and start_first_byte is not None
+            and end_first_byte is not None
+        ):
+            spec = (start_first_byte, end_first_byte,
+                    frozenset((start_first_byte, end_first_byte)),
+                    lambda v: start_target_value <= v <= end_target_value)
+        if spec is not None:
+            yield from _scan_string_ordered(data, end, target_value_size, *spec)
+            return
 
     if scan_type is ScanTypesEnum.EXACT_VALUE:
         for offset in range(0, end, step):

@@ -68,6 +68,98 @@ def _int_payload(draw):
     return size, b"".join(struct.pack(fmt, v) for v in values), struct.pack(fmt, target)
 
 
+# Ordered string comparisons that scan_memory routes through the regex
+# byte-class fast path (NOT_* are dense and keep the byte-by-byte loop).
+_ORDERED_STRING_SCAN_TYPES = (
+    ScanTypesEnum.BIGGER_THAN,
+    ScanTypesEnum.SMALLER_THAN,
+    ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE,
+    ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE,
+)
+
+# Bias the byte alphabet toward the values most likely to trip the fast path:
+# the lexicographic extremes (0x00 / 0xff), boundary ties, and the bytes that
+# are special inside a regex character class ([ ] ^ - \ etc.).
+_TRICKY_BYTES = st.sampled_from([0x00, 0xFF] + list(b"[]^-\\&~|ABC"))
+_ANY_BYTE = st.integers(min_value=0, max_value=255)
+
+
+@st.composite
+def _string_payload(draw):
+    size = draw(st.integers(min_value=1, max_value=8))
+    count = draw(st.integers(min_value=0, max_value=40))
+    byte = st.one_of(_TRICKY_BYTES, _ANY_BYTE)
+    data = bytes(draw(st.lists(byte, min_size=count, max_size=count)))
+    target = bytes(draw(st.lists(byte, min_size=size, max_size=size)))
+    return size, data, target
+
+
+def _scan_string_slow(data, size, target_value, scan_type):
+    """Reference: byte-by-byte big-endian string scan (the pre-fast-path loop)."""
+    end = len(data) - size + 1
+    results = []
+    if isinstance(target_value, tuple):
+        lo = int.from_bytes(target_value[0], "big")
+        hi = int.from_bytes(target_value[1], "big")
+    else:
+        target = int.from_bytes(target_value, "big")
+    for offset in range(0, max(end, 0)):
+        value = int.from_bytes(data[offset : offset + size], "big")
+        if scan_type is ScanTypesEnum.BIGGER_THAN and value > target:
+            results.append(offset)
+        elif scan_type is ScanTypesEnum.SMALLER_THAN and value < target:
+            results.append(offset)
+        elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE and value >= target:
+            results.append(offset)
+        elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE and value <= target:
+            results.append(offset)
+        elif scan_type is ScanTypesEnum.VALUE_BETWEEN and lo <= value <= hi:
+            results.append(offset)
+    return results
+
+
+@settings(
+    suppress_health_check=[HealthCheck.too_slow],
+    deadline=None,
+    max_examples=300,
+)
+@given(
+    payload=_string_payload(),
+    scan_type=st.sampled_from(_ORDERED_STRING_SCAN_TYPES),
+)
+def test_ordered_string_scan_matches_reference(payload, scan_type):
+    """Regex byte-class fast path must agree with the byte-by-byte reference.
+
+    Strings step by one byte and compare big-endian, so the fast path uses a
+    first-byte prefilter; this checks it yields exactly the same offsets across
+    boundary ties and regex-special bytes.
+    """
+    size, data, target = payload
+    fast = list(scan_memory(data, len(data), target, size, scan_type, str))
+    slow = _scan_string_slow(data, size, target, scan_type)
+    assert fast == slow
+
+
+@settings(
+    suppress_health_check=[HealthCheck.too_slow],
+    deadline=None,
+    max_examples=300,
+)
+@given(payload=_string_payload())
+def test_value_between_string_matches_reference(payload):
+    """VALUE_BETWEEN over strings (the search_by_value_between path) must match."""
+    size, data, a = payload
+    # Build a valid [lo, hi] range from two same-width byte strings.
+    b = bytes((x + 1) % 256 for x in a)
+    lo, hi = (a, b) if a <= b else (b, a)
+    target = (lo, hi)
+    fast = list(
+        scan_memory(data, len(data), target, size, ScanTypesEnum.VALUE_BETWEEN, str)
+    )
+    slow = _scan_string_slow(data, size, target, ScanTypesEnum.VALUE_BETWEEN)
+    assert fast == slow
+
+
 @st.composite
 def _float_payload(draw):
     size = draw(st.sampled_from(_FLOAT_SIZES))
