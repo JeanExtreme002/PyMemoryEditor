@@ -17,7 +17,7 @@ from typing import (
 )
 
 from ..enums import ScanTypesEnum
-from ..util import UNSET
+from ..util import UNSET, _check_int_fits
 from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .region import MemoryRegion, MemoryRegionSnapshot
@@ -426,6 +426,10 @@ class AbstractProcess(ABC):
         return int.from_bytes(raw, sys.byteorder, signed=False)
 
     def _write_unsigned(self, address: int, size: int, value: int) -> int:
+        # Validate up front so an out-of-range value raises the same clear
+        # ValueError as the signed path, instead of int.to_bytes' cryptic
+        # OverflowError ("int too big to convert" / "can't convert negative").
+        _check_int_fits(value, size, signed=False)
         raw = int(value).to_bytes(size, sys.byteorder, signed=False)
         self.write_process_memory(address, bytes, size, raw)
         return value
