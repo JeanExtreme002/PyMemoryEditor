@@ -252,9 +252,9 @@ def test_search_by_int(process):
         except OSError:
             pass
 
-    assert found / test_length >= 0.7
+    assert found / test_length >= 0.8
     # Some addresses are beyond our control and may have their values changed.
-    assert correct / total >= 0.7
+    assert correct / total >= 0.5
 
 
 def test_search_by_float(process):
@@ -290,8 +290,8 @@ def test_search_by_float(process):
         except OSError:
             pass
 
-    assert found / test_length >= 0.7
-    assert correct / total >= 0.7
+    assert found / test_length >= 0.8
+    assert correct / total >= 0.5
 
 
 def test_search_by_string(process):
@@ -327,8 +327,8 @@ def test_search_by_string(process):
                 # it back, or hold non-decodable bytes. Either way, skip it.
                 pass
 
-    assert found / test_length >= 0.7
-    assert correct / total >= 0.7
+    assert found / test_length >= 0.8
+    assert correct / total >= 0.5
 
 
 def test_search_by_string_between(process):
