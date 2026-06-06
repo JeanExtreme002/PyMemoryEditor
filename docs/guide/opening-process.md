@@ -10,7 +10,7 @@ the API is identical.
 ```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name="notepad.exe") as process:
+with OpenProcess(name="notepad.exe") as process:
     print("PID:", process.pid)
 ```
 
@@ -27,7 +27,7 @@ You can identify the target in two ways:
 <th>What it does</th>
 </tr>
 <tr>
-<td><code>process_name="notepad.exe"</code></td>
+<td><code>name="notepad.exe"</code></td>
 <td>Looks up the PID by name. Most natural way for desktop apps and games.</td>
 </tr>
 <tr>
@@ -40,7 +40,7 @@ If you pass **both**, `pid` wins. If you pass **neither**, `TypeError` is raised
 
 ## Name matching: case and partial matches
 
-By default, `process_name` matching is:
+By default, `name` matching is:
 
 - **Case-sensitive** on Linux and macOS.
 - **Case-insensitive** on Windows (matches the OS convention).
@@ -50,7 +50,7 @@ You can override both with keyword arguments:
 
 ```python
 # Match "chrome.exe", "ChroMe.EXE", "chrome" — anywhere case-insensitively.
-OpenProcess(process_name="chrome", case_sensitive=False, exact_match=False)
+OpenProcess(name="chrome", case_sensitive=False, exact_match=False)
 ```
 
 | Argument | Type | Default | Effect |
@@ -71,7 +71,7 @@ of `OpenProcess`. The default opens a **read + write** handle:
 ```python
 # Default — same as:
 OpenProcess(
-    process_name="notepad.exe",
+    name="notepad.exe",
     permission=(
         ProcessOperationsEnum.PROCESS_VM_READ
         | ProcessOperationsEnum.PROCESS_VM_WRITE
@@ -87,7 +87,7 @@ For a read-only handle (less powerful but useful for static analysis):
 from PyMemoryEditor import OpenProcess, ProcessOperationsEnum
 
 OpenProcess(
-    process_name="notepad.exe",
+    name="notepad.exe",
     permission=ProcessOperationsEnum.PROCESS_VM_READ
         | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION,
 )
@@ -97,7 +97,7 @@ For full control:
 
 ```python
 OpenProcess(
-    process_name="notepad.exe",
+    name="notepad.exe",
     permission=ProcessOperationsEnum.PROCESS_ALL_ACCESS,
 )
 ```
@@ -134,7 +134,7 @@ Once closed, any further call raises `ClosedProcess`.
 
 | Exception | Meaning |
 | --- | --- |
-| `ProcessNotFoundError` | No process matches the given `process_name`. |
+| `ProcessNotFoundError` | No process matches the given `name`. |
 | `ProcessIDNotExistsError` | The given `pid` doesn't exist on the system. |
 | `AmbiguousProcessNameError` | More than one process matches a partial name — pick a PID from `.pids`. |
 | `PermissionError` | The OS denied access — usually fixable; see [Troubleshooting](../troubleshooting.md). |
@@ -147,7 +147,7 @@ collectively:
 from PyMemoryEditor import OpenProcess, PyMemoryEditorError
 
 try:
-    with OpenProcess(process_name="game.exe") as process:
+    with OpenProcess(name="game.exe") as process:
         ...
 except PyMemoryEditorError as e:
     print("Failed to open process:", e)

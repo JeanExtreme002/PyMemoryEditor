@@ -32,8 +32,8 @@ else:  # pragma: no cover - importing the package already raises on these.
         return False
 
 
-def get_process_ids_by_process_name(
-    process_name: str,
+def get_process_ids_by_name(
+    name: str,
     *,
     case_sensitive: bool = True,
     exact_match: bool = True,
@@ -41,17 +41,17 @@ def get_process_ids_by_process_name(
     """
     Return a list of all process IDs matching the provided name.
 
-    :param process_name: process name to search.
+    :param name: process name to search.
     :param case_sensitive: when False, comparison ignores case (useful on Windows).
     :param exact_match: when False, returns every process whose name *contains*
-        ``process_name`` as a substring — handy when you don't know the exact
+        ``name`` as a substring — handy when you don't know the exact
         executable name (``"chrome"`` matches ``"chrome.exe"``, ``"Google Chrome"``,
         ``"Chromium"``, ...). Often combined with ``case_sensitive=False``.
     """
     if not case_sensitive:
-        process_name_cmp = process_name.casefold()
+        process_name_cmp = name.casefold()
     else:
-        process_name_cmp = process_name
+        process_name_cmp = name
 
     matches: List[int] = []
 
@@ -70,8 +70,8 @@ def get_process_ids_by_process_name(
     return matches
 
 
-def get_process_id_by_process_name(
-    process_name: str,
+def get_process_id_by_name(
+    name: str,
     *,
     case_sensitive: bool = True,
     exact_match: bool = True,
@@ -82,14 +82,14 @@ def get_process_id_by_process_name(
     Raises AmbiguousProcessNameError when more than one process matches.
     Returns None when no process matches (callers should handle this).
     """
-    matches = get_process_ids_by_process_name(
-        process_name,
+    matches = get_process_ids_by_name(
+        name,
         case_sensitive=case_sensitive,
         exact_match=exact_match,
     )
 
     if len(matches) > 1:
-        raise AmbiguousProcessNameError(process_name, matches)
+        raise AmbiguousProcessNameError(name, matches)
 
     return matches[0] if matches else None
 

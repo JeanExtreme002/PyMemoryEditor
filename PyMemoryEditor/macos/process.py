@@ -50,7 +50,7 @@ class MacProcess(AbstractProcess):
     def __init__(
         self,
         *,
-        process_name: Optional[str] = None,
+        name: Optional[str] = None,
         pid: Optional[int] = None,
         permission=None,
         case_sensitive: bool = True,
@@ -58,22 +58,22 @@ class MacProcess(AbstractProcess):
         strict_bitness: bool = False,
     ):
         """
-        :param process_name: name of the target process.
+        :param name: name of the target process.
         :param pid: process ID.
         :param permission: accepted for cross-platform API parity; ignored on
             macOS (access is governed by entitlements / mach_task_self_).
             Passing a non-None value emits a ``UserWarning`` so a Windows-shaped
             mask doesn't disappear silently here — pass ``None`` (or omit) on
             non-Windows platforms.
-        :param case_sensitive: when False, process_name matching ignores case.
-        :param exact_match: when False, ``process_name`` is matched as a
+        :param case_sensitive: when False, name matching ignores case.
+        :param exact_match: when False, ``name`` is matched as a
             substring (e.g. ``"chrome"`` finds ``"Google Chrome"``).
         :param strict_bitness: raise ``BitnessDetectionError`` instead of
             defaulting to 64-bit when no Mach-O header can be read. See
             :class:`~PyMemoryEditor.AbstractProcess`.
         """
         super().__init__(
-            process_name=process_name,
+            name=name,
             pid=pid,
             case_sensitive=case_sensitive,
             exact_match=exact_match,

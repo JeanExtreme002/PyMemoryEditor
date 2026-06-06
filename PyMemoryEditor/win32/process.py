@@ -88,7 +88,7 @@ class WindowsProcess(AbstractProcess):
     def __init__(
         self,
         *,
-        process_name: Optional[str] = None,
+        name: Optional[str] = None,
         pid: Optional[int] = None,
         permission: Union[ProcessOperationsEnum, int] = DEFAULT_PERMISSION,
         case_sensitive: bool = False,
@@ -96,7 +96,7 @@ class WindowsProcess(AbstractProcess):
         strict_bitness: bool = False,
     ):
         """
-        :param process_name: name of the target process.
+        :param name: name of the target process.
         :param pid: process ID.
         :param permission: access mode to the process. Defaults to the
             read-and-write set: PROCESS_VM_READ | PROCESS_VM_WRITE |
@@ -104,13 +104,13 @@ class WindowsProcess(AbstractProcess):
             (PROCESS_QUERY_INFORMATION is required by VirtualQueryEx, used
             internally for region enumeration). Narrow the mask if you want
             a read-only handle, or pass PROCESS_ALL_ACCESS for full control.
-        :param case_sensitive: when False (default on Windows), process_name
+        :param case_sensitive: when False (default on Windows), name
             matching ignores case to align with the OS convention.
-        :param exact_match: when False, ``process_name`` is matched as a
+        :param exact_match: when False, ``name`` is matched as a
             substring (e.g. ``"chrome"`` finds ``"chrome.exe"``).
         """
         super().__init__(
-            process_name=process_name,
+            name=name,
             pid=pid,
             case_sensitive=case_sensitive,
             exact_match=exact_match,

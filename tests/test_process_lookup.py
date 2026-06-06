@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Cross-platform tests for process_name lookup logic, exercising
+Cross-platform tests for process's name lookup logic, exercising
 AmbiguousProcessNameError and the case_sensitive flag without depending on
 real processes existing under known names.
 """
@@ -30,12 +30,12 @@ def fake_process_iter(monkeypatch):
 
 def test_returns_none_when_no_match(fake_process_iter):
     fake_process_iter([("chrome", 1), ("firefox", 2)])
-    assert lookup.get_process_id_by_process_name("missing.exe") is None
+    assert lookup.get_process_id_by_name("missing.exe") is None
 
 
 def test_returns_pid_on_single_match(fake_process_iter):
     fake_process_iter([("chrome", 1), ("firefox", 2)])
-    assert lookup.get_process_id_by_process_name("chrome") == 1
+    assert lookup.get_process_id_by_name("chrome") == 1
 
 
 def test_raises_ambiguous_on_multiple_matches(fake_process_iter):
@@ -47,7 +47,7 @@ def test_raises_ambiguous_on_multiple_matches(fake_process_iter):
         ]
     )
     with pytest.raises(AmbiguousProcessNameError) as exc:
-        lookup.get_process_id_by_process_name("python")
+        lookup.get_process_id_by_name("python")
 
     assert exc.value.pids == [100, 200]
     assert exc.value.process_name == "python"
@@ -55,17 +55,17 @@ def test_raises_ambiguous_on_multiple_matches(fake_process_iter):
 
 def test_case_sensitive_default_distinguishes(fake_process_iter):
     fake_process_iter([("Notepad.exe", 42)])
-    assert lookup.get_process_id_by_process_name("notepad.exe") is None
-    assert lookup.get_process_id_by_process_name("Notepad.exe") == 42
+    assert lookup.get_process_id_by_name("notepad.exe") is None
+    assert lookup.get_process_id_by_name("Notepad.exe") == 42
 
 
 def test_case_insensitive_matches(fake_process_iter):
     fake_process_iter([("Notepad.exe", 42)])
     assert (
-        lookup.get_process_id_by_process_name("notepad.exe", case_sensitive=False) == 42
+        lookup.get_process_id_by_name("notepad.exe", case_sensitive=False) == 42
     )
     assert (
-        lookup.get_process_id_by_process_name("NOTEPAD.EXE", case_sensitive=False) == 42
+        lookup.get_process_id_by_name("NOTEPAD.EXE", case_sensitive=False) == 42
     )
 
 
@@ -76,7 +76,7 @@ def test_get_process_ids_returns_full_list(fake_process_iter):
             ("python", 200),
         ]
     )
-    pids = lookup.get_process_ids_by_process_name("python")
+    pids = lookup.get_process_ids_by_name("python")
     assert pids == [100, 200]
 
 
@@ -84,8 +84,8 @@ def test_empty_name_rows_are_tolerated(fake_process_iter):
     """A process with an empty name (macOS can yield this) must not crash the
     lookup, and must not spuriously match a non-empty query."""
     fake_process_iter([("", 1), ("chrome", 2)])
-    assert lookup.get_process_id_by_process_name("chrome") == 2
-    assert lookup.get_process_id_by_process_name("") == 1
+    assert lookup.get_process_id_by_name("chrome") == 2
+    assert lookup.get_process_id_by_name("") == 1
 
 
 def test_ambiguous_error_has_args_and_str():

@@ -19,7 +19,7 @@ process by **name** or **PID**:
 from PyMemoryEditor import OpenProcess
 
 # By process name
-process = OpenProcess(process_name="notepad.exe")
+process = OpenProcess(name="notepad.exe")
 
 # Or by PID
 process = OpenProcess(pid=1234)
@@ -28,7 +28,7 @@ process = OpenProcess(pid=1234)
 The recommended pattern is a `with` block — it closes the handle automatically:
 
 ```python
-with OpenProcess(process_name="notepad.exe") as process:
+with OpenProcess(name="notepad.exe") as process:
     ...
 ```
 
@@ -43,7 +43,7 @@ name, so there's nothing to remember:
 ```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name="notepad.exe") as process:
+with OpenProcess(name="notepad.exe") as process:
     address = 0x0005000C
 
     value = process.read_int(address)       # read a 4-byte int
@@ -69,7 +69,7 @@ You rarely know the address of a value up front — you **find it by scanning**.
 `search_by_value` yields every address holding a given value:
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for address in process.search_by_value(int, value=100):
         print(f"Found at 0x{address:X}")
 ```
@@ -90,7 +90,7 @@ The classic loop is:
 4. **Read, write or freeze** it.
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     # 1. First scan — every address currently holding 100.
     candidates = list(process.search_by_value(int, value=100))
 
@@ -122,7 +122,7 @@ scan** (Cheat Engine's "Pointer scan"): give it the value's address *right now*,
 and it discovers the static paths that resolve to it.
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     # The value lives here this run (e.g. from search_by_value above).
     for path in process.scan_pointer_paths(0x1FA3C140, max_depth=4):
         print(path)
@@ -134,12 +134,12 @@ Each result is a `PointerPath` carrying the module + offsets — the part that
 survives a restart. Save the reliable ones and reuse them later:
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     paths = list(process.scan_pointer_paths(0x1FA3C140, max_depth=4))
     process.save_pointer_paths(paths, "health.json")
 
 # ...next launch, the absolute address has changed but the path still works:
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     survivors = process.rescan_pointer_paths("health.json", 0x2B7C0140)
     pointer = survivors[0].rebase(process).to_pointer(process)
     pointer.write(9999)

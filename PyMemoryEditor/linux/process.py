@@ -39,7 +39,7 @@ class LinuxProcess(AbstractProcess):
     def __init__(
         self,
         *,
-        process_name: Optional[str] = None,
+        name: Optional[str] = None,
         pid: Optional[int] = None,
         permission=None,
         case_sensitive: bool = True,
@@ -47,22 +47,22 @@ class LinuxProcess(AbstractProcess):
         strict_bitness: bool = False,
     ):
         """
-        :param process_name: name of the target process.
+        :param name: name of the target process.
         :param pid: process ID.
         :param permission: accepted for cross-platform API parity; ignored on
             Linux (access is governed by ptrace_scope and process ownership).
             Passing a non-None value emits a ``UserWarning`` so a Windows-shaped
             mask doesn't disappear silently here — pass ``None`` (or omit) on
             non-Windows platforms.
-        :param case_sensitive: when False, process_name matching ignores case.
-        :param exact_match: when False, ``process_name`` is matched as a
+        :param case_sensitive: when False, name matching ignores case.
+        :param exact_match: when False, ``name`` is matched as a
             substring (e.g. ``"chrome"`` finds ``"chromium-browser"``).
         :param strict_bitness: raise ``BitnessDetectionError`` instead of
             guessing the host word size when the target's ELF class can't be
             read. See :class:`~PyMemoryEditor.AbstractProcess`.
         """
         super().__init__(
-            process_name=process_name,
+            name=name,
             pid=pid,
             case_sensitive=case_sensitive,
             exact_match=exact_match,

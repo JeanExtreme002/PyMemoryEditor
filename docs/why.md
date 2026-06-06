@@ -94,7 +94,7 @@ PyMemoryEditor wraps all of that behind a handful of methods — `OpenProcess`,
 ```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
 
     # Scan the whole process for every address holding the value 100.
     for address in process.search_by_value(int, value=100):

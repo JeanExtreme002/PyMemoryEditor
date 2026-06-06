@@ -73,7 +73,7 @@ Linux.
 ### Listing threads
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for thread in process.get_threads():
         print(thread.tid, thread.state, thread.priority)
 ```

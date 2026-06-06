@@ -11,7 +11,7 @@ and returns its base address. The OS may round the size up to the page
 size:
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     address = process.allocate_memory(64)
     process.write_int(address, 1337)
 ```
@@ -119,7 +119,7 @@ Pass a `MemoryProtectionsEnum` (or the underlying integer):
 from PyMemoryEditor import OpenProcess
 from PyMemoryEditor.win32.enums.memory_protections import MemoryProtectionsEnum
 
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     # Allocate a read-only buffer.
     address = process.allocate_memory(64, permission=MemoryProtectionsEnum.PAGE_READONLY)
 ```
@@ -161,7 +161,7 @@ execute injected code.
 ```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     address = process.allocate_memory(128)
     try:
         # Write something to it

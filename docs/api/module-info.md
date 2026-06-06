@@ -64,7 +64,7 @@ Linux, `.dylib` on macOS).
 ### Listing every module
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for module in process.get_modules():
         print(f"{module.name:32}  0x{module.base_address:016X}  {module.size:>12}")
 ```

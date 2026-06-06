@@ -28,7 +28,7 @@ from PyMemoryEditor import OpenProcess, ProcessOperationsEnum
 
 # Need PROCESS_VM_OPERATION for allocate_memory.
 with OpenProcess(
-    process_name="game.exe",
+    name="game.exe",
     permission=ProcessOperationsEnum.PROCESS_VM_READ
         | ProcessOperationsEnum.PROCESS_VM_WRITE
         | ProcessOperationsEnum.PROCESS_VM_OPERATION
@@ -45,7 +45,7 @@ No running process matches the given name. Names are **case-sensitive** by
 default on Linux/macOS and **case-insensitive** on Windows. Try:
 
 ```python
-OpenProcess(process_name="chrome", exact_match=False, case_sensitive=False)
+OpenProcess(name="chrome", exact_match=False, case_sensitive=False)
 ```
 
 Or pass `pid=` directly if you can find it via `ps`, Task Manager or
@@ -60,7 +60,7 @@ pass it explicitly:
 from PyMemoryEditor import OpenProcess, AmbiguousProcessNameError
 
 try:
-    process = OpenProcess(process_name="chrome", exact_match=False)
+    process = OpenProcess(name="chrome", exact_match=False)
 except AmbiguousProcessNameError as exc:
     print("Multiple matches:", exc.pids)
     process = OpenProcess(pid=exc.pids[0])
