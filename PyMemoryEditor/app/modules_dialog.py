@@ -20,11 +20,10 @@ same patterns (background worker, sortable table, Close button).
 """
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -38,30 +37,12 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess, ModuleInfo
 
-from ._widgets import NumericItem, shutdown_worker_thread
+from ._auto_refresh_dialog import AutoRefreshTableDialog
+from ._widgets import NumericItem
 from .memory_map_dialog import _format_size
 
 
-class _ModulesWorker(QThread):
-    """Background thread that runs ``process.get_modules()`` off the UI."""
-
-    modules_ready = Signal(object)  # List[ModuleInfo]
-    modules_failed = Signal(str)
-
-    def __init__(self, process: AbstractProcess, parent=None):
-        super().__init__(parent)
-        self._process = process
-
-    def run(self) -> None:
-        try:
-            modules = list(self._process.get_modules())
-        except Exception as exc:  # noqa: BLE001
-            self.modules_failed.emit(str(exc))
-            return
-        self.modules_ready.emit(modules)
-
-
-class ModulesDialog(QDialog):
+class ModulesDialog(AutoRefreshTableDialog):
     """Shows the output of ``get_modules()`` in a sortable, filterable table."""
 
     # qulonglong: 64-bit addresses overflow Qt's default (C++ signed 32-bit) int.
@@ -69,24 +50,17 @@ class ModulesDialog(QDialog):
     resolve_pointer_chain = Signal("qulonglong")  # module base address
 
     def __init__(self, process: AbstractProcess, parent=None):
-        super().__init__(parent)
-        self._process = process
+        # Auto-refresh so modules loaded/unloaded at runtime appear without a
+        # manual refresh; the refresh() guard self-throttles on a slow target.
+        super().__init__(process, refresh_interval_ms=1000, parent=parent)
         self._modules: List[ModuleInfo] = []
-        self._worker: Optional[_ModulesWorker] = None
 
         self.setWindowTitle(f"Modules — PID {process.pid}")
         self.resize(820, 560)
 
         self._build_ui()
         self.refresh()
-
-        # Auto-refresh so modules loaded/unloaded at runtime appear without a
-        # manual refresh. The refresh() guard self-throttles if an enumeration
-        # takes longer than this interval.
-        self._auto_timer = QTimer(self)
-        self._auto_timer.setInterval(1000)
-        self._auto_timer.timeout.connect(self.refresh)
-        self._auto_timer.start()
+        self._start_auto_refresh()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -154,26 +128,13 @@ class ModulesDialog(QDialog):
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._table, 1)
 
-    def refresh(self) -> None:
-        # Skip if an enumeration is already in flight — the 1000ms auto-refresh
-        # timer would otherwise stack workers. This self-throttles to however
-        # long get_modules() actually takes.
-        if self._worker is not None and self._worker.isRunning():
-            return
+    def _set_loading_hint(self) -> None:
+        self._count_label.setText("Enumerating modules…")
 
-        # Loading hint only before the first list; on the periodic refresh the
-        # count updates silently to avoid flicker.
-        if not self._modules:
-            self._count_label.setText("Enumerating modules…")
+    def _fetch_data(self):
+        return list(self._process.get_modules())
 
-        worker = _ModulesWorker(self._process, self)
-        worker.modules_ready.connect(self._on_modules_ready)
-        worker.modules_failed.connect(self._on_modules_failed)
-        worker.finished.connect(self._on_worker_finished)
-        self._worker = worker
-        worker.start()
-
-    def _on_modules_ready(self, modules) -> None:
+    def _on_data_ready(self, modules) -> None:
         self._modules = list(modules)
         self._apply_filter()
 
@@ -244,17 +205,11 @@ class ModulesDialog(QDialog):
                 self._table.selectRow(row)
                 return
 
-    def _on_modules_failed(self, message: str) -> None:
+    def _on_data_failed(self, message: str) -> None:
         self._count_label.setText("Failed to enumerate modules.")
         QMessageBox.critical(
             self, "Modules", f"Failed to enumerate modules:\n\n{message}"
         )
-
-    def _on_worker_finished(self) -> None:
-        worker = self._worker
-        self._worker = None
-        if worker is not None:
-            worker.deleteLater()
 
     def _selected_module(self) -> Optional[dict]:
         rows = self._table.selectionModel().selectedRows()
@@ -325,11 +280,3 @@ class ModulesDialog(QDialog):
         # Cap the initial view to keep the hex widget responsive on big modules.
         size = min(module["size"] or 4096, 4096)
         self.open_hex_viewer.emit(module["base_address"], size)
-
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
-        self._auto_timer.stop()
-        # Unhook + join the enumeration worker; if it can't stop in time it's
-        # detached rather than destroyed under us.
-        shutdown_worker_thread(self._worker, wait_ms=1000)
-        self._worker = None
-        super().closeEvent(event)

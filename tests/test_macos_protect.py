@@ -127,3 +127,61 @@ def test_write_to_readonly_page_via_protect_flip():
             process.close()
     finally:
         _libsystem.munmap(address, size)
+
+
+def test_page_aligned_span_covers_a_straddling_write():
+    """``_page_aligned_span`` must expand to whole pages around the byte range.
+
+    A write that crosses a page boundary has to have *both* pages protected
+    (and later restored) as one span — otherwise the restore can miss the
+    second page and leave it permanently more permissive.
+    """
+    from PyMemoryEditor.macos.functions import _PAGE_SIZE, _page_aligned_span
+
+    page = _PAGE_SIZE
+
+    # Write of 8 bytes starting 4 bytes before a page boundary → touches two
+    # pages; the aligned span must start at the first page and cover both.
+    start, length = _page_aligned_span(page - 4, 8)
+    assert start == 0
+    assert length == 2 * page
+
+    # A fully-contained write rounds out to exactly one page.
+    start, length = _page_aligned_span(page + 16, 4)
+    assert start == page
+    assert length == page
+
+
+def test_write_straddling_a_page_boundary_restores_both_pages():
+    """A cross-page write must succeed and leave *both* pages read-only again.
+
+    Regression guard for the protect-flip alignment fix: the elevate/restore
+    span is page-aligned, so the second page isn't left writable after the
+    write completes.
+    """
+    from PyMemoryEditor.macos.functions import _PAGE_SIZE
+
+    page = _PAGE_SIZE
+    size = 2 * page
+    address = _mmap_readonly(size)
+
+    try:
+        process = OpenProcess(pid=os.getpid())
+        try:
+            boundary = address + page
+            # 8 bytes centered on the page boundary (4 in each page).
+            payload = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+            process.write_process_memory(boundary - 4, bytes, len(payload), payload)
+            assert process.read_process_memory(boundary - 4, bytes, len(payload)) == payload
+
+            # Both pages must be back to read-only — the restore covered the
+            # whole aligned span, not just the literal byte range.
+            for r in process.get_memory_regions():
+                if r.address <= address < r.address + r.size:
+                    assert not r.is_writable, "first page left writable after write"
+                if r.address <= boundary < r.address + r.size:
+                    assert not r.is_writable, "second page left writable after write"
+        finally:
+            process.close()
+    finally:
+        _libsystem.munmap(address, size)

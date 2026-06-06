@@ -28,6 +28,13 @@ class ValueTypeSpec:
     # string and the scan-type / length controls are hidden because they
     # don't apply.
     is_pattern: bool = False
+    # When True the pattern is a raw *bytes regex* rather than an IDA-style hex
+    # string. Implies ``is_pattern``. Unlike the IDA form (whose match width is
+    # inferred from the token count), a regex's match width can't be inferred,
+    # so the panel keeps the Length field enabled and uses it as the
+    # ``byte_length`` (the number of bytes one match consumes) that
+    # ``search_by_pattern`` requires for regex input.
+    is_regex: bool = False
 
 
 def _parse_bool(text: str) -> bool:
@@ -102,10 +109,58 @@ def _parse_pattern(text: str) -> str:
     return stripped
 
 
+def _parse_regex(text: str) -> bytes:
+    """Validate a *text regex* and return it as the UTF-8 ``bytes`` pattern.
+
+    The user types an ordinary string regex — e.g. ``Player[0-9]+`` — which is
+    UTF-8 encoded into the bytes pattern that ``search_by_pattern`` matches
+    against the target's memory (the library treats string memory as UTF-8).
+    Because the match runs against *bytes*, regex metacharacters operate on a
+    single **byte**: ``.`` matches one byte (any byte — the scan compiles with
+    ``re.DOTALL``) and ``\\d`` / ``[A-Z]`` are ASCII-only. A literal non-ASCII
+    character still matches its full UTF-8 byte sequence, but a metacharacter
+    like ``.`` only spans one byte of a multibyte character, so quantify those
+    with care (e.g. ``.+`` rather than ``.``).
+
+    Like ``_parse_pattern`` this is an early "does this compile?" gate so a
+    malformed regex surfaces a clear ValueError in a dialog instead of blowing
+    up mid-scan. A regex has no inferable match width, so the scanner pairs this
+    value with the Length field as the ``byte_length`` (the max match width).
+    """
+    if not text.strip():
+        raise ValueError(
+            "Empty regex. Type a text regex such as 'Player[0-9]+'. "
+            "Set Length to the maximum match width in bytes."
+        )
+    # Encode verbatim (not stripped) so whitespace inside the regex is honored.
+    pattern = text.encode("utf-8")
+    import re
+
+    try:
+        re.compile(pattern, re.DOTALL)
+    except re.error as exc:
+        raise ValueError(f"Invalid regex: {exc}")
+    return pattern
+
+
 def _fmt_bytes(value: bytes) -> str:
     if value is None:
         return ""
     return " ".join(f"{b:02X}" for b in value)
+
+
+def _fmt_regex_match(value) -> str:
+    """Format a regex result value (the bytes read at the match address).
+
+    The scanner reads ``byte_length`` bytes at each hit; show them as text up
+    to the first NUL (C-string style) so a matched string reads cleanly, and
+    decode leniently so stray non-text bytes don't blow up the table.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.split(b"\x00", 1)[0].decode("utf-8", "replace")
+    return str(value)
 
 
 def _fmt_int(value):
@@ -200,6 +255,21 @@ VALUE_TYPES = (
         accepts_length_override=False,
         is_pattern=True,
     ),
+    # Text-regex scan — the "Value" input becomes a string regex (e.g.
+    # ``Player[0-9]+``) UTF-8 encoded into the bytes pattern, and the Length
+    # field supplies the ``byte_length`` (max match width) that
+    # ``search_by_pattern`` requires for regex. Default width is generous so
+    # typical string matches aren't clipped at a chunk boundary.
+    ValueTypeSpec(
+        "Regex (String)",
+        bytes,
+        64,
+        _parse_regex,
+        _fmt_regex_match,
+        accepts_length_override=True,
+        is_pattern=True,
+        is_regex=True,
+    ),
 )
 
 
@@ -219,11 +289,15 @@ def parse_value(
     """
     value = spec.parse(text)
     length = spec.length
-    # AOB patterns short-circuit: ``length`` isn't meaningful — the scanner
-    # derives the byte width from the pattern itself. Return early so the
-    # bytes/str length-inference rules below don't accidentally trip on the
-    # pattern string (whose len() counts characters, not target bytes).
+    # Pattern types short-circuit the bytes/str length-inference rules below
+    # (which would wrongly count the pattern *source* length).
     if spec.is_pattern:
+        # A regex's match width can't be inferred, so it comes from the Length
+        # field (``byte_length``); fall back to the spec default if unset.
+        # An IDA pattern derives its width from the pattern itself, so report 0.
+        if spec.is_regex:
+            bl = length_override if length_override is not None else spec.length
+            return value, max(1, int(bl))
         return value, 0
     if spec.accepts_length_override and length_override is not None:
         length = max(1, int(length_override))

@@ -25,12 +25,17 @@ allocation's size, so you don't have to:
 process.free_memory(address)
 ```
 
-Pass an explicit `size=` only when freeing a region that this object **did not
-allocate** (e.g. one inherited from another script):
+On **macOS**, pass an explicit `size=` when freeing a region that this object
+**did not allocate** (e.g. one inherited from another script), since the size
+cannot be looked up from the local allocation table:
 
 ```python
 process.free_memory(address, size=4096)
 ```
+
+On **Windows** the `size` argument is always ignored — `MEM_RELEASE` frees the
+whole original allocation given only its base address, so a foreign region is
+freed the same way (and only if `address` is a true allocation base).
 
 ## Method signatures
 
@@ -135,6 +140,10 @@ Common values:
 Pass a `VM_PROT_*` bitmask (or leave `None` for the default of read+write):
 
 ```python
+from PyMemoryEditor.macos.types import (
+    VM_PROT_READ, VM_PROT_WRITE, VM_PROT_EXECUTE,
+)
+
 # read+write+execute (may fail under the hardened runtime).
 process.allocate_memory(4096, permission=VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)
 ```

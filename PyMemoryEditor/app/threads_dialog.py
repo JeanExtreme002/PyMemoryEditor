@@ -6,19 +6,19 @@ Shows every thread the target process currently has, in a sortable table,
 with optional auto-refresh. The intent mirrors Cheat Engine's "Process →
 Threads" window: you don't typically *act* on threads directly, but seeing
 them is useful for introspection (how many workers does this game have?
-is the main thread alive?). The optional auto-refresh polls at ~1 Hz so
-you can watch threads come and go.
+is the main thread alive?). The auto-refresh polls every 300 ms so you can
+watch threads come and go.
 
-Lives alongside the existing Memory Map dialog — same shape, same patterns
-(background worker, toolbar with Refresh, sortable table, Close button).
+Lives alongside the Memory Map and Modules dialogs — same shape, same patterns
+(shared ``AutoRefreshTableDialog`` base: background worker + auto-refresh timer,
+sortable table, Close button).
 """
-from typing import List, Optional
+from typing import List
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -30,50 +30,26 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess, ThreadInfo
 
-from ._widgets import NumericItem, shutdown_worker_thread
+from ._auto_refresh_dialog import AutoRefreshTableDialog
+from ._widgets import NumericItem
 
 
-class _ThreadsWorker(QThread):
-    """Background thread that runs ``process.get_threads()`` off the UI."""
-
-    threads_ready = Signal(object)  # List[ThreadInfo]
-    threads_failed = Signal(str)
-
-    def __init__(self, process: AbstractProcess, parent=None):
-        super().__init__(parent)
-        self._process = process
-
-    def run(self) -> None:
-        try:
-            threads = list(self._process.get_threads())
-        except Exception as exc:  # noqa: BLE001
-            self.threads_failed.emit(str(exc))
-            return
-        self.threads_ready.emit(threads)
-
-
-class ThreadsDialog(QDialog):
+class ThreadsDialog(AutoRefreshTableDialog):
     """Lists the output of ``get_threads()`` in a sortable table."""
 
     def __init__(self, process: AbstractProcess, parent=None):
-        super().__init__(parent)
-        self._process = process
+        # Auto-refresh at a brisk 300ms — threads spawn and exit often, so a
+        # quick cadence lets the user watch the churn live. The refresh() guard
+        # self-throttles if an enumeration takes longer than the interval.
+        super().__init__(process, refresh_interval_ms=300, parent=parent)
         self._threads: List[ThreadInfo] = []
-        self._worker: Optional[_ThreadsWorker] = None
 
         self.setWindowTitle(f"Threads — PID {process.pid}")
         self.resize(640, 520)
 
         self._build_ui()
         self.refresh()
-
-        # Auto-refresh at a fixed 300ms — threads spawn and exit often, so a
-        # brisk cadence lets the user watch the churn live. The refresh() guard
-        # self-throttles if an enumeration takes longer than this interval.
-        self._timer = QTimer(self)
-        self._timer.setInterval(300)
-        self._timer.timeout.connect(self.refresh)
-        self._timer.start()
+        self._start_auto_refresh()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -126,25 +102,13 @@ class ThreadsDialog(QDialog):
         )
         layout.addWidget(self._table, 1)
 
-    def refresh(self) -> None:
-        # Skip if an enumeration is in flight — the 300ms timer would otherwise
-        # stack workers; this self-throttles to however long get_threads() takes.
-        if self._worker is not None and self._worker.isRunning():
-            return
+    def _set_loading_hint(self) -> None:
+        self._count_label.setText("Enumerating threads…")
 
-        # Loading hint only before the first list; the periodic refresh updates
-        # the count silently to avoid flicker.
-        if not self._threads:
-            self._count_label.setText("Enumerating threads…")
+    def _fetch_data(self):
+        return list(self._process.get_threads())
 
-        worker = _ThreadsWorker(self._process, self)
-        worker.threads_ready.connect(self._on_threads_ready)
-        worker.threads_failed.connect(self._on_threads_failed)
-        worker.finished.connect(self._on_worker_finished)
-        self._worker = worker
-        worker.start()
-
-    def _on_threads_ready(self, threads) -> None:
+    def _on_data_ready(self, threads) -> None:
         self._threads = list(threads)
 
         # Preserve selection + scroll across the rebuild (the list refreshes
@@ -200,20 +164,8 @@ class ThreadsDialog(QDialog):
                 self._table.selectRow(row)
                 return
 
-    def _on_threads_failed(self, message: str) -> None:
+    def _on_data_failed(self, message: str) -> None:
         self._count_label.setText("Failed to enumerate threads.")
         QMessageBox.critical(
             self, "Threads", f"Failed to enumerate threads:\n\n{message}"
         )
-
-    def _on_worker_finished(self) -> None:
-        worker = self._worker
-        self._worker = None
-        if worker is not None:
-            worker.deleteLater()
-
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
-        self._timer.stop()
-        shutdown_worker_thread(self._worker, wait_ms=1000)
-        self._worker = None
-        super().closeEvent(event)

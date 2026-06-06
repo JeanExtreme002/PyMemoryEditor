@@ -189,18 +189,29 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
         for line in mapping_file:
             region_information = line.split()
 
-            addressing_range, privileges, offset, device, inode = region_information[
-                0:5
-            ]
-            path = region_information[5] if len(region_information) >= 6 else ""
+            try:
+                addressing_range, privileges, offset, device, inode = (
+                    region_information[0:5]
+                )
+                path = region_information[5] if len(region_information) >= 6 else ""
 
-            start_address, end_address = [
-                int(addr, 16) for addr in addressing_range.split("-")
-            ]
-            major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
+                start_address, end_address = [
+                    int(addr, 16) for addr in addressing_range.split("-")
+                ]
+                major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
 
-            offset = int(offset, 16)
-            inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
+                offset = int(offset, 16)
+                inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
+            except (ValueError, IndexError) as exc:
+                # A single malformed line (kernel quirk, racing teardown) must
+                # not abort the whole region walk — skip it and keep going, the
+                # same log-and-continue contract the Windows/macOS walkers use.
+                _logger.debug(
+                    "get_memory_regions: skipping unparseable maps line %r: %s",
+                    line,
+                    exc,
+                )
+                continue
 
             size = end_address - start_address
 
@@ -294,16 +305,18 @@ def _read_elf_class(path: str) -> Optional[int]:
     return ident[4]  # e_ident[EI_CLASS]: 1 = ELFCLASS32, 2 = ELFCLASS64
 
 
-def is_process_64bit(pid: int) -> bool:
+def _detect_process_64bit(pid: int) -> Optional[bool]:
     """
-    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+    Return ``True``/``False`` from the ELF ``EI_CLASS`` byte of the target's
+    executable, or ``None`` when no header could be read. The raw *mechanism*:
+    no guessing and no warning — the caller decides what an unknown result
+    means (the public :func:`is_process_64bit` falls back to the host word size;
+    ``AbstractProcess.is_64bit`` honors ``strict_bitness``).
 
-    Reads the ``EI_CLASS`` byte of the process's ELF executable. The primary
-    source is ``/proc/<pid>/exe``; if that symlink can't be read (a different
-    user without ``CAP_SYS_PTRACE``), it falls back to the first file-backed,
-    executable mapping in ``/proc/<pid>/maps`` — the main image or a shared
-    library, which share the process's bitness. As a last resort it assumes the
-    host's word size.
+    The primary source is ``/proc/<pid>/exe``; if that symlink can't be read (a
+    different user without ``CAP_SYS_PTRACE``), it falls back to the first
+    file-backed, executable mapping in ``/proc/<pid>/maps`` — the main image or
+    a shared library, which share the process's bitness.
     """
     ei_class = _read_elf_class("/proc/{}/exe".format(pid))
 
@@ -323,8 +336,28 @@ def is_process_64bit(pid: int) -> bool:
         return True
     if ei_class == 1:
         return False
+    return None
 
-    # Couldn't determine it — assume the host's word size (the usual case).
+
+def is_process_64bit(pid: int) -> bool:
+    """
+    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+
+    Thin *policy* wrapper over :func:`_detect_process_64bit`: when no ELF class
+    can be read it assumes the host's word size (the usual case) and warns so a
+    wrong pointer-width default (used by the pointer APIs) is traceable instead
+    of a silent mis-detection on a cross-bitness target.
+    """
+    detected = _detect_process_64bit(pid)
+    if detected is not None:
+        return detected
+
+    _logger.warning(
+        "is_process_64bit: could not read the ELF class for pid %d; assuming "
+        "the host word size. Pointer-width detection may be wrong for a "
+        "cross-bitness target.",
+        pid,
+    )
     return ctypes.sizeof(ctypes.c_void_p) == 8
 
 

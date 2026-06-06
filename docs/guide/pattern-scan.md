@@ -44,7 +44,7 @@ email = rb"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
 
 for address in process.search_by_pattern(email, byte_length=128):
     raw = process.read_process_memory(address, bytes, 128)
-    print(address, raw.split(b"\x00", 1)[0].decode("ascii", "replace"))
+    print(address, raw.split(b"\x00", 1)[0].decode("utf-8", "replace"))
 ```
 
 ```{admonition} byte_length is required for regex
@@ -114,7 +114,7 @@ ipv4 = re.compile(rb"(?<![\d.])(\d{1,3}\.){3}\d{1,3}(?!\d)")
 
 for address in process.search_by_pattern(ipv4, byte_length=64):
     raw = process.read_process_memory(address, bytes, 64)
-    print(address, raw.split(b"\x00", 1)[0].decode("ascii", "replace"))
+    print(address, raw.split(b"\x00", 1)[0].decode("utf-8", "replace"))
 ```
 
 ### Combining with the refine workflow

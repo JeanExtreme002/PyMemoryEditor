@@ -10,7 +10,7 @@ source venv/bin/activate    # On Windows: venv\Scripts\activate
 make install-dev            # pip install -e ".[dev]"
 ```
 
-The `dev` extra includes `pytest`, `pytest-cov`, `flake8`, `mypy`, `build` and `twine`.
+The `dev` extra installs the full toolchain and the GUI deps.
 
 The `Makefile` is the single source of truth for the dev commands below — run
 `make help` to see every target (docs, build, coverage, etc.). The raw command

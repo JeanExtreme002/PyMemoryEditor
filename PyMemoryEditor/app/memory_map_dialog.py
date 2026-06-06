@@ -18,12 +18,11 @@ dialog also publishes its last snapshot so the main window can reuse it as the
 import sys
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -37,26 +36,8 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess, MemoryRegion, MemoryRegionSnapshot
 
-from ._widgets import NumericItem, shutdown_worker_thread
-
-
-class _SnapshotWorker(QThread):
-    """Background thread that runs ``snapshot_memory_regions()`` off the UI."""
-
-    snapshot_ready = Signal(object)  # List[MemoryRegion]
-    snapshot_failed = Signal(str)
-
-    def __init__(self, process: AbstractProcess, parent=None):
-        super().__init__(parent)
-        self._process = process
-
-    def run(self) -> None:
-        try:
-            snapshot = self._process.snapshot_memory_regions()
-        except Exception as exc:  # noqa: BLE001
-            self.snapshot_failed.emit(str(exc))
-            return
-        self.snapshot_ready.emit(snapshot)
+from ._auto_refresh_dialog import AutoRefreshTableDialog
+from ._widgets import NumericItem
 
 
 def _format_size(size: int) -> str:
@@ -176,17 +157,18 @@ def _region_shared(region) -> str:
     return "Shared" if region.is_shared else "Private"
 
 
-class MemoryMapDialog(QDialog):
+class MemoryMapDialog(AutoRefreshTableDialog):
     """Shows the output of ``get_memory_regions()`` in a sortable table."""
 
     # qulonglong: 64-bit addresses overflow Qt's default int (C++ signed 32-bit).
     open_hex_viewer = Signal("qulonglong", "qulonglong")  # (address, length)
 
     def __init__(self, process: AbstractProcess, parent=None):
-        super().__init__(parent)
-        self._process = process
+        # Auto-refresh the region list so allocations / frees (and any other
+        # mapping changes in the target) appear without a manual refresh; the
+        # refresh() guard self-throttles on a slow target.
+        super().__init__(process, refresh_interval_ms=1000, parent=parent)
         self._snapshot: List[MemoryRegion] = []
-        self._worker: Optional[_SnapshotWorker] = None
 
         # allocate/free are a Windows/macOS capability (Linux raises
         # NotImplementedError); the controls are disabled there.
@@ -200,14 +182,7 @@ class MemoryMapDialog(QDialog):
 
         self._build_ui()
         self.refresh()
-
-        # Auto-refresh the region list so allocations / frees (and any other
-        # mapping changes in the target) appear without a manual refresh. The
-        # refresh() guard self-throttles if a snapshot takes longer than this.
-        self._auto_timer = QTimer(self)
-        self._auto_timer.setInterval(1000)
-        self._auto_timer.timeout.connect(self.refresh)
-        self._auto_timer.start()
+        self._start_auto_refresh()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -366,27 +341,13 @@ class MemoryMapDialog(QDialog):
         """
         return MemoryRegionSnapshot(self._snapshot)
 
-    def refresh(self) -> None:
-        # Skip if a snapshot is already in flight — the 1000ms auto-refresh timer
-        # would otherwise stack workers on a slow (huge) target. This makes the
-        # refresh self-throttle to however long a snapshot actually takes.
-        if self._worker is not None and self._worker.isRunning():
-            return
+    def _set_loading_hint(self) -> None:
+        self._count_label.setText("Loading memory regions…")
 
-        # Only show the loading hint before the first snapshot; on the periodic
-        # refresh the count label updates silently to avoid flicker. The action
-        # controls stay enabled — disabling them every 1000ms would be unusable.
-        if not self._snapshot:
-            self._count_label.setText("Loading memory regions…")
+    def _fetch_data(self):
+        return self._process.snapshot_memory_regions()
 
-        worker = _SnapshotWorker(self._process, self)
-        worker.snapshot_ready.connect(self._on_snapshot_ready)
-        worker.snapshot_failed.connect(self._on_snapshot_failed)
-        worker.finished.connect(self._on_worker_finished)
-        self._worker = worker
-        worker.start()
-
-    def _on_snapshot_ready(self, snapshot) -> None:
+    def _on_data_ready(self, snapshot) -> None:
         # Preserve the MemoryRegionSnapshot tag — scans that reuse this cache
         # via the ``memory_regions=`` kwarg rely on the isinstance check to
         # skip the per-call ``sorted(...)`` step.
@@ -478,25 +439,11 @@ class MemoryMapDialog(QDialog):
                     self._table.scrollTo(self._model.index(row, 0))
                 return
 
-    def _on_snapshot_failed(self, message: str) -> None:
+    def _on_data_failed(self, message: str) -> None:
         self._count_label.setText("Failed to read memory regions.")
         QMessageBox.critical(
             self, "Memory Map", f"Failed to read memory regions:\n\n{message}"
         )
-
-    def _on_worker_finished(self) -> None:
-        worker = self._worker
-        self._worker = None
-        if worker is not None:
-            worker.deleteLater()
-
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
-        self._auto_timer.stop()
-        # Unhook + join the snapshot worker; if it can't stop in time it's
-        # detached rather than destroyed under us.
-        shutdown_worker_thread(self._worker, wait_ms=1000)
-        self._worker = None
-        super().closeEvent(event)
 
     def _selected_region(self) -> Optional[MemoryRegion]:
         rows = self._table.selectionModel().selectedRows()

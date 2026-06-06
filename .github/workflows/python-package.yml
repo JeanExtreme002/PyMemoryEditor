@@ -110,8 +110,29 @@ jobs:
     - name: Test with pytest
       env:
         QT_QPA_PLATFORM: offscreen
+      # --cov-fail-under is the real, in-repo coverage gate (deterministic and
+      # independent of any external service). It's a conservative floor: the
+      # full suite measures ~87% on a given OS today (coverage.py only counts
+      # the host backend + shared code — the two foreign backends aren't
+      # imported, so they don't drag the number down per-platform). 65 leaves
+      # headroom for a less-covered backend / Python-version variance while
+      # still catching any large regression. Ratchet it up once the per-OS
+      # numbers settle on Codecov.
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term
+        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=65
+    - name: Upload coverage to Codecov
+      # Upload from every matrix cell so Codecov merges each OS's backend
+      # coverage into one combined view (each platform exercises a different
+      # win32/linux/macos backend). Informational only — see codecov.yml — so a
+      # flaky upload never blocks the merge; the hard gate is --cov-fail-under
+      # above. Runs even when tests fail so partial coverage stays visible.
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        files: ./coverage.xml
+        flags: ${{ runner.os }}-py${{ matrix.python-version }}
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
 
   # Isolated job for the optional NumPy-accelerated scan fast path (the
   # `[speed]` extra). The matrix above deliberately runs WITHOUT NumPy so the
@@ -158,5 +179,14 @@ jobs:
     - name: Test with pytest (NumPy fast path)
       env:
         QT_QPA_PLATFORM: offscreen
+      # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term
+        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=65
+    - name: Upload coverage to Codecov
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        files: ./coverage.xml
+        flags: speed-Linux-py3.12
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false

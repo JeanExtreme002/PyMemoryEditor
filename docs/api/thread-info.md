@@ -38,14 +38,17 @@ mean "this platform does not expose that attribute via the API we use".
    .. py:attribute:: state
       :type: Optional[str]
 
-      Short human-readable state — e.g. ``"R"`` / ``"S"`` on Linux. ``None``
-      when not available.
+      Short human-readable state — e.g. ``"R"`` / ``"S"``. **Only Linux
+      populates this**; on Windows and macOS it is always ``None`` (those
+      backends don't fetch per-thread state cheaply).
 
    .. py:attribute:: priority
       :type: Optional[int]
 
-      Scheduling priority value as reported by the OS. The scale is
-      platform-specific; ``None`` when not available.
+      Scheduling priority value as reported by the OS (scale is
+      platform-specific). Populated on **Linux and Windows**; always ``None`` on
+      macOS, whose ``get_threads`` returns Mach thread ports without the extra
+      per-thread ``thread_info`` call that priority/state would require.
 
    .. py:attribute:: raw
       :type: Any

@@ -6,6 +6,7 @@ authors = [
     { name = "Jean Loui Bernard Silva de Jesus", email = "contact@jeanloui.dev" },
 ]
 license = "MIT"
+license-files = ["LICENSE*"]
 readme = "README.md"
 keywords = [
     "cheat-engine",
@@ -38,6 +39,8 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
     "Topic :: Security",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Monitoring",
     "Typing :: Typed",
 ]
@@ -133,7 +136,11 @@ packages = ["PyMemoryEditor"]
 # Maintainer-only tooling lives under scripts/ — keep it out of the source
 # distribution (the wheel already only ships the PyMemoryEditor package).
 [tool.hatch.build.targets.sdist]
-exclude = ["scripts"]
+exclude = [
+    "/.github",
+    "/codecov.yml",
+    "/scripts",
+]
 
 [build-system]
 requires = ["hatchling"]

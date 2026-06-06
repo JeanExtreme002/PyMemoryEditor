@@ -24,7 +24,7 @@ It carries everything you need to reconstruct the chain in another run.
 ## Method signature
 
 ```{eval-rst}
-.. py:method:: scan_pointer_paths(target_address, *, max_depth=5, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
+.. py:method:: scan_pointer_paths(target_address, *, max_depth=3, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
    :no-index:
 
    :param int target_address: the dynamic address to find pointer paths to

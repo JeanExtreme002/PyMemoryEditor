@@ -89,6 +89,12 @@ class MainWindow(QMainWindow):
         self._hex_viewers: List[MemoryViewerDialog] = []
 
         self._proc_name = self._read_proc_name()
+        # Identity stamp captured at attach time. The heartbeat compares it so a
+        # recycled PID (the target dies and the OS hands its PID to an unrelated
+        # process) is treated as "exited" instead of silently retargeting a
+        # stranger's memory. None = couldn't read it (we then fall back to a
+        # plain pid_exists liveness check).
+        self._proc_create_time = self._read_proc_create_time()
         self.setWindowTitle(self._window_title())
         self.setWindowIcon(app_icon())
         self.resize(1280, 780)
@@ -465,7 +471,11 @@ class MainWindow(QMainWindow):
         # ones the pattern already located. Skip the auto-refresh and leave
         # the value column empty — the user can promote rows to the cheat
         # table for a live preview there.
-        if request.spec.is_pattern:
+        #
+        # A *regex* match is the exception: it has a real byte_length (the max
+        # match width) and reads as bytes, so we do fill the value column with
+        # the matched text (see _fmt_regex_match).
+        if request.spec.is_pattern and not request.spec.is_regex:
             return
         self._on_update_values(request)
 
@@ -538,8 +548,8 @@ class MainWindow(QMainWindow):
         self._memory_map.activateWindow()
 
     def _on_memory_map_closed(self, _result: int) -> None:
-        # Adopt the dialog's snapshot as the cached one — the user pressed
-        # Refresh in there, the data is fresh.
+        # Adopt the dialog's snapshot as the cached one — it auto-refreshes on a
+        # timer while open, so its last snapshot is fresh.
         if self._memory_map is not None:
             snap = self._memory_map.snapshot()
             if snap:
@@ -760,8 +770,38 @@ class MainWindow(QMainWindow):
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return "<unknown>"
 
-    def _check_process_alive(self) -> None:
+    def _read_proc_create_time(self) -> Optional[float]:
+        """The target's process creation time, or None if it can't be read.
+
+        Used as a cheap identity token: the PID alone is reused by the OS, but
+        (PID, create_time) together uniquely identify a live process.
+        """
+        try:
+            return psutil.Process(self._process.pid).create_time()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return None
+
+    def _target_is_alive(self) -> bool:
+        """True only if the *same* process we attached to is still running.
+
+        Guards against PID reuse: a bare ``pid_exists`` would see a recycled PID
+        as alive and let scans/writes hit an unrelated process. When we have a
+        creation-time stamp, require it to still match.
+        """
         if not psutil.pid_exists(self._process.pid):
+            return False
+        if self._proc_create_time is None:
+            return True  # no stamp to compare — best-effort liveness only
+        try:
+            return (
+                psutil.Process(self._process.pid).create_time()
+                == self._proc_create_time
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return False
+
+    def _check_process_alive(self) -> None:
+        if not self._target_is_alive():
             self._heartbeat.stop()
             self._scanner.set_busy(True)
             self._status.showMessage("Target process exited — operations disabled.")
@@ -791,6 +831,7 @@ class MainWindow(QMainWindow):
 
         self._process = picker.process
         self._proc_name = self._read_proc_name()
+        self._proc_create_time = self._read_proc_create_time()
         self.setWindowTitle(self._window_title())
         self._process_badge.setText(self._process_badge_text())
         self._region_snapshot = None

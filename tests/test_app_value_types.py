@@ -32,6 +32,13 @@ def _spec(*, pytype=None, length=None, pattern=False):
     raise AssertionError(f"no spec for pytype={pytype} length={length} pattern={pattern}")
 
 
+def _regex_spec():
+    for spec in VALUE_TYPES:
+        if spec.is_regex:
+            return spec
+    raise AssertionError("no regex spec")
+
+
 INT4 = _spec(pytype=int, length=4)
 INT1 = _spec(pytype=int, length=1)
 FLOAT = _spec(pytype=float, length=4)
@@ -39,6 +46,7 @@ BOOL = _spec(pytype=bool)
 STR = _spec(pytype=str)
 BYTES = _spec(pytype=bytes, pattern=False)
 AOB = _spec(pattern=True)
+REGEX = _regex_spec()
 
 
 # --- find_spec ------------------------------------------------------------- #
@@ -122,6 +130,26 @@ def test_parse_pattern_empty_and_malformed_raise():
         AOB.parse("4G 8B")            # invalid hex token
 
 
+# --- string regex ---------------------------------------------------------- #
+
+def test_parse_regex_encodes_text_to_utf8_bytes_pattern():
+    # A text regex is UTF-8 encoded into the bytes pattern; the re engine
+    # interprets the metacharacters (\d, [...], +) on the ASCII range.
+    assert REGEX.parse(r"Player[0-9]+") == rb"Player[0-9]+"
+
+
+def test_parse_regex_literal_non_ascii_becomes_its_utf8_bytes():
+    # A literal accented char matches its UTF-8 byte sequence (no rejection).
+    assert REGEX.parse("café") == "café".encode("utf-8")
+
+
+def test_parse_regex_empty_and_invalid_raise():
+    with pytest.raises(ValueError):
+        REGEX.parse("   ")            # empty
+    with pytest.raises(ValueError):
+        REGEX.parse("(unclosed")      # not a valid regex
+
+
 # --- parse_value: length inference (the part that decides scan width) ------ #
 
 def test_parse_value_int_passthrough_length():
@@ -153,6 +181,19 @@ def test_parse_value_pattern_reports_zero_length():
     value, length = parse_value(AOB, "48 8B ? ? 00")
     assert value == "48 8B ? ? 00"
     assert length == 0
+
+
+def test_parse_value_regex_uses_length_field_as_byte_length():
+    # A regex has no inferable match width, so the Length field supplies it.
+    value, length = parse_value(REGEX, r"[A-Z]+", length_override=8)
+    assert value == rb"[A-Z]+"
+    assert length == 8
+
+
+def test_parse_value_regex_falls_back_to_default_width_when_unset():
+    value, length = parse_value(REGEX, r"\d+")
+    assert value == rb"\d+"
+    assert length == REGEX.length
 
 
 # --- format round-trips ---------------------------------------------------- #

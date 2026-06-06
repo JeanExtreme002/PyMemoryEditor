@@ -238,7 +238,16 @@ def mbi_class_for_handle(process_handle: int):
     ok = kernel32.IsWow64Process(process_handle, ctypes.byref(is_wow64))
     if not ok:
         # Conservatively fall back to the host-bitness default rather than fail
-        # — the caller may not need region info at all.
+        # — the caller may not need region info at all. Warn, though: if the
+        # target really is a 32-bit (WOW64) process, the wrong MBI layout makes
+        # VirtualQueryEx return silently-corrupted region fields, which then
+        # poison every is_readable/is_writable filter and scan result.
+        _logger.warning(
+            "IsWow64Process failed (err=%d); assuming the target matches the "
+            "host bitness for region queries. Region fields may be wrong if the "
+            "target is actually a 32-bit (WOW64) process.",
+            ctypes.get_last_error(),
+        )
         return MEMORY_BASIC_INFORMATION
 
     return (
@@ -246,9 +255,13 @@ def mbi_class_for_handle(process_handle: int):
     )
 
 
-def IsProcess64Bit(process_handle: int) -> bool:
+def _detect_process_64bit(process_handle: int) -> Optional[bool]:
     """
-    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+    Return ``True``/``False`` when the target's bitness can be determined, or
+    ``None`` when ``IsWow64Process`` fails so the answer is unknown. The raw
+    *mechanism*: no guessing and no warning — the caller decides what an unknown
+    result means (the public :func:`IsProcess64Bit` falls back to the host
+    bitness; ``AbstractProcess.is_64bit`` honors ``strict_bitness``).
 
     On a 32-bit OS every process is 32-bit. On a 64-bit OS a process is 32-bit
     exactly when it runs under WOW64 (``IsWow64Process`` returns True); a
@@ -261,11 +274,32 @@ def IsProcess64Bit(process_handle: int) -> bool:
     is_wow64 = ctypes.wintypes.BOOL(0)
     ok = kernel32.IsWow64Process(process_handle, ctypes.byref(is_wow64))
     if not ok:
-        # Couldn't query — fall back to the OS bitness (the most likely answer
-        # on a 64-bit host) rather than raise from a simple property access.
-        return True
+        return None
 
     return not bool(is_wow64.value)
+
+
+def IsProcess64Bit(process_handle: int) -> bool:
+    """
+    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+
+    Thin *policy* wrapper over :func:`_detect_process_64bit`: when the bitness
+    can't be queried it falls back to the host bitness (the most likely answer
+    on a 64-bit host) rather than raise from a simple property access, and warns
+    so a wrong pointer-width default (used by the pointer APIs) is at least
+    traceable instead of silently mis-detected.
+    """
+    detected = _detect_process_64bit(process_handle)
+    if detected is not None:
+        return detected
+
+    _logger.warning(
+        "IsWow64Process failed (err=%d); assuming the target is 64-bit "
+        "(host bitness). Pointer-width detection may be wrong if the target "
+        "is actually a 32-bit (WOW64) process.",
+        ctypes.get_last_error(),
+    )
+    return True
 
 
 T = TypeVar("T")
@@ -301,11 +335,20 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
     consult ``GetLastError``: only fall through for the natural end-of-space
     case; for any other failure log it and bump the cursor by one page so the
     walk keeps making progress.
+
+    The walk bounds come from ``GetNativeSystemInfo`` rather than
+    ``GetSystemInfo``: from a 32-bit (WOW64) Python attached to a 64-bit target,
+    ``GetSystemInfo`` reports the *caller's* 2/4 GB ceiling, which would stop the
+    walk early and silently drop every region above it in the target. The native
+    info reports the true address-space ceiling. For a 32-bit target the extra
+    range is empty — ``VirtualQueryEx`` returns ERROR_INVALID_PARAMETER past the
+    32-bit boundary and the loop terminates there — so using the native ceiling
+    never over-enumerates. (From a 64-bit Python the two infos are identical.)
     """
     mbi_class = mbi_class_for_handle(process_handle)
-    mem_region_begin = system_information.lpMinimumApplicationAddress
-    mem_region_end = system_information.lpMaximumApplicationAddress
-    page_size = system_information.dwPageSize or 0x1000
+    mem_region_begin = _native_system_information.lpMinimumApplicationAddress
+    mem_region_end = _native_system_information.lpMaximumApplicationAddress
+    page_size = _native_system_information.dwPageSize or 0x1000
 
     current_address = mem_region_begin
 

@@ -41,11 +41,18 @@ class _FakeProcess:
     frozen-write.
     """
 
-    def __init__(self, values=None, raise_on_batch=False, raise_on_read=False):
+    def __init__(
+        self,
+        values=None,
+        raise_on_batch=False,
+        raise_on_read=False,
+        raise_on_write=False,
+    ):
         # Map (address, pytype, length) → value to return on read.
         self.values = values or {}
         self.raise_on_batch = raise_on_batch
         self.raise_on_read = raise_on_read
+        self.raise_on_write = raise_on_write
         self.read_calls = []
         self.write_calls = []
         self.batch_calls = []
@@ -65,6 +72,8 @@ class _FakeProcess:
 
     def write_process_memory(self, address, pytype, length, value):
         self.write_calls.append((address, pytype, length, value))
+        if self.raise_on_write:
+            raise OSError("simulated write failure")
         return value
 
 
@@ -142,6 +151,57 @@ def test_frozen_entries_get_written_each_tick(qapp):
     # Frozen value overrides whatever was read.
     assert results == [(0x3000, int, 4, 42)]
     assert process.write_calls == [(0x3000, int, 4, 42)]
+
+
+def test_frozen_write_failure_is_recorded_not_swallowed(qapp):
+    """A failing freeze write must be recorded (so the UI can flag it), not
+    silently swallowed, and the read value must still be surfaced so the table
+    shows the value drifting away from the frozen target."""
+    process = _FakeProcess(values={(0x3000, int, 4): 123}, raise_on_write=True)
+    worker = _make_worker(process)
+
+    snapshot = [(0x3000, int, 4, 42, True)]  # frozen with frozen_value=42
+    results = worker._poll_once(snapshot)
+
+    # The write was attempted...
+    assert process.write_calls == [(0x3000, int, 4, 42)]
+    # ...failed, so the surfaced value is the real (drifting) read, not 42.
+    assert results == [(0x3000, int, 4, 123)]
+    # ...and the failure is tracked for the UI cue.
+    assert (0x3000, int, 4) in worker._freeze_failures
+    assert "OSError" in worker._freeze_failures[(0x3000, int, 4)]
+
+
+def test_frozen_write_failure_clears_when_write_recovers(qapp):
+    """Once the freeze write succeeds again, the entry drops out of the failing
+    set so the UI can clear its red cue."""
+    process = _FakeProcess(values={(0x3000, int, 4): 123}, raise_on_write=True)
+    worker = _make_worker(process)
+    snapshot = [(0x3000, int, 4, 42, True)]
+
+    worker._poll_once(snapshot)
+    assert (0x3000, int, 4) in worker._freeze_failures
+
+    # Backend recovers; next tick's write lands.
+    process.raise_on_write = False
+    results = worker._poll_once(snapshot)
+
+    assert worker._freeze_failures == {}
+    assert results == [(0x3000, int, 4, 42)]  # frozen value applied again
+
+
+def test_unfreezing_a_failing_entry_drops_it_from_failures(qapp):
+    """An entry removed/unfrozen between ticks must not linger in the failing
+    set (it's rebuilt from the live snapshot each tick)."""
+    process = _FakeProcess(values={(0x3000, int, 4): 123}, raise_on_write=True)
+    worker = _make_worker(process)
+
+    worker._poll_once([(0x3000, int, 4, 42, True)])
+    assert (0x3000, int, 4) in worker._freeze_failures
+
+    # Same entry, but no longer frozen → no write attempt, no failure.
+    worker._poll_once([(0x3000, int, 4, 42, False)])
+    assert worker._freeze_failures == {}
 
 
 def test_frozen_entry_with_none_value_does_not_write(qapp):

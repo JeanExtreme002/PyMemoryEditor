@@ -22,8 +22,8 @@ from PySide6.QtCore import QThread, Signal
 
 from PyMemoryEditor import AbstractProcess, MemoryRegion, ScanTypesEnum
 
-from .scan_types import NextScanType, ScanType
-from .value_types import ValueTypeSpec
+from .scan_types import NextScanType, NO_VALUE_SCAN_TYPES, ScanType
+from .value_types import parse_value, ValueTypeSpec
 
 
 _LOG = logging.getLogger(__name__)
@@ -73,6 +73,86 @@ class ScanRequest:
     memory_regions: Optional[Sequence[MemoryRegion]] = None
 
 
+def build_scan_request(
+    spec: ValueTypeSpec,
+    scan_type: ScanType,
+    *,
+    value_text: str,
+    second_value_text: str = "",
+    length_spin_value: Optional[int] = None,
+    writeable_only: bool = False,
+    with_value: bool = True,
+) -> ScanRequest:
+    """
+    Assemble a :class:`ScanRequest` from raw field values, with no Qt.
+
+    This is the pure core of ``ScannerPanel._build_request`` lifted out of the
+    widget so the request-assembly rules (pattern short-circuit, the
+    str-ignores-length override, range parsing, the no-value scan types) can be
+    unit-tested without a ``QApplication``. The widget keeps only the bits that
+    are genuinely UI: reading the fields and showing a ``QMessageBox`` on the
+    ``ValueError`` raised here.
+
+    :raises ValueError: if a value/pattern fails to parse (message is
+        user-facing — the caller picks the dialog title from ``spec.is_pattern``).
+    """
+    # Pattern path — value is the pattern, scan_type is always EXACT. For an
+    # IDA pattern the length is irrelevant (derived from the pattern); for a
+    # regex it carries byte_length (the match width) from the Length field.
+    if spec.is_pattern:
+        value, length = parse_value(
+            spec, value_text, length_spin_value if spec.is_regex else None
+        )
+        return ScanRequest(
+            spec=spec,
+            length=int(length),
+            scan_type=ScanTypesEnum.EXACT_VALUE,
+            value=None if not with_value else value,
+            writeable_only=writeable_only,
+        )
+
+    # String (UTF-8) ignores the length field: pass None so parse_value derives
+    # the buffer width from the typed text's UTF-8 byte length. Byte Array still
+    # honours the user-set override.
+    length_override = (
+        length_spin_value
+        if spec.accepts_length_override and spec.pytype is not str
+        else None
+    )
+
+    # Increased/Decreased/Changed/Unchanged compare current vs previous and need
+    # no target value — just the value shape (type + length).
+    if scan_type in NO_VALUE_SCAN_TYPES:
+        length = length_override if length_override is not None else spec.length
+        return ScanRequest(
+            spec=spec,
+            length=int(length),
+            scan_type=scan_type,
+            value=None,
+            writeable_only=writeable_only,
+        )
+
+    value: Any
+    if scan_type in (ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN):
+        lo, lo_len = parse_value(spec, value_text, length_override)
+        hi, hi_len = parse_value(spec, second_value_text, length_override)
+        length = max(lo_len, hi_len)
+        value = (lo, hi)
+    else:
+        value, length = parse_value(spec, value_text, length_override)
+
+    if not with_value:
+        value = None  # Used by callers that only need spec/length/scan_type.
+
+    return ScanRequest(
+        spec=spec,
+        length=int(length),
+        scan_type=scan_type,
+        value=value,
+        writeable_only=writeable_only,
+    )
+
+
 class _BaseWorker(QThread):
     progress = Signal(float)  # 0.0 … 100.0
     status = Signal(str)  # human status line
@@ -99,14 +179,17 @@ class FirstScanWorker(_BaseWorker):
     def run(self) -> None:
         req = self._request
         try:
-            # AOB pattern path: req.value is the IDA-style pattern string,
-            # routed through search_by_pattern. writeable_only doesn't apply
+            # Pattern path: req.value is the IDA-style string or a bytes regex,
+            # routed through search_by_pattern. req.length carries byte_length —
+            # ignored for IDA strings (inferred from the token count), required
+            # for a regex (its match width). writeable_only doesn't apply
             # (pattern scan filters by readability internally; restricting to
             # writable-only would silently miss code-section signatures, which
             # is the most common AOB use case).
             if req.spec.is_pattern:
                 generator = self._process.search_by_pattern(
                     req.value,
+                    byte_length=req.length,
                     progress_information=True,
                     memory_regions=req.memory_regions,
                 )

@@ -283,8 +283,9 @@ def iter_search_results(
     # match begins. Read ``bufflength - 1`` extra bytes from the next
     # chunk so the scan can complete a straddling decode without ever
     # re-emitting an offset (the scanner only yields offsets in
-    # ``range(0, chunk_size - bufflength + 1, step)`` from the *augmented*
-    # size, which still maps to addresses inside the original chunk).
+    # ``range(0, read_size - bufflength + 1, step)`` over the *augmented*
+    # read_size, and the clamp below keeps every emitted offset inside the
+    # original chunk).
     str_overlap = bufflength - 1 if pytype is str else 0
 
     for region in memory_regions:

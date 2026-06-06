@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import ctypes
+import logging
 import sys
 from abc import ABC, abstractmethod
 from typing import (
@@ -18,6 +20,7 @@ from typing import (
 
 from ..enums import ScanTypesEnum
 from ..util import UNSET, _check_int_fits
+from .errors import BitnessDetectionError
 from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .region import MemoryRegion, MemoryRegionSnapshot
@@ -27,6 +30,8 @@ if TYPE_CHECKING:
     from .pointer_scan import PointerPath
     from .remote_pointer import RemotePointer
 
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 T = TypeVar("T")
 
@@ -44,6 +49,7 @@ class AbstractProcess(ABC):
         pid: Optional[int] = None,
         case_sensitive: bool = True,
         exact_match: bool = True,
+        strict_bitness: bool = False,
     ):
         """
         :param process_name: name of the target process.
@@ -54,6 +60,12 @@ class AbstractProcess(ABC):
             substring — ``"chrome"`` matches ``"chrome.exe"`` / ``"Google Chrome"``.
             If more than one process matches, ``AmbiguousProcessNameError`` is
             raised so you can pick a PID from the list.
+        :param strict_bitness: when True, :attr:`is_64bit` raises
+            :class:`~PyMemoryEditor.BitnessDetectionError` if the target's
+            32-/64-bit width can't be read from its headers, instead of falling
+            back to the host word size. Use it when a wrong pointer-width
+            default would be worse than a hard failure (the pointer APIs rely on
+            it). Check :attr:`is_bitness_certain` for the non-strict signal.
         """
         self._process_info = ProcessInfo()
 
@@ -75,6 +87,10 @@ class AbstractProcess(ABC):
         # Cache for the target's bitness — resolved lazily on first access of
         # `is_64bit` / `pointer_size` (a syscall per backend) and reused after.
         self._is_64bit_cache: Optional[bool] = None
+        # Whether that resolution read the target's headers (True/False) or fell
+        # back to a host-word-size guess (False). Set alongside the cache.
+        self._bitness_certain: Optional[bool] = None
+        self._strict_bitness = strict_bitness
 
     def __enter__(self):
         return self
@@ -87,7 +103,7 @@ class AbstractProcess(ABC):
         return self._process_info.pid
 
     @abstractmethod
-    def _detect_is_64bit(self) -> bool:
+    def _detect_is_64bit(self) -> Optional[bool]:
         """
         Detect whether the target process is 64-bit. Backend-specific:
 
@@ -97,6 +113,11 @@ class AbstractProcess(ABC):
           (read from ``/proc/<pid>/exe`` or a file-backed image mapping).
         * **macOS** — the Mach-O header magic of a loaded image
           (``MH_MAGIC_64`` vs ``MH_MAGIC``).
+
+        Returns ``True``/``False`` when the headers can be read, or ``None`` when
+        the bitness is *undeterminable* — :attr:`is_64bit` then either falls back
+        to the host word size or raises (see ``strict_bitness``). This is the raw
+        mechanism only: implementations must **not** guess or warn here.
 
         Called once by :attr:`is_64bit`, which caches the result. Implementations
         may assume the process is still open.
@@ -116,10 +137,53 @@ class AbstractProcess(ABC):
         :meth:`resolve_pointer_chain`, :meth:`scan_pointer_paths`,
         :meth:`get_pointer` and :class:`~PyMemoryEditor.RemotePointer`: leave
         ``ptr_size`` as ``None`` and the right pointer width (4 or 8) is used.
+
+        When the backend can't read the target's headers, the result depends on
+        ``strict_bitness`` (passed to the constructor): the default ``False``
+        falls back to the **host** word size and logs a WARNING — convenient,
+        but possibly wrong for a cross-bitness target (a 32-bit process on a
+        64-bit host) — while ``True`` raises
+        :class:`~PyMemoryEditor.BitnessDetectionError`. Either way,
+        :attr:`is_bitness_certain` reports whether the value was read or guessed.
         """
         if self._is_64bit_cache is None:
-            self._is_64bit_cache = bool(self._detect_is_64bit())
+            detected = self._detect_is_64bit()
+            if detected is not None:
+                self._is_64bit_cache = bool(detected)
+                self._bitness_certain = True
+            elif self._strict_bitness:
+                raise BitnessDetectionError(self.pid)
+            else:
+                host_is_64bit = ctypes.sizeof(ctypes.c_void_p) == 8
+                _logger.warning(
+                    "Could not determine the bitness of process %d from its "
+                    "headers; assuming the host word size (%d-bit). The "
+                    "pointer-width default used by resolve_pointer_chain / "
+                    "RemotePointer / scan_pointer_paths may be wrong for a "
+                    "cross-bitness target — pass ptr_size explicitly, or open "
+                    "the process with strict_bitness=True to raise instead.",
+                    self.pid,
+                    64 if host_is_64bit else 32,
+                )
+                self._is_64bit_cache = host_is_64bit
+                self._bitness_certain = False
         return self._is_64bit_cache
+
+    @property
+    def is_bitness_certain(self) -> bool:
+        """
+        ``True`` if :attr:`is_64bit` was read from the target's own headers,
+        ``False`` if it fell back to a guess of the host word size because they
+        couldn't be read.
+
+        When ``False`` the automatic ``ptr_size`` default may be wrong for a
+        cross-bitness target — pass ``ptr_size`` explicitly to the pointer APIs,
+        or open the process with ``strict_bitness=True`` to turn the guess into
+        a :class:`~PyMemoryEditor.BitnessDetectionError` instead. Accessing this
+        resolves :attr:`is_64bit` if it hasn't been already.
+        """
+        self.is_64bit  # force detection (and the strict_bitness check) to run
+        return bool(self._bitness_certain)
 
     @property
     def pointer_size(self) -> int:
@@ -265,18 +329,35 @@ class AbstractProcess(ABC):
         for the provided value, returning the found addresses.
 
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8). Optional — defaults
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
+            any positive width is accepted (for ``int`` an unusual width such as
+            3 or 6 is rounded up to the next C integer type). Optional — defaults
             to ``None``: numeric types (int, float, bool) use their default
             width (int→4, float→8, bool→1) and ``str`` / ``bytes`` infer it from
             the encoded length of ``value``. Since it is optional, pass ``value``
             by keyword when omitting it: ``search_by_value(int, value=100)``.
         :param value: value to be queried (bool, int, float, str or bytes).
             Required.
-        :param scan_type: the way to compare the values.
+        :param scan_type: the way to compare the values. ``VALUE_BETWEEN`` and
+            ``NOT_VALUE_BETWEEN`` are not accepted here and raise ``ValueError``;
+            use ``search_by_value_between`` instead.
         :param progress_information: if True, a dictionary with the progress information will be returned.
         :param writeable_only: if True, search only at writeable memory regions.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
+        :raises ValueError: if ``scan_type`` is ``VALUE_BETWEEN`` or
+            ``NOT_VALUE_BETWEEN``, or if an ``int`` ``value`` does not fit in
+            ``bufflength`` bytes.
+
+        .. note::
+           This scan always restricts itself to readable, **non-shared**
+           regions (``writeable_only`` narrows it further to writable ones).
+           Shared / file-backed mappings (libc text, memory-mapped files) are
+           always skipped — they're noise a value scan rarely wants, and
+           excluding them keeps results identical across platforms. The same
+           filter is applied to a caller-supplied ``memory_regions`` list too
+           (that argument only skips region *enumeration*, not the filtering),
+           so shared regions can't be opted back in.
         """
         raise NotImplementedError()
 
@@ -298,7 +379,10 @@ class AbstractProcess(ABC):
             hex string with ``?`` wildcards (``"48 8B ? ? 00"``), a raw bytes
             regex, or a pre-compiled ``re.Pattern[bytes]``.
         :param byte_length: required when ``pattern`` is a regex / pre-compiled
-            Pattern — the number of bytes one match consumes. Ignored for
+            Pattern — the **maximum** number of bytes one match can consume. It
+            drives the chunk overlap so a match straddling a chunk boundary is
+            still found (a variable-width regex like ``Player[0-9]+`` has no
+            fixed width, so give the largest match you expect). Ignored for
             IDA-style strings (inferred from the token count).
         :param progress_information: if True, yields ``(address, info)``
             tuples (same shape as ``search_by_value``).
@@ -345,7 +429,9 @@ class AbstractProcess(ABC):
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8). For numeric types
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
+            any positive width is accepted (for ``int`` an unusual width such as
+            3 or 6 is rounded up to the next C integer type). For numeric types
             (int, float, bool) you may omit this; defaults are int→4, float→8,
             bool→1. str and bytes require an explicit size.
 
@@ -824,10 +910,11 @@ class AbstractProcess(ABC):
             read-only pointers (e.g. vtables), which is slower and noisier.
         :param static_ranges: explicit ``(start, size)`` ranges to treat as
             valid chain bases. Defaults to the image range of every loaded
-            module. **macOS note:** ``ModuleInfo.size`` there covers only the
-            ``__TEXT`` segment, so global pointers in ``__DATA`` may fall
-            outside the default static set — pass ``static_ranges`` explicitly
-            (or accept reduced static-base coverage) on macOS.
+            module. On macOS this default already spans **every** Mach-O segment
+            of each image (not just ``__TEXT``) — see :meth:`_static_image_ranges`,
+            which the macOS backend overrides — so global pointers in ``__DATA``
+            are covered automatically; you do not need to pass ``static_ranges``
+            for them.
         :param max_results: stop after yielding this many paths (``None`` = no
             cap). Recommended for shallow exploration of large targets.
         :param memory_regions: optional snapshot from

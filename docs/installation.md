@@ -8,7 +8,7 @@ any platform.
 
 <table>
 <tr><td><b>Python</b></td><td>3.10 or newer</td></tr>
-<tr><td><b>Operating systems</b></td><td>🪟 Windows · 🐧 Linux · 🍎 macOS (32-bit and 64-bit)</td></tr>
+<tr><td><b>Operating systems</b></td><td>🪟 Windows · 🐧 Linux · 🍎 macOS</td></tr>
 </table>
 <br>
 
@@ -53,7 +53,7 @@ pip install "PyMemoryEditor[speed]"
 That's the only change required — there is no new API and no flag to toggle.
 PyMemoryEditor detects NumPy at import time and switches the fast path on; if
 NumPy is absent it falls back to the pure-Python loop transparently. The results
-are **identical** either way — only the speed changes (typically 10–60× faster
+are **identical** either way — only the speed changes (typically ~10–30× faster
 on selective scans of large regions). See
 [Scan acceleration](guide/searching.md#scan-acceleration-the-speed-extra) for
 details and benchmarks.

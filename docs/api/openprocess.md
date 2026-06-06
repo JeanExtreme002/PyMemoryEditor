@@ -123,7 +123,9 @@ with OpenProcess(
       ``value`` by keyword when omitting it (``write_process_memory(addr, int,
       value=9999)``).
    :param value: the value to write.
-   :returns: the written value.
+   :returns: the original ``value`` you passed in — **not** the truncated/encoded
+      form actually written (a capped ``str``/``bytes`` write returns the full
+      original value).
 ```
 
 ### Typed shortcuts
@@ -262,7 +264,7 @@ identical on every platform.
    Build a :py:class:`RemotePointer` bound to this process — a live,
    re-resolving handle. See :doc:`../guide/pointers`.
 
-.. py:method:: scan_pointer_paths(target_address, *, max_depth=5, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
+.. py:method:: scan_pointer_paths(target_address, *, max_depth=3, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
 
    Reverse pointer scan — yield :py:class:`PointerPath` recipes that resolve
    to ``target_address``. See :doc:`../guide/pointer-scan`.

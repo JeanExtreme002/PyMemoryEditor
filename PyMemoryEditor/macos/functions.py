@@ -85,6 +85,34 @@ _REGION_SKIP_BUMP = 0x1000
 _MACH_WRITE_MAX_SIZE = 0xFFFFFFFF
 
 
+# Host page size, used to align the protect-flip span in `_mach_write`.
+# 4 KiB on Intel, 16 KiB on Apple Silicon — `mach_vm_protect` operates at page
+# granularity, so we must align the address/size we hand it (see below).
+try:
+    _PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
+except (ValueError, OSError, AttributeError):  # pragma: no cover - exotic hosts
+    _PAGE_SIZE = 0x4000  # conservative: the larger (Apple Silicon) page
+
+
+def _page_aligned_span(address: int, size: int) -> Tuple[int, int]:
+    """
+    Return ``(start, length)`` covering ``[address, address+size)`` expanded out
+    to whole page boundaries.
+
+    ``mach_vm_protect`` works on page granularity: handing it an unaligned
+    address and a sub-page size lets the kernel round the affected span
+    *outward*, so a write that straddles a page boundary would have its
+    protection changed on a wider range than the literal byte range — and the
+    later restore, if it used the same unaligned ``[address, address+size)``,
+    could miss part of that range and leave a page slice permanently more
+    permissive. Aligning both the elevate and the restore to the exact same
+    page span keeps them symmetric.
+    """
+    start = address & ~(_PAGE_SIZE - 1)
+    end = (address + size + _PAGE_SIZE - 1) & ~(_PAGE_SIZE - 1)
+    return start, end - start
+
+
 T = TypeVar("T")
 
 
@@ -172,7 +200,7 @@ def _region_is_shared(task: int, address: int, basic_shared: int) -> bool:
 
 def get_memory_regions(task: int) -> Generator[MemoryRegion, None, None]:
     """
-    Yield {address, size, struct} dicts describing each memory region of the task.
+    Yield a :class:`MemoryRegion` describing each memory region of the task.
 
     ``mach_vm_region`` returning :data:`KERN_INVALID_ADDRESS` is the documented
     way the kernel says "no more regions past this address" — the natural end
@@ -335,8 +363,15 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
 
     original_protection = region.struct.Protection
 
+    # Align the protect span to whole pages: mach_vm_protect is page-granular,
+    # and the restore below must cover the exact same span as the elevate or it
+    # could leave a slice of a straddled page more permissive than it started.
+    prot_address, prot_size = _page_aligned_span(address, size)
+
     new_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY
-    protect_kr = libsystem.mach_vm_protect(task, address, size, 0, new_protection)
+    protect_kr = libsystem.mach_vm_protect(
+        task, prot_address, prot_size, 0, new_protection
+    )
     if protect_kr != KERN_SUCCESS:
         raise OSError(
             "mach_vm_write failed (kr=%d) and mach_vm_protect could not elevate "
@@ -357,7 +392,7 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
         # leaves the target page more permissive than it started, which is an
         # invisible side-effect the caller should know about.
         restore_kr = libsystem.mach_vm_protect(
-            task, address, size, 0, original_protection
+            task, prot_address, prot_size, 0, original_protection
         )
         if restore_kr != KERN_SUCCESS:
             message = (
@@ -859,14 +894,14 @@ def get_modules(task: int) -> Generator[ModuleInfo, None, None]:
         )
 
 
-def is_task_64bit(task: int) -> bool:
+def _detect_task_64bit(task: int) -> Optional[bool]:
     """
-    Return ``True`` if the target task is 64-bit, ``False`` if 32-bit.
-
-    Reads the Mach-O header magic of a loaded image (every image in a process
-    shares its bitness): ``MH_MAGIC_64`` means 64-bit, ``MH_MAGIC`` means
-    32-bit. macOS has shipped 64-bit only since Catalina (10.15), so if no
-    image header can be read this defaults to ``True``.
+    Return ``True``/``False`` from the Mach-O header magic of a loaded image
+    (every image in a process shares its bitness): ``MH_MAGIC_64`` means 64-bit,
+    ``MH_MAGIC`` means 32-bit. Returns ``None`` when no image header can be read.
+    The raw *mechanism*: no guessing and no warning — the caller decides what an
+    unknown result means (the public :func:`is_task_64bit` defaults to 64-bit;
+    ``AbstractProcess.is_64bit`` honors ``strict_bitness``).
     """
     for module in get_modules(task):
         try:
@@ -879,8 +914,27 @@ def is_task_64bit(task: int) -> bool:
             return True
         if magic == _MH_MAGIC_32:
             return False
+    return None
 
-    # No readable image header — macOS is 64-bit only on every supported release.
+
+def is_task_64bit(task: int) -> bool:
+    """
+    Return ``True`` if the target task is 64-bit, ``False`` if 32-bit.
+
+    Thin *policy* wrapper over :func:`_detect_task_64bit`. macOS has shipped
+    64-bit only since Catalina (10.15), so when no image header can be read this
+    defaults to ``True``; it warns so a wrong pointer-width default (used by the
+    pointer APIs) is traceable rather than silent.
+    """
+    detected = _detect_task_64bit(task)
+    if detected is not None:
+        return detected
+
+    _logger.warning(
+        "is_task_64bit: no readable Mach-O header for task %d; assuming 64-bit "
+        "(macOS has been 64-bit only since Catalina).",
+        task,
+    )
     return True
 
 
