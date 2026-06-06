@@ -442,6 +442,10 @@ class AbstractProcess(ABC):
            raising ``UnicodeDecodeError``. This matches ``search_by_addresses``
            and ``convert_from_byte_array``. Callers that need the original
            bytes verbatim (no decoding) should pass ``pytype=bytes``.
+
+        :raises ValueError: if ``pytype`` is unsupported.
+        :raises OSError: if the read fails, or returns fewer bytes than
+            requested (e.g. the range crosses an unreadable/freed page).
         """
         raise NotImplementedError()
 
@@ -479,6 +483,11 @@ class AbstractProcess(ABC):
 
             Positional calls keep working unchanged
             (``write_process_memory(address, int, 4, 99)``).
+        :raises ValueError: if ``pytype`` is unsupported, or if an ``int``
+            ``value`` does not fit in ``bufflength`` bytes (rejected up front
+            rather than silently truncated).
+        :raises OSError: if the write fails, or fewer bytes than requested are
+            written (e.g. the range crosses an unwritable/freed page).
         :return: the original ``value`` passed in.
         """
         raise NotImplementedError()

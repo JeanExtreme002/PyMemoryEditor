@@ -337,13 +337,20 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
     walk keeps making progress.
 
     The walk bounds come from ``GetNativeSystemInfo`` rather than
-    ``GetSystemInfo``: from a 32-bit (WOW64) Python attached to a 64-bit target,
-    ``GetSystemInfo`` reports the *caller's* 2/4 GB ceiling, which would stop the
-    walk early and silently drop every region above it in the target. The native
-    info reports the true address-space ceiling. For a 32-bit target the extra
-    range is empty — ``VirtualQueryEx`` returns ERROR_INVALID_PARAMETER past the
-    32-bit boundary and the loop terminates there — so using the native ceiling
-    never over-enumerates. (From a 64-bit Python the two infos are identical.)
+    ``GetSystemInfo`` so that, from a 64-bit Python attached to a 32-bit target,
+    the ceiling reflects the host's full address space. For a 32-bit target the
+    extra range is empty — ``VirtualQueryEx`` returns ERROR_INVALID_PARAMETER
+    past the 32-bit boundary and the loop terminates there — so using the native
+    ceiling never over-enumerates. (From a 64-bit Python the two infos are
+    identical for the address-range fields anyway.)
+
+    Note this does *not* extend the walk for a 32-bit (WOW64) Python attached to
+    a 64-bit target. ``lpMaximumApplicationAddress`` is ``c_void_p`` (4 bytes in
+    a 32-bit interpreter), so it cannot hold a >4 GB ceiling regardless of which
+    *SystemInfo call fills it; and ``VirtualQueryEx`` takes a pointer-width
+    ``lpAddress``, so a WOW64 process cannot query the target's high memory at
+    all. Enumerating a 64-bit target's address space above 4 GB therefore
+    requires a 64-bit Python — an API limitation, not something this call fixes.
     """
     mbi_class = mbi_class_for_handle(process_handle)
     mem_region_begin = _native_system_information.lpMinimumApplicationAddress
@@ -535,8 +542,8 @@ def SearchAddressesByPattern(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
-    AOB scan against every scannable region of the target process. See
-    :meth:`AbstractProcess.search_by_pattern`.
+    AOB scan against every readable, non-shared region of the target process.
+    See :meth:`AbstractProcess.search_by_pattern`.
     """
     compiled, length = compile_pattern(pattern, byte_length=byte_length)
 

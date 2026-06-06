@@ -5,6 +5,9 @@ description = "Read, write and scan process memory in a few lines of Python — 
 authors = [
     { name = "Jean Loui Bernard Silva de Jesus", email = "contact@jeanloui.dev" },
 ]
+maintainers = [
+    { name = "Jean Loui Bernard Silva de Jesus", email = "contact@jeanloui.dev" },
+]
 license = "MIT"
 license-files = ["LICENSE*"]
 readme = "README.md"
@@ -99,6 +102,7 @@ Documentation = "https://pymemoryeditor.readthedocs.io"
 Repository = "https://github.com/JeanExtreme002/PyMemoryEditor"
 Issues = "https://github.com/JeanExtreme002/PyMemoryEditor/issues"
 Changelog = "https://github.com/JeanExtreme002/PyMemoryEditor/releases"
+Funding = "https://github.com/sponsors/JeanExtreme002"
 
 [tool.mypy]
 # The Qt app uses dynamic types and depends on the optional PySide6 GUI
@@ -142,8 +146,11 @@ exclude = [
     "/scripts",
 ]
 
+# hatchling>=1.27 is required for PEP 639 metadata: the SPDX ``license = "MIT"``
+# expression and ``license-files`` glob above are only understood from that
+# version on. Older hatchling fails the build with a confusing error.
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 # Coverage scope: the Qt app is excluded — it's exercised manually, not by
