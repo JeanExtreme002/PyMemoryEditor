@@ -89,7 +89,7 @@ Raised when **more than one** running process matches the given
 ```{eval-rst}
 .. py:exception:: AmbiguousProcessNameError
 
-   .. py:attribute:: name
+   .. py:attribute:: process_name
       :type: str
 
       The process name that was looked up.
