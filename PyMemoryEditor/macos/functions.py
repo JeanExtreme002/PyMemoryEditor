@@ -9,7 +9,8 @@ import ctypes
 import logging
 import os
 import warnings
-from typing import Generator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
+from contextlib import contextmanager
+from typing import Generator, Iterator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
 from ..process.module_info import ModuleInfo
@@ -148,7 +149,17 @@ def get_task_for_pid(pid: int) -> int:
 def release_task(task: int) -> None:
     """Release a task port. No-op for mach_task_self_."""
     if task and task != mach_task_self_.value:
-        libsystem.mach_port_deallocate(mach_task_self_.value, task)
+        kr = libsystem.mach_port_deallocate(mach_task_self_.value, task)
+        if kr != KERN_SUCCESS:
+            # A failed deallocate leaks the send right for the lifetime of the
+            # process. It shouldn't happen for a port we own, but swallowing it
+            # silently hid real leaks — log it so they're at least visible.
+            _logger.warning(
+                "mach_port_deallocate failed for task port %d: %s (kr=%d)",
+                task,
+                mach_error_message(kr),
+                kr,
+            )
 
 
 def _region_user_tag(task: int, address: int) -> int:
@@ -326,40 +337,33 @@ def _mach_read(task: int, address: int, local_buffer_address: int, size: int) ->
     return out_size.value
 
 
-def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -> None:
+@contextmanager
+def _elevated_write_protection(
+    task: int, address: int, size: int, *, original_kr: int
+) -> Iterator[None]:
     """
-    Write `size` bytes from `local_buffer_address` to `address`.
+    Temporarily make the page span covering ``(address, size)`` read+write,
+    restoring its original protection on exit — the protect-flip that lets a
+    write land on a read-only page (mirroring WriteProcessMemory on Windows).
 
-    On read-only pages, mach_vm_write returns KERN_PROTECTION_FAILURE. This
-    helper transparently elevates the page protection to RW (using VM_PROT_COPY
-    so the change is private to the target task), performs the write, and
-    restores the original protection. This mirrors the practical behavior of
-    WriteProcessMemory on Windows.
+    The elevate uses ``VM_PROT_COPY`` so the change is private to the target
+    task. ``original_kr`` is the kern_return_t of the write that triggered this
+    retry; it's woven into the error if the address turns out to be genuinely
+    invalid, so the caller still sees the *original* failure rather than a
+    misleading "protect failed".
 
-    ``mach_vm_write``'s ``data_count`` parameter is a 32-bit
-    ``mach_msg_type_number_t`` per the Mach interface; reject ``size`` values
-    that would silently truncate at the kernel boundary instead of letting
-    them slip through.
+    :raises OSError: if the region can't be queried (invalid address) or the
+        protection can't be elevated. A failure to *restore* on exit is logged
+        and warned (the write already happened) but never raised.
     """
-    if size > _MACH_WRITE_MAX_SIZE:
-        raise OverflowError(
-            "mach_vm_write size %d exceeds UINT32_MAX — the Mach interface "
-            "would silently truncate. Split the write into smaller chunks."
-            % size
-        )
-
-    kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
-    if kr == KERN_SUCCESS:
-        return
-
-    if kr not in _WRITE_RETRY_CODES:
-        raise OSError("mach_vm_write failed: %s (kr=%d)" % (mach_error_message(kr), kr))
-
-    # Try to discover the page's original protection so we can restore it.
+    # Discover the page's original protection so we can restore it afterwards.
     region = _query_region(task, address)
     if region is None:
-        # The address really is invalid — surface the original error.
-        raise OSError("mach_vm_write failed: %s (kr=%d)" % (mach_error_message(kr), kr))
+        # The address really is invalid — surface the original write error.
+        raise OSError(
+            "mach_vm_write failed: %s (kr=%d)"
+            % (mach_error_message(original_kr), original_kr)
+        )
 
     original_protection = region.struct.Protection
 
@@ -376,16 +380,11 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
         raise OSError(
             "mach_vm_write failed (kr=%d) and mach_vm_protect could not elevate "
             "the protection (kr=%d, %s)."
-            % (kr, protect_kr, mach_error_message(protect_kr))
+            % (original_kr, protect_kr, mach_error_message(protect_kr))
         )
 
     try:
-        kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
-        if kr != KERN_SUCCESS:
-            raise OSError(
-                "mach_vm_write failed after protect: %s (kr=%d)"
-                % (mach_error_message(kr), kr)
-            )
+        yield
     finally:
         # Best-effort restore. The write itself already succeeded, so raising
         # here would discard the user's intended outcome; but a silent failure
@@ -408,6 +407,44 @@ def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -
             )
             _logger.warning(message)
             warnings.warn(message, ResourceWarning, stacklevel=2)
+
+
+def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -> None:
+    """
+    Write `size` bytes from `local_buffer_address` to `address`.
+
+    On read-only pages, mach_vm_write returns KERN_PROTECTION_FAILURE. This
+    helper retries under :func:`_elevated_write_protection`, which transparently
+    flips the page to RW, lets the write land, and restores the original
+    protection. This mirrors the practical behavior of WriteProcessMemory on
+    Windows.
+
+    ``mach_vm_write``'s ``data_count`` parameter is a 32-bit
+    ``mach_msg_type_number_t`` per the Mach interface; reject ``size`` values
+    that would silently truncate at the kernel boundary instead of letting
+    them slip through.
+    """
+    if size > _MACH_WRITE_MAX_SIZE:
+        raise OverflowError(
+            "mach_vm_write size %d exceeds UINT32_MAX — the Mach interface "
+            "would silently truncate. Split the write into smaller chunks."
+            % size
+        )
+
+    kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
+    if kr == KERN_SUCCESS:
+        return
+
+    if kr not in _WRITE_RETRY_CODES:
+        raise OSError("mach_vm_write failed: %s (kr=%d)" % (mach_error_message(kr), kr))
+
+    with _elevated_write_protection(task, address, size, original_kr=kr):
+        retry_kr = libsystem.mach_vm_write(task, address, local_buffer_address, size)
+        if retry_kr != KERN_SUCCESS:
+            raise OSError(
+                "mach_vm_write failed after protect: %s (kr=%d)"
+                % (mach_error_message(retry_kr), retry_kr)
+            )
 
 
 def _make_read_chunk(task: int):
@@ -578,8 +615,9 @@ def search_addresses_by_value(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
-    Walk every readable region of the task and yield addresses whose value
-    matches the scan criteria.
+    Walk every readable, non-shared region of the task and yield addresses
+    whose value matches the scan criteria. Shared / file-backed mappings
+    (including the dyld shared cache) are skipped via ``default_scan_filter``.
 
     Passing a `memory_regions` snapshot skips region enumeration.
     """
@@ -947,7 +985,7 @@ def search_addresses_by_pattern(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
-    AOB scan against every readable region of the target task. See
+    AOB scan against every readable, non-shared region of the target task. See
     :meth:`AbstractProcess.search_by_pattern`.
     """
     compiled, length = compile_pattern(pattern, byte_length=byte_length)

@@ -17,7 +17,6 @@ module before the split.
 """
 import copy
 import json
-import logging
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -56,9 +55,6 @@ from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec, parse_value
 # poll-interval constant from this module before the split.
 _TICK_INTERVAL_MS = TICK_INTERVAL_MS
 
-# Child of "PyMemoryEditor" — the Log Console captures these via propagation.
-_LOG = logging.getLogger(__name__)
-
 
 class CheatTable(QWidget):
     """Bottom pane: saved addresses, freezing, manual edits."""
@@ -85,6 +81,7 @@ class CheatTable(QWidget):
         self._poller = _CheatPollWorker(process, self)
         self._poller.values_ready.connect(self._on_values_ready)
         self._poller.freeze_failed.connect(self._on_freeze_failed)
+        self._poller.write_failed.connect(self._on_write_failed)
         self._poller.start()
 
         # A short cadence to push fresh entry snapshots into the worker. This
@@ -314,23 +311,15 @@ class CheatTable(QWidget):
                 self._suspend_signals = False
                 return
 
-            try:
-                self._process.write_process_memory(
-                    entry.address, entry.spec.pytype, entry.length, value
-                )
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.critical(
-                    self, "Write Failed", f"{type(exc).__name__}: {exc}"
-                )
-                _LOG.warning(
-                    "Cheat-table write failed at 0x%X (%s, %dB): %s: %s",
-                    entry.address,
-                    entry.spec.pytype.__name__,
-                    entry.length,
-                    type(exc).__name__,
-                    exc,
-                )
-                return
+            # Route the write through the poll worker so the syscall never runs
+            # on the UI thread — a slow target or a page fault would otherwise
+            # freeze the interface. The local update below is optimistic: the
+            # next poll tick reads the value back and corrects the cell if the
+            # write didn't take, and an outright failure returns via
+            # write_failed → _on_write_failed.
+            self._poller.request_write(
+                entry.address, entry.spec.pytype, entry.length, value
+            )
 
             entry.last_value = value
             if entry.frozen:
@@ -423,6 +412,17 @@ class CheatTable(QWidget):
                     item.setToolTip(self._VALUE_TOOLTIP)
         finally:
             self._suspend_signals = False
+
+    def _on_write_failed(self, failure) -> None:
+        """Surface a manual value write that failed on the worker thread.
+
+        The write is now async (queued onto the poll worker), so its failure
+        arrives here via the ``write_failed`` signal rather than inline. The
+        optimistic cell update made when the edit was queued is corrected by the
+        next poll tick, which reads back the unchanged value.
+        """
+        _address, _pytype, _length, message = failure
+        QMessageBox.critical(self, "Write Failed", message)
 
     def _editing_row(self) -> int:
         """Return the row currently being edited, or -1 if none."""

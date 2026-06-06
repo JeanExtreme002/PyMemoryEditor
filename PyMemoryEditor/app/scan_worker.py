@@ -71,6 +71,11 @@ class ScanRequest:
     # Optional cached snapshot of memory regions, reused across scans to skip
     # the region enumeration step. Pass None to let the backend enumerate.
     memory_regions: Optional[Sequence[MemoryRegion]] = None
+    # When True and no snapshot is supplied, FirstScanWorker builds one itself
+    # (off the UI thread) and emits it via ``snapshot_ready`` so the caller can
+    # cache it for later scans. Building it here keeps the (potentially slow)
+    # region enumeration off the UI thread.
+    build_snapshot: bool = False
 
 
 def build_scan_request(
@@ -172,6 +177,10 @@ class _BaseWorker(QThread):
 class FirstScanWorker(_BaseWorker):
     """Performs the very first scan, finding every address that matches."""
 
+    # Emitted (off the UI thread) with the freshly built MemoryRegionSnapshot
+    # when ``request.build_snapshot`` was set, so the owner can cache it.
+    snapshot_ready = Signal(object)
+
     def __init__(self, process: AbstractProcess, request: ScanRequest, parent=None):
         super().__init__(process, parent)
         self._request = request
@@ -179,6 +188,23 @@ class FirstScanWorker(_BaseWorker):
     def run(self) -> None:
         req = self._request
         try:
+            # Build the region snapshot here rather than on the UI thread: the
+            # enumeration can be slow on a large target and would otherwise
+            # stall the scan dialog. Emit it so the owner can cache it for the
+            # refine/update scans that follow.
+            if req.memory_regions is None and req.build_snapshot:
+                try:
+                    req.memory_regions = self._process.snapshot_memory_regions()
+                    self.snapshot_ready.emit(req.memory_regions)
+                except Exception as exc:  # noqa: BLE001
+                    # Snapshot is an optimization; fall back to per-scan
+                    # enumeration rather than failing the whole scan.
+                    _LOG.warning(
+                        "Region snapshot failed; scanning without cache: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
+                    req.memory_regions = None
             # Pattern path: req.value is the IDA-style string or a bytes regex,
             # routed through search_by_pattern. req.length carries byte_length —
             # ignored for IDA strings (inferred from the token count), required

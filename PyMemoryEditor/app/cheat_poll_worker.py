@@ -62,12 +62,16 @@ class _CheatPollWorker(QThread):
 
     values_ready = Signal(object)  # list[tuple[int, type, int, Any]]
     freeze_failed = Signal(object)  # dict[_EntryKey, str] — current failing freezes
+    write_failed = Signal(object)  # tuple[int, type, int, str] — a manual write that failed
 
     def __init__(self, process: AbstractProcess, parent=None):
         super().__init__(parent)
         self._process = process
         self._mutex = QMutex()
         self._snapshot: List[Tuple[int, type, int, Any, bool]] = []
+        # One-shot manual writes queued from the UI (inline value edits). Drained
+        # at the top of each tick so the syscall runs here, not on the UI thread.
+        self._pending_writes: List[Tuple[int, type, int, Any]] = []
         self._stop = False
         # Entries whose freeze write is currently failing → last error string.
         # Touched only by the worker thread (run() / _poll_once), so no lock.
@@ -87,9 +91,51 @@ class _CheatPollWorker(QThread):
         with QMutexLocker(self._mutex):
             self._snapshot = list(snapshot)
 
+    def request_write(
+        self, address: int, pytype: type, length: int, value: Any
+    ) -> None:
+        """Queue a one-shot manual write to be performed on the worker thread.
+
+        The cheat table's inline value edits used to call
+        ``write_process_memory`` directly on the UI thread, freezing the UI when
+        the target was slow or the page faulted. Routing them here keeps the
+        syscall off the UI thread; a write that fails comes back via the
+        ``write_failed`` signal. Latency is at most one tick (~100 ms), which is
+        imperceptible for a manual edit.
+        """
+        with QMutexLocker(self._mutex):
+            self._pending_writes.append((address, pytype, length, value))
+
     def stop(self) -> None:
         with QMutexLocker(self._mutex):
             self._stop = True
+
+    def _drain_pending_writes(self) -> List[Tuple[int, type, int, str]]:
+        """Perform and clear every queued manual write.
+
+        Returns one ``(address, pytype, length, message)`` tuple per write that
+        failed, so ``run`` can surface it via ``write_failed``. Reads and clears
+        the queue under the lock, then runs the syscalls outside it so a slow
+        write never blocks a UI thread enqueuing the next edit.
+        """
+        with QMutexLocker(self._mutex):
+            if not self._pending_writes:
+                return []
+            pending = self._pending_writes
+            self._pending_writes = []
+
+        failures: List[Tuple[int, type, int, str]] = []
+        for address, pytype, length, value in pending:
+            try:
+                self._process.write_process_memory(address, pytype, length, value)
+            except Exception as exc:  # noqa: BLE001
+                message = "%s: %s" % (type(exc).__name__, exc)
+                failures.append((address, pytype, length, message))
+                _LOG.warning(
+                    "Cheat-table write failed at 0x%X (%s, %dB): %s",
+                    address, pytype.__name__, length, message,
+                )
+        return failures
 
     def run(self) -> None:
         while True:
@@ -98,18 +144,30 @@ class _CheatPollWorker(QThread):
                     return
                 snapshot = list(self._snapshot)
 
-            if snapshot:
-                results = self._poll_once(snapshot)
-                if results:
-                    self.values_ready.emit(results)
+            # Never let an exception escape the loop body: a QThread whose
+            # run() raises dies silently, and the table would then stop
+            # auto-updating forever while the rest of the app (separate
+            # workers) keeps working. Catch, log the cause, and keep ticking.
+            try:
+                # Apply queued manual writes before reading, so a just-typed
+                # value lands and is read back as the new current value this tick.
+                for failure in self._drain_pending_writes():
+                    self.write_failed.emit(failure)
 
-            # Emit the freeze-failure state only when it changed since the last
-            # tick — a frozen page that keeps failing shouldn't fire the signal
-            # 10×/second, but the UI must learn the moment one starts or stops
-            # failing (including recovering back to an empty map).
-            if self._freeze_failures != self._last_emitted_failures:
-                self._last_emitted_failures = dict(self._freeze_failures)
-                self.freeze_failed.emit(dict(self._freeze_failures))
+                if snapshot:
+                    results = self._poll_once(snapshot)
+                    if results:
+                        self.values_ready.emit(results)
+
+                # Emit the freeze-failure state only when it changed since the
+                # last tick — a frozen page that keeps failing shouldn't fire the
+                # signal 10×/second, but the UI must learn the moment one starts
+                # or stops failing (including recovering back to an empty map).
+                if self._freeze_failures != self._last_emitted_failures:
+                    self._last_emitted_failures = dict(self._freeze_failures)
+                    self.freeze_failed.emit(dict(self._freeze_failures))
+            except Exception:  # noqa: BLE001
+                _LOG.exception("Cheat poll tick failed; continuing")
 
             QThread.msleep(TICK_INTERVAL_MS)
 

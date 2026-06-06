@@ -344,21 +344,16 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             return
 
-        # Build a cached region snapshot the first time the user asks for one.
-        if self._scanner.use_snapshot_cache() and self._region_snapshot is None:
-            try:
-                self._region_snapshot = self._process.snapshot_memory_regions()
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(
-                    self,
-                    "Memory regions",
-                    f"Could not cache memory regions ({exc}). Continuing without cache.",
-                )
-                self._region_snapshot = None
-
-        request.memory_regions = (
-            self._region_snapshot if self._scanner.use_snapshot_cache() else None
-        )
+        # Decide how the worker sources its region list. When the user wants the
+        # snapshot cache and we don't have one yet, let the worker build it off
+        # the UI thread (region enumeration can be slow on a large target) and
+        # hand it back via snapshot_ready for reuse by the refine scans.
+        if self._scanner.use_snapshot_cache():
+            request.memory_regions = self._region_snapshot
+            request.build_snapshot = self._region_snapshot is None
+        else:
+            request.memory_regions = None
+            request.build_snapshot = False
 
         self._results_model.clear()
         self._results_model.set_value_spec(request.spec)
@@ -377,6 +372,9 @@ class MainWindow(QMainWindow):
         worker.status.connect(self._status.showMessage)
         worker.error.connect(self._on_worker_error)
         worker.finished_ok.connect(self._on_first_scan_done)
+        # The worker builds the region snapshot off the UI thread; cache it here
+        # for the refine/update scans that reuse it.
+        worker.snapshot_ready.connect(self._on_snapshot_ready)
         # Connection order matters: _cleanup_worker must clear self._worker
         # before _fill_initial_values runs, otherwise the busy guard in
         # _on_update_values rejects the auto-refresh.
@@ -694,6 +692,10 @@ class MainWindow(QMainWindow):
         )
         self._hex_viewers.append(viewer)
         viewer.show()
+
+    def _on_snapshot_ready(self, snapshot) -> None:
+        """Cache the region snapshot the FirstScanWorker built off-thread."""
+        self._region_snapshot = snapshot
 
     def _refresh_region_snapshot(self) -> None:
         try:

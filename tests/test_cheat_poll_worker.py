@@ -266,3 +266,40 @@ def test_empty_snapshot_yields_nothing(qapp):
     assert process.read_calls == []
     assert process.batch_calls == []
     assert process.write_calls == []
+
+
+def test_request_write_is_queued_and_drained(qapp):
+    """A manual write is queued and performed by the worker, not inline.
+
+    Routing the cheat-table's inline value edit through the worker keeps the
+    write_process_memory syscall off the UI thread.
+    """
+    process = _FakeProcess()
+    worker = _make_worker(process)
+
+    # Queuing alone performs no syscall.
+    worker.request_write(0x1000, int, 4, 77)
+    assert process.write_calls == []
+
+    failures = worker._drain_pending_writes()
+
+    assert failures == []
+    assert process.write_calls == [(0x1000, int, 4, 77)]
+    # The queue is cleared after draining.
+    assert worker._drain_pending_writes() == []
+    assert process.write_calls == [(0x1000, int, 4, 77)]
+
+
+def test_request_write_failure_is_reported(qapp):
+    """A manual write that fails comes back as a (key, message) failure tuple
+    so the UI can surface it via the write_failed signal."""
+    process = _FakeProcess(raise_on_write=True)
+    worker = _make_worker(process)
+
+    worker.request_write(0x2000, int, 4, 5)
+    failures = worker._drain_pending_writes()
+
+    assert len(failures) == 1
+    address, pytype, length, message = failures[0]
+    assert (address, pytype, length) == (0x2000, int, 4)
+    assert "OSError" in message
