@@ -635,8 +635,17 @@ class CheatTable(QWidget):
         if not filename:
             return
         payload = {"entries": [entry.to_dict() for entry in self._entries]}
-        with open(filename, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+        try:
+            with open(filename, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+        except OSError as exc:
+            # A read-only target, a full disk or a permission error must not
+            # crash the app — surface it the way _on_import does for reads.
+            QMessageBox.critical(self, "Export", f"Could not write file:\n\n{exc}")
+            return
+        QMessageBox.information(
+            self, "Export", f"Saved {len(self._entries)} entr(y/ies) to:\n\n{filename}"
+        )
 
     def _on_import(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(

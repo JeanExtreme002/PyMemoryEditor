@@ -27,7 +27,7 @@ it helps others discover the library too.
 
 **🌍 Truly cross-platform**
 
-One identical API on **Windows, Linux and macOS**, 32- and 64-bit. Write your
+One identical API on **Windows, Linux and macOS**, 32-bit and 64-bit. Write your
 script once; it runs everywhere.
 
 **🪶 Zero dependencies**
@@ -51,7 +51,7 @@ ASLR — save them once and reuse them every launch.
 **⚡ Optional NumPy acceleration**
 
 Add the [`speed`](installation.md#install-with-scan-acceleration-speed) extra
-and selective scans get **10–60× faster** — a drop-in fast path, identical
+and selective scans get **~10–30× faster** — a drop-in fast path, identical
 results.
 
 **🖥️ A GUI app, included**

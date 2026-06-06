@@ -189,18 +189,29 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
         for line in mapping_file:
             region_information = line.split()
 
-            addressing_range, privileges, offset, device, inode = region_information[
-                0:5
-            ]
-            path = region_information[5] if len(region_information) >= 6 else ""
+            try:
+                addressing_range, privileges, offset, device, inode = (
+                    region_information[0:5]
+                )
+                path = region_information[5] if len(region_information) >= 6 else ""
 
-            start_address, end_address = [
-                int(addr, 16) for addr in addressing_range.split("-")
-            ]
-            major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
+                start_address, end_address = [
+                    int(addr, 16) for addr in addressing_range.split("-")
+                ]
+                major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
 
-            offset = int(offset, 16)
-            inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
+                offset = int(offset, 16)
+                inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
+            except (ValueError, IndexError) as exc:
+                # A single malformed line (kernel quirk, racing teardown) must
+                # not abort the whole region walk — skip it and keep going, the
+                # same log-and-continue contract the Windows/macOS walkers use.
+                _logger.debug(
+                    "get_memory_regions: skipping unparseable maps line %r: %s",
+                    line,
+                    exc,
+                )
+                continue
 
             size = end_address - start_address
 
@@ -325,6 +336,14 @@ def is_process_64bit(pid: int) -> bool:
         return False
 
     # Couldn't determine it — assume the host's word size (the usual case).
+    # Warn so a wrong pointer-width default (used by the pointer APIs) is
+    # traceable instead of a silent mis-detection on a cross-bitness target.
+    _logger.warning(
+        "is_process_64bit: could not read the ELF class for pid %d; assuming "
+        "the host word size. Pointer-width detection may be wrong for a "
+        "cross-bitness target.",
+        pid,
+    )
     return ctypes.sizeof(ctypes.c_void_p) == 8
 
 

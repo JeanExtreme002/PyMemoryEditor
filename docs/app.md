@@ -48,7 +48,8 @@ name or PID.
 **🔁 Refine workflow**
 
 - **First Scan → Next Scan** (Cheat Engine style)
-- Eight Next Scan comparisons (increased, decreased, changed, unchanged, …)
+- Six Next Scan comparisons (increased / decreased / changed / unchanged, plus
+  increased-by / decreased-by)
 - Live progress
 
 **📋 Cheat table**
@@ -70,12 +71,12 @@ name or PID.
 **🗺️ Memory map**
 
 - All regions with R/W/X flags
-- Source file / module per region (where available)
+- Backing file path per region (Linux; blank where the OS doesn't expose it)
 
 **🔬 Hex viewer**
 
 - Live dump with write-back
-- Address goto, navigation
+- Go to any address, with auto-refresh
 
 **🪵 Log console**
 
@@ -89,14 +90,13 @@ name or PID.
 ```{admonition} Cross-platform dark theme
 :class: tip
 
-The app ships with a dark theme that follows the system on macOS and Windows
-11 and uses a manual toggle elsewhere. Themes live under
-**View → Theme**.
+The app ships with several built-in dark themes (Kali Teal by default). Pick one
+from the **Theme** button on the toolbar; your choice is remembered between runs.
 ```
 
 ## Typical workflow
 
-1. **Open a process** from the dialog (or `File → Open Process`).
+1. **Open a process** from the startup dialog (or later via `File → Change Process…`).
 2. **Run a First Scan**: pick the value type, type the value you can see, hit
    *First Scan*.
 3. **Refine** with Next Scan after the value changes — pick *Exact Value* with

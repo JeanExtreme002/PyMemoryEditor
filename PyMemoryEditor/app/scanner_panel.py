@@ -16,7 +16,7 @@ Outputs (signals):
 * :pysig:`update_values_requested(ScanRequest)` — re-read values without filtering
 * :pysig:`cancel_requested()`
 """
-from typing import Any, Optional
+from typing import Optional
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -43,8 +43,8 @@ from .scan_types import (
     NextScanType,
     is_next_scan_type,
 )
-from .scan_worker import ScanRequest
-from .value_types import VALUE_TYPES, find_spec, parse_value
+from .scan_worker import build_scan_request, ScanRequest
+from .value_types import VALUE_TYPES, find_spec
 
 
 SCAN_TYPE_CHOICES = (
@@ -369,74 +369,23 @@ class ScannerPanel(QWidget):
 
         _, scan_type = SCAN_TYPE_CHOICES[self._scan_combo.currentIndex()]
 
-        # AOB pattern path — value is the pattern string, scan_type is always
-        # EXACT (the combo was forced + disabled by _on_type_changed), and
-        # length is irrelevant (the scanner derives it from the pattern).
-        if spec.is_pattern:
-            try:
-                value, length = parse_value(spec, self._value_edit.text())
-            except ValueError as exc:
-                QMessageBox.warning(self, "Invalid pattern", str(exc))
-                return None
-            return ScanRequest(
-                spec=spec,
-                length=int(length),
-                scan_type=ScanTypesEnum.EXACT_VALUE,
-                value=None if not with_value else value,
-                writeable_only=self._writable_check.isChecked(),
-            )
-
-        # String (UTF-8) ignores the (disabled) length field: pass None so
-        # parse_value derives the buffer width from the typed text's UTF-8
-        # byte length. Byte Array still honours the user-set override.
-        length_override = (
-            self._length_spin.value()
-            if spec.accepts_length_override and spec.pytype is not str
-            else None
-        )
-
-        # Increased/Decreased/Changed/Unchanged compare current vs previous and
-        # need no target value — just the value shape (type + length).
-        if scan_type in NO_VALUE_SCAN_TYPES:
-            length = length_override if length_override is not None else spec.length
-            return ScanRequest(
-                spec=spec,
-                length=int(length),
-                scan_type=scan_type,
-                value=None,
-                writeable_only=self._writable_check.isChecked(),
-            )
-
-        value: Any
+        # All the assembly rules live in the pure build_scan_request() (unit
+        # tested without Qt). The widget keeps only the genuinely-UI parts:
+        # reading the fields and turning the ValueError into a message box.
         try:
-            if scan_type in (
-                ScanTypesEnum.VALUE_BETWEEN,
-                ScanTypesEnum.NOT_VALUE_BETWEEN,
-            ):
-                lo, lo_len = parse_value(spec, self._value_edit.text(), length_override)
-                hi, hi_len = parse_value(
-                    spec, self._second_value_edit.text(), length_override
-                )
-                length = max(lo_len, hi_len)
-                value = (lo, hi)
-            else:
-                value, length = parse_value(
-                    spec, self._value_edit.text(), length_override
-                )
+            return build_scan_request(
+                spec,
+                scan_type,
+                value_text=self._value_edit.text(),
+                second_value_text=self._second_value_edit.text(),
+                length_spin_value=self._length_spin.value(),
+                writeable_only=self._writable_check.isChecked(),
+                with_value=with_value,
+            )
         except ValueError as exc:
-            QMessageBox.warning(self, "Invalid value", str(exc))
+            title = "Invalid pattern" if spec.is_pattern else "Invalid value"
+            QMessageBox.warning(self, title, str(exc))
             return None
-
-        if not with_value:
-            value = None  # Used by callers that only need spec/length/scan_type.
-
-        return ScanRequest(
-            spec=spec,
-            length=int(length),
-            scan_type=scan_type,
-            value=value,
-            writeable_only=self._writable_check.isChecked(),
-        )
 
     def _on_first_scan(self) -> None:
         _, scan_type = SCAN_TYPE_CHOICES[self._scan_combo.currentIndex()]

@@ -136,8 +136,12 @@ for address, value in process.search_by_addresses(int, 4, addresses):
     print(f"0x{address:X} -> {value}")
 ```
 
-If an address falls in an unmapped page, the value is `None` (unless
-`raise_error=True`).
+If an address isn't backed by any mapped region (it falls in a gap, or its
+`[address, address+bufflength)` runs past the end of its region), the value is
+**always** `None` — `raise_error` does not turn that into an exception, because
+there is nothing there to read. `raise_error=True` only affects an address that
+*is* inside a mapped region but whose read fails (e.g. the page vanished): then
+it raises `OSError` instead of yielding `None`.
 
 ### Method signature
 
@@ -151,7 +155,8 @@ If an address falls in an unmapped page, the value is `None` (unless
       addresses to read. Pass ``addresses`` by keyword when omitting it.
    :param Sequence[int] addresses: addresses to inspect.
    :param bool raise_error: when ``True``, raises ``OSError`` instead of yielding
-      ``None`` for an unreadable address.
+      ``None`` for an address that is inside a mapped region but fails to read.
+      Addresses with no backing region always yield ``None`` regardless.
    :param memory_regions: optional snapshot.
    :returns: a generator of ``(address, value)`` tuples.
 ```
@@ -242,7 +247,7 @@ emitting matches.
 
 <table>
 <tr><th>Scenario</th><th>Typical speedup</th></tr>
-<tr><td>Selective scan of a large region (few matches — the usual first scan / refine step)</td><td><b>10–60×</b></td></tr>
+<tr><td>Selective scan of a large region (few matches — the usual first scan / refine step)</td><td><b>~10–30×</b></td></tr>
 <tr><td>Scan where most values match (e.g. <code>&gt; 0</code> on mostly-positive data)</td><td>~2× (result building dominates)</td></tr>
 <tr><td><code>str</code> ordered scans (<code>&gt;</code>, <code>&lt;</code>, <code>between</code>)</td><td>no NumPy fast path — instead C-accelerated by the regex byte-class prefilter (independent of the <code>speed</code> extra)</td></tr>
 <tr><td><code>bytes</code> scans, or unusual widths (3/6/7 bytes)</td><td>no change (no NumPy fast path; pure-Python loop)</td></tr>

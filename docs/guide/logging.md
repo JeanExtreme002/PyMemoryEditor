@@ -28,7 +28,7 @@ WARNING  PyMemoryEditor: mach_vm_protect could not restore protection at 0x14010
 <table>
 <tr><th>Level</th><th>When it fires</th></tr>
 <tr><td><code>DEBUG</code></td><td>Transient skips during enumeration/scans (pages vanished mid-scan, unreadable chunks, a thread/module/image that couldn't be read).</td></tr>
-<tr><td><code>WARNING</code></td><td>Surprising-but-recovered conditions — currently the macOS <code>mach_vm_protect</code> restore failure after a write to a read-only page.</td></tr>
+<tr><td><code>WARNING</code></td><td>Surprising-but-recovered conditions. Two cases today: (1) the bitness of the target couldn't be detected and a fallback was assumed (a failed <code>IsWow64Process</code> on Windows, or no readable ELF/Mach-O header on Linux/macOS) — pointer-width-dependent APIs may be wrong if the guess is; (2) the macOS <code>mach_vm_protect</code> restore failure after a write to a read-only page.</td></tr>
 </table>
 
 ```{note}

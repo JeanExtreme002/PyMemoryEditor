@@ -6,7 +6,7 @@ Centralises tiny helpers (numeric sort items, hex address parsing) that
 previously appeared duplicated across several dialog modules.
 """
 
-from typing import List, Optional
+from typing import Callable, Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QStandardItem
@@ -90,3 +90,73 @@ def parse_hex_address(text: str) -> Optional[int]:
         return int(cleaned, 16)
     except (TypeError, ValueError):
         return None
+
+
+def parse_offsets(texts: Iterable[str]) -> Optional[List[int]]:
+    """Parse pointer-chain offset tokens (in order) from raw field strings.
+
+    Empty tokens are skipped; every remaining token is read as hex (with or
+    without ``0x``). Returns ``None`` if any non-empty token can't be parsed —
+    the caller treats that as "invalid chain, do nothing". Pure (no Qt) so it
+    can be unit-tested directly.
+    """
+    offsets: List[int] = []
+    for text in texts:
+        if not text:
+            continue
+        parsed = parse_hex_address(text)
+        if parsed is None:
+            # parse_hex_address handles the 0x form; fall back to a plain hex
+            # int for ambiguous tokens like "10" (the dialog treats offsets as
+            # hex throughout).
+            try:
+                parsed = int(text, 16)
+            except ValueError:
+                return None
+        offsets.append(parsed)
+    return offsets
+
+
+def resolve_base_address(
+    text: str, module_lookup: Callable[[str], Optional[int]]
+) -> Tuple[Optional[int], Optional[str]]:
+    """Resolve a pointer-chain base field into an absolute address.
+
+    Accepts either a plain hex address (``0x14010F4F4``) or Cheat-Engine's
+    ``"module"+0xoffset`` form (``"libpython3.12.dylib"+0x4ED3D0``); for the
+    latter the module's current load base is looked up via ``module_lookup``
+    (a ``name -> base | None`` callable) and the offset added, so a saved
+    pointer-scan path resolves correctly despite ASLR.
+
+    Returns ``(address, None)`` on success or ``(None, error_message)`` on
+    failure — the caller renders ``error_message`` in a dialog. Pure (no Qt).
+    """
+    text = text.strip()
+
+    if "+" in text:
+        name_part, _, offset_part = text.partition("+")
+        module_name = name_part.strip().strip('"').strip("'").strip()
+        offset = parse_hex_address(offset_part)
+        if offset is None:
+            try:
+                offset = int(offset_part.strip(), 16)
+            except ValueError:
+                return None, (
+                    "The offset after '+' must be hex "
+                    '(e.g. "game.exe"+0x10F4F4).'
+                )
+        module_base = module_lookup(module_name)
+        if module_base is None:
+            return None, (
+                f"Module {module_name!r} is not loaded in this process.\n\n"
+                "Open Tools → Modules to see the exact names available."
+            )
+        return module_base + offset, None
+
+    base = parse_hex_address(text)
+    if base is None:
+        return None, (
+            'Base must be hex (0x14010F4F4) or "module"+0xoffset '
+            '(e.g. "game.exe"+0x10F4F4).'
+        )
+    return base, None

@@ -50,7 +50,7 @@ pymemoryeditor
 ```
 
 For faster scans on large processes, add the `speed` extra. It pulls in NumPy
-and automatically vectorizes the numeric scan comparison loop — 10–60× faster on
+and automatically vectorizes the numeric scan comparison loop — ~10–30× faster on
 selective scans:
 
 ```bash

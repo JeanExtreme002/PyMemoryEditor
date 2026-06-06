@@ -824,10 +824,11 @@ class AbstractProcess(ABC):
             read-only pointers (e.g. vtables), which is slower and noisier.
         :param static_ranges: explicit ``(start, size)`` ranges to treat as
             valid chain bases. Defaults to the image range of every loaded
-            module. **macOS note:** ``ModuleInfo.size`` there covers only the
-            ``__TEXT`` segment, so global pointers in ``__DATA`` may fall
-            outside the default static set — pass ``static_ranges`` explicitly
-            (or accept reduced static-base coverage) on macOS.
+            module. On macOS this default already spans **every** Mach-O segment
+            of each image (not just ``__TEXT``) — see :meth:`_static_image_ranges`,
+            which the macOS backend overrides — so global pointers in ``__DATA``
+            are covered automatically; you do not need to pass ``static_ranges``
+            for them.
         :param max_results: stop after yielding this many paths (``None`` = no
             cap). Recommended for shallow exploration of large targets.
         :param memory_regions: optional snapshot from

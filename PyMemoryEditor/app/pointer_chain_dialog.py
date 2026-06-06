@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess
 
-from ._widgets import parse_hex_address
+from ._widgets import parse_hex_address, parse_offsets, resolve_base_address
 from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec
 
 
@@ -319,23 +319,7 @@ class PointerChainDialog(QDialog):
 
     def _read_offsets(self) -> Optional[List[int]]:
         """Collect non-empty offsets in order; return None if any one is invalid."""
-        offsets: List[int] = []
-        for field in self._offset_fields:
-            text = field.text()
-            if not text:
-                continue
-            parsed = parse_hex_address(text)
-            if parsed is None:
-                # parse_hex_address only handles full hex addresses with or
-                # without ``0x``; try a plain hex int as a fallback for tokens
-                # like ``"10"`` that look ambiguous (decimal vs hex). The
-                # whole dialog treats offsets as hex.
-                try:
-                    parsed = int(text, 16)
-                except ValueError:
-                    return None
-            offsets.append(parsed)
-        return offsets
+        return parse_offsets(field.text() for field in self._offset_fields)
 
     def _on_value_type_changed(self, label: str) -> None:
         spec = find_spec(label)
@@ -376,49 +360,15 @@ class PointerChainDialog(QDialog):
         """
         Parse the Base field into an absolute address.
 
-        Accepts either a plain hex address (``0x14010F4F4``) or Cheat-Engine's
-        ``"module"+0xoffset`` form (``"libpython3.12.dylib"+0x4ED3D0``), looking
-        the module's current load base up via ``get_modules()`` and adding the
-        offset — so a saved pointer-scan path (module + module_offset) can be
-        pasted straight in and resolves correctly despite ASLR. Shows a specific
-        warning and returns ``None`` on failure.
+        Thin Qt wrapper over the pure :func:`resolve_base_address`: it owns the
+        module lookup and renders the error in a dialog; all the parsing rules
+        (hex vs ``"module"+0xoffset``) live in (and are unit-tested via) the
+        pure helper.
         """
-        text = text.strip()
-
-        if "+" in text:
-            name_part, _, offset_part = text.partition("+")
-            module_name = name_part.strip().strip('"').strip("'").strip()
-            offset = parse_hex_address(offset_part)
-            if offset is None:
-                try:
-                    offset = int(offset_part.strip(), 16)
-                except ValueError:
-                    QMessageBox.warning(
-                        self,
-                        "Resolve",
-                        "The offset after '+' must be hex (e.g. \"game.exe\"+0x10F4F4).",
-                    )
-                    return None
-            module_base = self._lookup_module_base(module_name)
-            if module_base is None:
-                QMessageBox.warning(
-                    self,
-                    "Resolve",
-                    f"Module {module_name!r} is not loaded in this process.\n\n"
-                    "Open Tools → Modules to see the exact names available.",
-                )
-                return None
-            return module_base + offset
-
-        base = parse_hex_address(text)
-        if base is None:
-            QMessageBox.warning(
-                self,
-                "Resolve",
-                'Base must be hex (0x14010F4F4) or "module"+0xoffset '
-                '(e.g. "game.exe"+0x10F4F4).',
-            )
-        return base
+        address, error = resolve_base_address(text, self._lookup_module_base)
+        if error is not None:
+            QMessageBox.warning(self, "Resolve", error)
+        return address
 
     def _on_resolve(self) -> None:
         base_text = self._base_edit.text().strip()

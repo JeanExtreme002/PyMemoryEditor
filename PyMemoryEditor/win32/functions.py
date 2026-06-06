@@ -238,7 +238,16 @@ def mbi_class_for_handle(process_handle: int):
     ok = kernel32.IsWow64Process(process_handle, ctypes.byref(is_wow64))
     if not ok:
         # Conservatively fall back to the host-bitness default rather than fail
-        # — the caller may not need region info at all.
+        # — the caller may not need region info at all. Warn, though: if the
+        # target really is a 32-bit (WOW64) process, the wrong MBI layout makes
+        # VirtualQueryEx return silently-corrupted region fields, which then
+        # poison every is_readable/is_writable filter and scan result.
+        _logger.warning(
+            "IsWow64Process failed (err=%d); assuming the target matches the "
+            "host bitness for region queries. Region fields may be wrong if the "
+            "target is actually a 32-bit (WOW64) process.",
+            ctypes.get_last_error(),
+        )
         return MEMORY_BASIC_INFORMATION
 
     return (
@@ -263,6 +272,14 @@ def IsProcess64Bit(process_handle: int) -> bool:
     if not ok:
         # Couldn't query — fall back to the OS bitness (the most likely answer
         # on a 64-bit host) rather than raise from a simple property access.
+        # Warn so a wrong pointer-width default (used by the pointer APIs) is at
+        # least traceable instead of silently mis-detected.
+        _logger.warning(
+            "IsWow64Process failed (err=%d); assuming the target is 64-bit "
+            "(host bitness). Pointer-width detection may be wrong if the target "
+            "is actually a 32-bit (WOW64) process.",
+            ctypes.get_last_error(),
+        )
         return True
 
     return not bool(is_wow64.value)

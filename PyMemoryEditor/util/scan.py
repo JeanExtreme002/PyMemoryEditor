@@ -61,10 +61,17 @@ def iter_region_chunks(
     overhead of a generator state machine in the hot path. Larger regions get a
     lazy generator that yields aligned chunks.
 
-    Chunk sizes are aligned to target_value_size so typed numeric scans don't
-    miss matches across boundaries. Strings (which can begin at any byte
-    offset) may miss matches that span chunk boundaries when the region
-    exceeds max_chunk — rare in practice and documented as a limitation.
+    Chunk sizes are aligned to target_value_size, so a typed **numeric** scan
+    (which steps by that size) can never have a value straddle a boundary — no
+    overlap is needed there. For scans that can match at *any* byte offset —
+    string value scans, pattern (AOB/regex) scans, and per-address reads — the
+    scan drivers in ``process.scanning`` (``iter_search_results``,
+    ``iter_pattern_results``, ``iter_values_for_addresses``) read
+    ``value_size - 1`` extra bytes from the next chunk and clamp matches to the
+    original chunk, so a match that straddles a boundary — including the
+    large-region splits produced here when ``region_size > max_chunk`` — is
+    still found. These chunks are non-overlapping by design; that overlap is the
+    consumer's responsibility, not this function's.
     """
     if region_size <= max_chunk:
         return ((0, region_size),)

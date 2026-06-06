@@ -119,7 +119,9 @@ write the whole string. For `bytes`, the cap counts bytes instead.
       counts bytes) and never pads. Since it is optional, pass ``value`` by
       keyword when you omit it: ``write_process_memory(addr, int, value=9999)``.
    :param value: the value to write.
-   :return: the written value.
+   :return: the original ``value`` you passed in — **not** the truncated/encoded
+      form actually written. For a capped ``str``/``bytes`` write the full
+      original value comes back.
 ```
 
 ## Typed shortcuts
@@ -197,8 +199,11 @@ and `write_bytes(address, data)`.
   the page might not be writable. Wrap one-off writes in `try/except OSError`.
 - **`PermissionError`** — the handle was opened without write access (Windows
   read-only handle). See [Opening a process](opening-process.md#permissions-windows-only).
-- **`ValueError`** — `bufflength` was omitted for a `str` or `bytes` **read**
-  (a write doesn't need it — it sizes itself to your value).
+- **`ValueError`** — either `bufflength` was omitted for a `str` or `bytes`
+  **read** (a write doesn't need it — it sizes itself to your value), **or** an
+  `int` value doesn't fit in the chosen width (e.g. writing `2**40` with the
+  default 4-byte width). Out-of-range integers are rejected up front rather than
+  silently truncated — widen `bufflength` to write a larger value.
 
 ## Reading many addresses efficiently
 

@@ -128,15 +128,15 @@ with OpenProcess(process_name="game.exe") as process:
       :no-index:
       :type: Optional[str]
 
-      Short human-readable state (e.g. ``"R"``/``"S"`` on Linux). ``None`` on
-      platforms that don't surface it.
+      Short human-readable state (e.g. ``"R"``/``"S"``). **Linux only** —
+      always ``None`` on Windows and macOS.
 
    .. py:attribute:: priority
       :no-index:
       :type: Optional[int]
 
-      Scheduling priority as reported by the OS. Scale is platform-specific;
-      ``None`` when not exposed.
+      Scheduling priority as reported by the OS (scale is platform-specific).
+      Populated on **Linux and Windows**; always ``None`` on macOS.
 
    .. py:attribute:: raw
       :no-index:

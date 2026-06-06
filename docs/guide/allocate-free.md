@@ -135,6 +135,10 @@ Common values:
 Pass a `VM_PROT_*` bitmask (or leave `None` for the default of read+write):
 
 ```python
+from PyMemoryEditor.macos.types import (
+    VM_PROT_READ, VM_PROT_WRITE, VM_PROT_EXECUTE,
+)
+
 # read+write+execute (may fail under the hardened runtime).
 process.allocate_memory(4096, permission=VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)
 ```
