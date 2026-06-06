@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Cross-platform tests for process's name lookup logic, exercising
+Cross-platform tests for process name lookup logic, exercising
 AmbiguousProcessNameError and the case_sensitive flag without depending on
 real processes existing under known names.
 """
