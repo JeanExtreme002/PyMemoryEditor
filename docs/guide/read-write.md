@@ -36,7 +36,7 @@ method name.
 ```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name="notepad.exe") as process:
+with OpenProcess(name="notepad.exe") as process:
     address = 0x0005000C
 
     # Integers — 4 bytes by default
@@ -79,7 +79,7 @@ If you need the bytes verbatim, pass `pytype=bytes`.
 ## Writing a value
 
 ```python
-with OpenProcess(process_name="notepad.exe") as process:
+with OpenProcess(name="notepad.exe") as process:
     address = 0x0005000C
 
     # Write an int — bufflength is optional, so pass value by keyword.
@@ -133,7 +133,7 @@ special handling? Use the **typed shortcuts**. Each one is a `read_*` /
 `write_*` pair with the size and signedness baked into the name:
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     hp    = process.read_int(0x7FF40010)     # signed, 4 bytes
     gold  = process.read_uint(0x7FF40014)    # unsigned, 4 bytes
     speed = process.read_float(0x7FF40018)   # 32-bit float
@@ -170,7 +170,7 @@ Linux and macOS.
 counting, no manual decoding:
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     # Write your text — UTF-8 encoding (accents, emoji…) is handled for you.
     process.write_string(0x7FF40020, "Pedro")
 

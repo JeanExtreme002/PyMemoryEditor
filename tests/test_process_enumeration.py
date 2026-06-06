@@ -2,7 +2,7 @@
 
 """
 Cross-platform tests for the native process enumeration that backs
-``OpenProcess(process_name=...)`` — the per-platform ``(pid, name)`` source
+``OpenProcess(name=...)`` — the per-platform ``(pid, name)`` source
 (``CreateToolhelp32Snapshot`` on Windows, ``/proc`` on Linux, libproc on
 macOS) exposed through ``PyMemoryEditor.process.util`` — plus the native
 ``pid_exists`` probe. These exercise the real OS code paths (no mocking; the
@@ -20,7 +20,7 @@ if sys.platform not in ("win32", "darwin") and not sys.platform.startswith("linu
 
 from PyMemoryEditor.process.util import (  # noqa: E402
     _iter_processes,
-    get_process_ids_by_process_name,
+    get_process_ids_by_name,
     pid_exists,
 )
 
@@ -85,7 +85,7 @@ def test_resolve_own_name_includes_self():
     if not name:
         pytest.skip("could not read this process's name on this platform")
 
-    pids = get_process_ids_by_process_name(name, exact_match=True)
+    pids = get_process_ids_by_name(name, exact_match=True)
     assert os.getpid() in pids
 
 
@@ -99,7 +99,7 @@ def test_case_insensitive_match_finds_self_native():
         pytest.skip("process name has no alphabetic characters to swap")
 
     # A list (≥1) — other processes may share the name; we only require ours.
-    pids = get_process_ids_by_process_name(
+    pids = get_process_ids_by_name(
         swapped, exact_match=True, case_sensitive=False
     )
     assert os.getpid() in pids
@@ -112,5 +112,5 @@ def test_substring_match_finds_self_native():
         pytest.skip("process name too short for a substring test")
 
     substring = name[: max(2, len(name) // 2)]
-    pids = get_process_ids_by_process_name(substring, exact_match=False)
+    pids = get_process_ids_by_name(substring, exact_match=False)
     assert os.getpid() in pids

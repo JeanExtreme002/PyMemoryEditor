@@ -7,7 +7,7 @@ inherit from `PyMemoryEditorError`, so you can catch the whole library:
 from PyMemoryEditor import PyMemoryEditorError
 
 try:
-    with OpenProcess(process_name="game.exe") as process:
+    with OpenProcess(name="game.exe") as process:
         ...
 except PyMemoryEditorError as exc:
     print("Library error:", exc)
@@ -70,7 +70,7 @@ Raised when the given `pid=` doesn't correspond to a running process.
 
 ### `ProcessNotFoundError`
 
-Raised when no running process matches the given `process_name=`.
+Raised when no running process matches the given `name=`.
 
 ```{eval-rst}
 .. py:exception:: ProcessNotFoundError
@@ -84,7 +84,7 @@ Raised when no running process matches the given `process_name=`.
 ### `AmbiguousProcessNameError`
 
 Raised when **more than one** running process matches the given
-`process_name=` (typical when using `exact_match=False`).
+`name=` (typical when using `exact_match=False`).
 
 ```{eval-rst}
 .. py:exception:: AmbiguousProcessNameError
@@ -106,7 +106,7 @@ Example:
 from PyMemoryEditor import OpenProcess, AmbiguousProcessNameError
 
 try:
-    OpenProcess(process_name="chrome", exact_match=False)
+    OpenProcess(name="chrome", exact_match=False)
 except AmbiguousProcessNameError as exc:
     print("Multiple matches:", exc.pids)
     process = OpenProcess(pid=exc.pids[0])
@@ -116,7 +116,7 @@ except AmbiguousProcessNameError as exc:
 
 <table>
 <tr><th>Exception</th><th>When it's raised</th></tr>
-<tr><td><code>TypeError</code></td><td>Neither <code>process_name</code> nor <code>pid</code> provided to <code>OpenProcess</code>; or a scan pattern that is not <code>str</code>, <code>bytes</code> or a compiled <code>re.Pattern</code>.</td></tr>
+<tr><td><code>TypeError</code></td><td>Neither <code>name</code> nor <code>pid</code> provided to <code>OpenProcess</code>; or a scan pattern that is not <code>str</code>, <code>bytes</code> or a compiled <code>re.Pattern</code>.</td></tr>
 <tr><td><code>ValueError</code></td><td>Invalid <code>pytype</code>, missing <code>bufflength</code> for <code>str</code>/<code>bytes</code>, invalid <code>ptr_size</code>, malformed pattern, <code>byte_length</code> omitted for a regex pattern, etc.</td></tr>
 <tr><td><code>PermissionError</code></td><td>OS denied access to the target process or a specific region.</td></tr>
 <tr><td><code>OSError</code></td><td>Low-level read/write failure (e.g. page was freed between scan and read).</td></tr>
@@ -138,7 +138,7 @@ from PyMemoryEditor import (
 )
 
 try:
-    with OpenProcess(process_name="game.exe") as process:
+    with OpenProcess(name="game.exe") as process:
         for address in process.search_by_value(int, value=100):
             try:
                 value = process.read_process_memory(address, int)

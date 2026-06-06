@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .errors import ProcessIDNotExistsError, ProcessNotFoundError
-from .util import get_process_id_by_process_name, pid_exists
+from .util import get_process_id_by_name, pid_exists
 
 
 class ProcessInfo(object):
@@ -11,7 +11,7 @@ class ProcessInfo(object):
 
     def __init__(self) -> None:
         self.__pid: int = -1
-        self.__process_name: str = ""
+        self.__name: str = ""
 
     @property
     def pid(self) -> int:
@@ -31,27 +31,27 @@ class ProcessInfo(object):
         self.__pid = pid
 
     @property
-    def process_name(self) -> str:
-        return self.__process_name
+    def name(self) -> str:
+        return self.__name
 
-    @process_name.setter
-    def process_name(self, process_name: str) -> None:
-        self.set_process_name(process_name)
+    @name.setter
+    def name(self, name: str) -> None:
+        self.set_name(name)
 
-    def set_process_name(
+    def set_name(
         self,
-        process_name: str,
+        name: str,
         *,
         case_sensitive: bool = True,
         exact_match: bool = True,
     ) -> None:
-        pid = get_process_id_by_process_name(
-            process_name,
+        pid = get_process_id_by_name(
+            name,
             case_sensitive=case_sensitive,
             exact_match=exact_match,
         )
         if pid is None:
-            raise ProcessNotFoundError(process_name)
+            raise ProcessNotFoundError(name)
 
         self.__pid = pid
-        self.__process_name = process_name
+        self.__name = name

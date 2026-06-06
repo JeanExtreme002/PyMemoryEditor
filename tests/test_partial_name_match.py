@@ -21,8 +21,8 @@ import pytest
 
 from PyMemoryEditor.process.util import (
     _iter_processes,
-    get_process_id_by_process_name,
-    get_process_ids_by_process_name,
+    get_process_id_by_name,
+    get_process_ids_by_name,
 )
 
 
@@ -46,7 +46,7 @@ def own_name():
 
 
 def test_exact_match_finds_self(own_name):
-    pids = get_process_ids_by_process_name(own_name, exact_match=True)
+    pids = get_process_ids_by_name(own_name, exact_match=True)
     assert os.getpid() in pids
 
 
@@ -57,7 +57,7 @@ def test_exact_match_does_not_find_substring(own_name):
     substring = own_name[: len(own_name) // 2]
     if substring == own_name:
         pytest.skip("substring equals full name")
-    pids = get_process_ids_by_process_name(substring, exact_match=True)
+    pids = get_process_ids_by_name(substring, exact_match=True)
     assert os.getpid() not in pids
 
 
@@ -66,7 +66,7 @@ def test_partial_match_finds_self_by_substring(own_name):
     if len(own_name) <= 2:
         pytest.skip("process name too short to test substring matching")
     substring = own_name[: max(2, len(own_name) // 2)]
-    pids = get_process_ids_by_process_name(substring, exact_match=False)
+    pids = get_process_ids_by_name(substring, exact_match=False)
     assert os.getpid() in pids
 
 
@@ -75,7 +75,7 @@ def test_partial_match_case_insensitive(own_name):
     swapped = own_name.swapcase()
     if swapped == own_name:
         pytest.skip("process name has no alphabetic characters")
-    pids = get_process_ids_by_process_name(
+    pids = get_process_ids_by_name(
         swapped, exact_match=False, case_sensitive=False
     )
     assert os.getpid() in pids
@@ -84,7 +84,7 @@ def test_partial_match_case_insensitive(own_name):
 def test_partial_match_no_results_for_garbage():
     """An impossible substring returns an empty list, not a false positive."""
     garbage = "definitely_not_a_real_process_name_zzzzzzz_42"
-    pids = get_process_ids_by_process_name(garbage, exact_match=False)
+    pids = get_process_ids_by_name(garbage, exact_match=False)
     assert pids == []
 
 
@@ -92,7 +92,7 @@ def test_get_single_returns_none_for_garbage():
     """The single-result helper returns None when no process matches."""
     garbage = "definitely_not_a_real_process_name_zzzzzzz_42"
     assert (
-        get_process_id_by_process_name(garbage, exact_match=False) is None
+        get_process_id_by_name(garbage, exact_match=False) is None
     )
 
 
@@ -107,14 +107,14 @@ def test_openprocess_accepts_exact_match_kwarg(own_name):
     # Don't lean on a known unique name — only that the kwarg is accepted
     # without raising TypeError and the resulting PID is ours when the name
     # is unique enough to match exactly one process.
-    pids = get_process_ids_by_process_name(own_name, exact_match=True)
+    pids = get_process_ids_by_name(own_name, exact_match=True)
     if len(pids) != 1:
         pytest.skip(
             "more than one process shares this name; OpenProcess would raise "
             "AmbiguousProcessNameError — not what this test is checking"
         )
 
-    process = OpenProcess(process_name=own_name, exact_match=True)
+    process = OpenProcess(name=own_name, exact_match=True)
     try:
         assert process.pid == os.getpid()
     finally:

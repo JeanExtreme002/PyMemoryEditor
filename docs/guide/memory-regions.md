@@ -11,7 +11,7 @@ ultimately touches a region.
 [`MemoryRegion`](../api/memory-region.md) per region:
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for region in process.get_memory_regions():
         print(
             hex(region.address),
@@ -110,7 +110,7 @@ Memory Map dialog):
 ```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     print(f"{'ADDRESS':<18}{'SIZE':>14}  RWX  Source")
 
     for region in process.get_memory_regions():

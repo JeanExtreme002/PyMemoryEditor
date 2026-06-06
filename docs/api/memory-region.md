@@ -90,7 +90,7 @@ of memory with its address, size, permissions and backing path.
 ### Iterating regions
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for region in process.get_memory_regions():
         print(f"0x{region.address:016X}  {region.size:>12,}")
 ```

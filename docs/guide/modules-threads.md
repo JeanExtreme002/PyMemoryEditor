@@ -15,7 +15,7 @@ shared library it loaded (`.exe`/`.dll` on Windows, the binary and `.so` files
 on Linux, the Mach-O image and `.dylib` files on macOS).
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for module in process.get_modules():
         print(
             module.name,
@@ -94,7 +94,7 @@ target. It's useful for introspection ("how many workers does it spawn?",
 "is the main thread still alive?").
 
 ```python
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for thread in process.get_threads():
         print(thread.tid, thread.state, thread.priority)
 

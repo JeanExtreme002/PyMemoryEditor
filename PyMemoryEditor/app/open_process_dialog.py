@@ -255,7 +255,7 @@ class OpenProcessDialog(QDialog):
         self._case_checkbox = QCheckBox("Case-sensitive name lookup")
         self._case_checkbox.setChecked(False)
         self._case_checkbox.setToolTip(
-            "When unchecked, OpenProcess(process_name=…) is called with "
+            "When unchecked, OpenProcess(name=…) is called with "
             "case_sensitive=False — useful on Windows where process names "
             "are case-insensitive."
         )
@@ -375,7 +375,7 @@ class OpenProcessDialog(QDialog):
                 self.process = OpenProcess(pid=pid, **kwargs)
             else:
                 self.process = OpenProcess(
-                    process_name=entry,
+                    name=entry,
                     case_sensitive=self._case_checkbox.isChecked(),
                     **kwargs,
                 )

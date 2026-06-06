@@ -45,18 +45,18 @@ class AbstractProcess(ABC):
     def __init__(
         self,
         *,
-        process_name: Optional[str] = None,
+        name: Optional[str] = None,
         pid: Optional[int] = None,
         case_sensitive: bool = True,
         exact_match: bool = True,
         strict_bitness: bool = False,
     ):
         """
-        :param process_name: name of the target process.
+        :param name: name of the target process.
         :param pid: process ID.
-        :param case_sensitive: when False, process_name matching ignores case
+        :param case_sensitive: when False, name matching ignores case
             (recommended on Windows where process names are case-insensitive).
-        :param exact_match: when False, ``process_name`` is matched as a
+        :param exact_match: when False, ``name`` is matched as a
             substring — ``"chrome"`` matches ``"chrome.exe"`` / ``"Google Chrome"``.
             If more than one process matches, ``AmbiguousProcessNameError`` is
             raised so you can pick a PID from the list.
@@ -72,16 +72,16 @@ class AbstractProcess(ABC):
         if pid is not None:
             self._process_info.pid = pid
 
-        elif process_name:
-            self._process_info.set_process_name(
-                process_name,
+        elif name:
+            self._process_info.set_name(
+                name,
                 case_sensitive=case_sensitive,
                 exact_match=exact_match,
             )
 
         else:
             raise TypeError(
-                "You must pass an argument to one of these parameters (process_name, pid)."
+                "You must pass an argument to one of these parameters (name, pid)."
             )
 
         # Cache for the target's bitness — resolved lazily on first access of

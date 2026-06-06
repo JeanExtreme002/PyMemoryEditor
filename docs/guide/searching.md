@@ -20,7 +20,7 @@ For locating **code or byte patterns** (AOB / signatures), see the dedicated
 ```python
 from PyMemoryEditor import OpenProcess
 
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     for address in process.search_by_value(int, 4, 100):
         print(f"Found at 0x{address:X}")
 ```
@@ -83,7 +83,7 @@ target. Every mode is a member of `ScanTypesEnum`:
 ```python
 from PyMemoryEditor import OpenProcess, ScanTypesEnum
 
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     # Every address that holds a value bigger than 1_000_000.
     for address in process.search_by_value(
         int, 4, 1_000_000,

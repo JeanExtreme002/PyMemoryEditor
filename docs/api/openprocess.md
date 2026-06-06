@@ -23,7 +23,7 @@ All three subclass `AbstractProcess` and share the API documented below.
 ## Construction
 
 ```{eval-rst}
-.. py:class:: OpenProcess(*, process_name=None, pid=None, permission=<platform default>, case_sensitive=<platform default>, exact_match=True)
+.. py:class:: OpenProcess(*, name=None, pid=None, permission=<platform default>, case_sensitive=<platform default>, exact_match=True)
 
    Open a target process. ``OpenProcess`` resolves to the concrete backend for
    the host OS, so the ``permission`` and ``case_sensitive`` defaults are
@@ -32,23 +32,23 @@ All three subclass `AbstractProcess` and share the API documented below.
    ``permission`` defaults to ``None`` (ignored) and ``case_sensitive`` to
    ``True``.
 
-   :param str process_name: name of the target process.
-   :param int pid: process ID. Takes precedence over ``process_name``.
+   :param str name: name of the target process.
+   :param int pid: process ID. Takes precedence over ``name``.
    :param permission: **Windows only.** A
       :py:class:`ProcessOperationsEnum` value (or integer). Defaults to
       read+write (``PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION
       | PROCESS_QUERY_INFORMATION``). On Linux and macOS this argument is
       accepted for API parity but **ignored**; passing a non-``None`` value
       emits ``UserWarning``.
-   :param bool case_sensitive: when ``False``, ``process_name`` matching
+   :param bool case_sensitive: when ``False``, ``name`` matching
       ignores case. Default is ``False`` on Windows, ``True`` elsewhere.
-   :param bool exact_match: when ``False``, ``process_name`` matches as a
+   :param bool exact_match: when ``False``, ``name`` matches as a
       substring (``"chrome"`` matches ``"chrome.exe"``).
 
-   :raises ProcessNotFoundError: no process matches ``process_name``.
+   :raises ProcessNotFoundError: no process matches ``name``.
    :raises ProcessIDNotExistsError: ``pid`` doesn't exist.
    :raises AmbiguousProcessNameError: more than one process matches.
-   :raises TypeError: neither ``process_name`` nor ``pid`` was provided.
+   :raises TypeError: neither ``name`` nor ``pid`` was provided.
    :raises PermissionError: the OS denied access.
 ```
 
@@ -56,7 +56,7 @@ All three subclass `AbstractProcess` and share the API documented below.
 
 ```python
 # By name
-with OpenProcess(process_name="game.exe") as process:
+with OpenProcess(name="game.exe") as process:
     ...
 
 # By PID
@@ -64,14 +64,14 @@ with OpenProcess(pid=1234) as process:
     ...
 
 # Partial, case-insensitive name match (Windows-friendly)
-with OpenProcess(process_name="chrome", case_sensitive=False, exact_match=False) as process:
+with OpenProcess(name="chrome", case_sensitive=False, exact_match=False) as process:
     ...
 
 # Read-only handle (Windows only)
 from PyMemoryEditor import ProcessOperationsEnum
 
 with OpenProcess(
-    process_name="game.exe",
+    name="game.exe",
     permission=ProcessOperationsEnum.PROCESS_VM_READ | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION,
 ) as process:
     ...

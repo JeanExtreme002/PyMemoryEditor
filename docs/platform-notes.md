@@ -45,7 +45,7 @@ For a **read-only** handle, narrow the mask:
 from PyMemoryEditor import OpenProcess, ProcessOperationsEnum
 
 with OpenProcess(
-    process_name="notepad.exe",
+    name="notepad.exe",
     permission=ProcessOperationsEnum.PROCESS_VM_READ
         | ProcessOperationsEnum.PROCESS_QUERY_INFORMATION,
 ) as process:
@@ -55,7 +55,7 @@ with OpenProcess(
 For full control:
 
 ```python
-OpenProcess(process_name="game.exe", permission=ProcessOperationsEnum.PROCESS_ALL_ACCESS)
+OpenProcess(name="game.exe", permission=ProcessOperationsEnum.PROCESS_ALL_ACCESS)
 ```
 
 ### Running as Administrator
