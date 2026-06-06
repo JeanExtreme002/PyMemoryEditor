@@ -75,7 +75,7 @@ Raised when no running process matches the given `name=`.
 ```{eval-rst}
 .. py:exception:: ProcessNotFoundError
 
-   .. py:attribute:: name
+   .. py:attribute:: process_name
       :type: str
 
       The process name that was looked up.
