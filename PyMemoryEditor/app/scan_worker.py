@@ -96,10 +96,13 @@ def build_scan_request(
     :raises ValueError: if a value/pattern fails to parse (message is
         user-facing — the caller picks the dialog title from ``spec.is_pattern``).
     """
-    # AOB pattern path — value is the pattern string, scan_type is always EXACT,
-    # and length is irrelevant (the scanner derives it from the pattern).
+    # Pattern path — value is the pattern, scan_type is always EXACT. For an
+    # IDA pattern the length is irrelevant (derived from the pattern); for a
+    # regex it carries byte_length (the match width) from the Length field.
     if spec.is_pattern:
-        value, length = parse_value(spec, value_text)
+        value, length = parse_value(
+            spec, value_text, length_spin_value if spec.is_regex else None
+        )
         return ScanRequest(
             spec=spec,
             length=int(length),
@@ -176,14 +179,17 @@ class FirstScanWorker(_BaseWorker):
     def run(self) -> None:
         req = self._request
         try:
-            # AOB pattern path: req.value is the IDA-style pattern string,
-            # routed through search_by_pattern. writeable_only doesn't apply
+            # Pattern path: req.value is the IDA-style string or a bytes regex,
+            # routed through search_by_pattern. req.length carries byte_length —
+            # ignored for IDA strings (inferred from the token count), required
+            # for a regex (its match width). writeable_only doesn't apply
             # (pattern scan filters by readability internally; restricting to
             # writable-only would silently miss code-section signatures, which
             # is the most common AOB use case).
             if req.spec.is_pattern:
                 generator = self._process.search_by_pattern(
                     req.value,
+                    byte_length=req.length,
                     progress_information=True,
                     memory_regions=req.memory_regions,
                 )

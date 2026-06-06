@@ -318,11 +318,20 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
     consult ``GetLastError``: only fall through for the natural end-of-space
     case; for any other failure log it and bump the cursor by one page so the
     walk keeps making progress.
+
+    The walk bounds come from ``GetNativeSystemInfo`` rather than
+    ``GetSystemInfo``: from a 32-bit (WOW64) Python attached to a 64-bit target,
+    ``GetSystemInfo`` reports the *caller's* 2/4 GB ceiling, which would stop the
+    walk early and silently drop every region above it in the target. The native
+    info reports the true address-space ceiling. For a 32-bit target the extra
+    range is empty — ``VirtualQueryEx`` returns ERROR_INVALID_PARAMETER past the
+    32-bit boundary and the loop terminates there — so using the native ceiling
+    never over-enumerates. (From a 64-bit Python the two infos are identical.)
     """
     mbi_class = mbi_class_for_handle(process_handle)
-    mem_region_begin = system_information.lpMinimumApplicationAddress
-    mem_region_end = system_information.lpMaximumApplicationAddress
-    page_size = system_information.dwPageSize or 0x1000
+    mem_region_begin = _native_system_information.lpMinimumApplicationAddress
+    mem_region_end = _native_system_information.lpMaximumApplicationAddress
+    page_size = _native_system_information.dwPageSize or 0x1000
 
     current_address = mem_region_begin
 

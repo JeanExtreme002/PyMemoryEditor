@@ -34,10 +34,18 @@ def _spec(*, pytype=None, length=None, pattern=False):
     raise AssertionError(f"no spec for pytype={pytype} length={length} pattern={pattern}")
 
 
+def _regex_spec():
+    for spec in VALUE_TYPES:
+        if spec.is_regex:
+            return spec
+    raise AssertionError("no regex spec")
+
+
 INT4 = _spec(pytype=int, length=4)
 STR = _spec(pytype=str)
 BYTES = _spec(pytype=bytes, pattern=False)
 AOB = _spec(pattern=True)
+REGEX = _regex_spec()
 
 
 def test_exact_int_uses_fixed_width_and_passes_flags():
@@ -73,6 +81,21 @@ def test_pattern_with_value_false_drops_value():
         with_value=False,
     )
     assert req.value is None
+
+
+def test_regex_carries_byte_length_from_length_field_and_forces_exact():
+    # Even a non-exact scan type is forced to EXACT; the Length field becomes
+    # the regex's byte_length (max match width) and the value is the UTF-8
+    # bytes pattern.
+    req = build_scan_request(
+        REGEX,
+        ScanTypesEnum.BIGGER_THAN,
+        value_text=r"Player[0-9]+",
+        length_spin_value=32,
+    )
+    assert req.scan_type is ScanTypesEnum.EXACT_VALUE
+    assert req.value == rb"Player[0-9]+"
+    assert req.length == 32
 
 
 def test_string_ignores_length_override_and_uses_utf8_byte_length():

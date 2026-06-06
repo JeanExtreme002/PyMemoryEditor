@@ -36,7 +36,9 @@ memory.
    :no-index:
 
    :param Type pytype: ``bool``, ``int``, ``float``, ``str`` or ``bytes``.
-   :param int bufflength: value size in bytes (1, 2, 4, 8). **Optional** —
+   :param int bufflength: value size in bytes — typically 1, 2, 4 or 8, though
+      any positive width is accepted (for ``int`` an unusual width such as 3 or 6
+      is rounded up to the next C integer type). **Optional** —
       defaults to ``None``: numeric types use their default width and ``str`` /
       ``bytes`` infer it from the encoded length of ``value``. Since it is
       optional, pass ``value`` by keyword when omitting it
@@ -49,6 +51,16 @@ memory.
       (faster, drops read-only static data).
    :param memory_regions: an optional snapshot — see :ref:`refine-scan-workflow`.
    :returns: a generator of addresses (or ``(address, info)`` tuples).
+```
+
+```{note}
+A value scan always restricts itself to **readable, non-shared** regions.
+Shared / file-backed mappings (libc text, memory-mapped files) are skipped —
+they're noise a value scan rarely wants, and excluding them keeps results
+identical across Windows, Linux and macOS. This filter applies even to a
+`memory_regions=` snapshot you pass in (that argument only skips the region
+*enumeration* step, not the filtering), so there is no flag to scan shared
+regions.
 ```
 
 ### Comparison modes
@@ -64,8 +76,8 @@ target. Every mode is a member of `ScanTypesEnum`:
 <tr><td><code>SMALLER_THAN</code></td><td>value &lt; target</td></tr>
 <tr><td><code>BIGGER_THAN_OR_EXACT_VALUE</code></td><td>value &ge; target</td></tr>
 <tr><td><code>SMALLER_THAN_OR_EXACT_VALUE</code></td><td>value &le; target</td></tr>
-<tr><td><code>VALUE_BETWEEN</code></td><td>min &le; value &le; max  (use <code>search_by_value_between</code>)</td></tr>
-<tr><td><code>NOT_VALUE_BETWEEN</code></td><td>value &lt; min or value &gt; max</td></tr>
+<tr><td><code>VALUE_BETWEEN</code></td><td>min &le; value &le; max  (rejected by <code>search_by_value</code> with <code>ValueError</code> — use <code>search_by_value_between</code>)</td></tr>
+<tr><td><code>NOT_VALUE_BETWEEN</code></td><td>value &lt; min or value &gt; max  (rejected by <code>search_by_value</code> with <code>ValueError</code> — use <code>search_by_value_between(..., not_between=True)</code>)</td></tr>
 </table>
 
 ```python
@@ -205,7 +217,8 @@ missing.
 By default every scan runs in pure Python, with the hottest paths already
 delegated to C primitives: `bytes.find` for exact matches, `struct.iter_unpack`
 to decode a region, and a **regex byte-class prefilter** for ordered *string*
-comparisons (`BIGGER_THAN` / `SMALLER_THAN` / `VALUE_BETWEEN` on `str`), which
+comparisons (`BIGGER_THAN` / `SMALLER_THAN` / `BIGGER_THAN_OR_EXACT_VALUE` /
+`SMALLER_THAN_OR_EXACT_VALUE` / `VALUE_BETWEEN` on `str`), which
 skips the long runs of non-matching bytes in C instead of stepping every offset.
 What stays in Python is the per-value **comparison loop** of the ordered
 *numeric* scans: for a multi-megabyte region it boxes and compares millions of
@@ -249,7 +262,7 @@ emitting matches.
 <tr><th>Scenario</th><th>Typical speedup</th></tr>
 <tr><td>Selective scan of a large region (few matches — the usual first scan / refine step)</td><td><b>~10–30×</b></td></tr>
 <tr><td>Scan where most values match (e.g. <code>&gt; 0</code> on mostly-positive data)</td><td>~2× (result building dominates)</td></tr>
-<tr><td><code>str</code> ordered scans (<code>&gt;</code>, <code>&lt;</code>, <code>between</code>)</td><td>no NumPy fast path — instead C-accelerated by the regex byte-class prefilter (independent of the <code>speed</code> extra)</td></tr>
+<tr><td><code>str</code> ordered scans (<code>&gt;</code>, <code>&lt;</code>, <code>&ge;</code>, <code>&le;</code>, <code>between</code>)</td><td>no NumPy fast path — instead C-accelerated by the regex byte-class prefilter (independent of the <code>speed</code> extra)</td></tr>
 <tr><td><code>bytes</code> scans, or unusual widths (3/6/7 bytes)</td><td>no change (no NumPy fast path; pure-Python loop)</td></tr>
 <tr><td><code>EXACT_VALUE</code> via <code>search_by_value</code></td><td>already <code>bytes.find</code> in C — NumPy not used</td></tr>
 </table>

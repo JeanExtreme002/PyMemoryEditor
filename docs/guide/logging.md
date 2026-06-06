@@ -56,11 +56,11 @@ logger.setLevel(logging.DEBUG)
 The GUI app exposes the same log stream in its **Log Console**:
 
 <table>
-<tr><td><b>Menu</b></td><td>Tools → Log Console</td></tr>
+<tr><td><b>Menu</b></td><td>Tools → Log Console… (<code>Ctrl+L</code>)</td></tr>
 </table>
 
-Toggling DEBUG verbosity in the console reveals the same messages the library
-sends to the Python logger.
+The console has a level selector (DEBUG / INFO / WARNING / ERROR); choosing
+`DEBUG` reveals the same messages the library sends to the Python logger.
 
 ## macOS write-side-effect warning
 

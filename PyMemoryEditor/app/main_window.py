@@ -471,7 +471,11 @@ class MainWindow(QMainWindow):
         # ones the pattern already located. Skip the auto-refresh and leave
         # the value column empty — the user can promote rows to the cheat
         # table for a live preview there.
-        if request.spec.is_pattern:
+        #
+        # A *regex* match is the exception: it has a real byte_length (the max
+        # match width) and reads as bytes, so we do fill the value column with
+        # the matched text (see _fmt_regex_match).
+        if request.spec.is_pattern and not request.spec.is_regex:
             return
         self._on_update_values(request)
 

@@ -191,8 +191,9 @@ class PointerPath:
         every run and is deliberately left out.
 
         Used to intersect independent scans (see :func:`intersect_pointer_paths`).
-        Paths with no ``module`` have no portable recipe (only an absolute base
-        valid for one run) and compare equal only to themselves.
+        Paths with no ``module`` have no portable recipe — their base is only
+        valid for one run — so they return ``(None, None, offsets)`` and are
+        excluded from :func:`intersect_pointer_paths` entirely.
         """
         return (self.module, self.module_offset, self.offsets)
 

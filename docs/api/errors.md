@@ -116,12 +116,12 @@ except AmbiguousProcessNameError as exc:
 
 <table>
 <tr><th>Exception</th><th>When it's raised</th></tr>
-<tr><td><code>TypeError</code></td><td>Neither <code>process_name</code> nor <code>pid</code> provided to <code>OpenProcess</code>.</td></tr>
-<tr><td><code>ValueError</code></td><td>Invalid <code>pytype</code>, missing <code>bufflength</code> for <code>str</code>/<code>bytes</code>, invalid <code>ptr_size</code>, malformed pattern, etc.</td></tr>
+<tr><td><code>TypeError</code></td><td>Neither <code>process_name</code> nor <code>pid</code> provided to <code>OpenProcess</code>; or a scan pattern that is not <code>str</code>, <code>bytes</code> or a compiled <code>re.Pattern</code>.</td></tr>
+<tr><td><code>ValueError</code></td><td>Invalid <code>pytype</code>, missing <code>bufflength</code> for <code>str</code>/<code>bytes</code>, invalid <code>ptr_size</code>, malformed pattern, <code>byte_length</code> omitted for a regex pattern, etc.</td></tr>
 <tr><td><code>PermissionError</code></td><td>OS denied access to the target process or a specific region.</td></tr>
 <tr><td><code>OSError</code></td><td>Low-level read/write failure (e.g. page was freed between scan and read).</td></tr>
 <tr><td><code>NotImplementedError</code></td><td><code>allocate_memory</code> / <code>free_memory</code> on Linux.</td></tr>
-<tr><td><code>UserWarning</code></td><td><code>permission=</code> passed on a non-Windows platform (silently ignored).</td></tr>
+<tr><td><code>UserWarning</code></td><td><code>permission=</code> passed on a non-Windows platform (ignored, with this warning emitted).</td></tr>
 <tr><td><code>ResourceWarning</code></td><td>macOS: <code>mach_vm_protect</code> failed to restore a page's original protection after a write.</td></tr>
 </table>
 

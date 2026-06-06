@@ -11,11 +11,22 @@ to render. Identifying entries by ``(address, pytype, length)`` rather than
 by row index means deletes/reorders between snapshot and signal can't apply
 a value to the wrong row.
 """
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QMutex, QMutexLocker, QThread, Signal
 
 from PyMemoryEditor import AbstractProcess
+
+
+# Child of the "PyMemoryEditor" logger, so the Log Console (which attaches a
+# handler to "PyMemoryEditor") picks these up via propagation.
+_LOG = logging.getLogger(__name__)
+
+
+# Identity tuple for an entry: (address, pytype, length). Same key the cheat
+# table uses to match worker results back to a row across reorders/deletes.
+_EntryKey = Tuple[int, type, int]
 
 
 # Threshold above which the per-tick refresh collapses N read_process_memory
@@ -38,9 +49,19 @@ class _CheatPollWorker(QThread):
     with ``(address, pytype, length, value)`` tuples for the UI to render.
     The worker also handles the freeze write itself, so the syscall never
     crosses thread boundaries.
+
+    A frozen value is re-written every tick (~10 Hz). When that write *fails*
+    — a protected page, the target exiting — the worker can't pop a dialog per
+    tick, so it instead tracks the failing entries and emits ``freeze_failed``
+    with the current ``{key: "ErrorType: message"}`` map. The signal fires only
+    when that set *changes* (a freeze starts or stops failing), so the UI gets a
+    persistent cue without 10 Hz spam, and the first failure of each entry is
+    logged once. Previously the exception was swallowed silently, so a freeze
+    that never landed looked identical to one that did.
     """
 
     values_ready = Signal(object)  # list[tuple[int, type, int, Any]]
+    freeze_failed = Signal(object)  # dict[_EntryKey, str] — current failing freezes
 
     def __init__(self, process: AbstractProcess, parent=None):
         super().__init__(parent)
@@ -48,6 +69,11 @@ class _CheatPollWorker(QThread):
         self._mutex = QMutex()
         self._snapshot: List[Tuple[int, type, int, Any, bool]] = []
         self._stop = False
+        # Entries whose freeze write is currently failing → last error string.
+        # Touched only by the worker thread (run() / _poll_once), so no lock.
+        self._freeze_failures: Dict[_EntryKey, str] = {}
+        # Last map handed to the UI, so run() can emit only on change.
+        self._last_emitted_failures: Dict[_EntryKey, str] = {}
 
     def update_snapshot(
         self, snapshot: List[Tuple[int, type, int, Any, bool]]
@@ -77,6 +103,14 @@ class _CheatPollWorker(QThread):
                 if results:
                     self.values_ready.emit(results)
 
+            # Emit the freeze-failure state only when it changed since the last
+            # tick — a frozen page that keeps failing shouldn't fire the signal
+            # 10×/second, but the UI must learn the moment one starts or stops
+            # failing (including recovering back to an empty map).
+            if self._freeze_failures != self._last_emitted_failures:
+                self._last_emitted_failures = dict(self._freeze_failures)
+                self.freeze_failed.emit(dict(self._freeze_failures))
+
             QThread.msleep(TICK_INTERVAL_MS)
 
     def _poll_once(
@@ -93,6 +127,14 @@ class _CheatPollWorker(QThread):
             freeze_by_addr[(*key, address)] = (frozen_value, is_frozen)
 
         results: List[Tuple[int, type, int, Any]] = []
+
+        # Recompute the failing-freeze set from scratch this tick. Rebuilding
+        # (rather than mutating in place) prunes entries that were deleted or
+        # unfrozen since the last tick for free; `previous` is kept only to log
+        # the *first* failure of each entry instead of once per tick.
+        previous = self._freeze_failures
+        new_failures: Dict[_EntryKey, str] = {}
+
         for (pytype, length), addresses in groups.items():
             values_by_address: Optional[Dict[int, Any]] = None
             if len(addresses) >= _BATCH_THRESHOLD:
@@ -118,16 +160,30 @@ class _CheatPollWorker(QThread):
                         current = None
 
                 if is_frozen and frozen_value is not None:
+                    key: _EntryKey = (address, pytype, length)
                     try:
                         self._process.write_process_memory(
                             address, pytype, length, frozen_value
                         )
                         current = frozen_value
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        # A freeze write that fails every tick must not be
+                        # swallowed: record it (surfaced to the UI via
+                        # freeze_failed) and log the first occurrence. `current`
+                        # keeps the value we actually read, so the table shows
+                        # the value drifting — the visible symptom of the freeze
+                        # not taking hold.
+                        message = "%s: %s" % (type(exc).__name__, exc)
+                        new_failures[key] = message
+                        if key not in previous:
+                            _LOG.warning(
+                                "Freeze write failed at 0x%X (%s, %dB): %s",
+                                address, pytype.__name__, length, message,
+                            )
 
                 results.append((address, pytype, length, current))
 
+        self._freeze_failures = new_failures
         return results
 
 

@@ -40,10 +40,13 @@ name or PID.
 **🎯 Scanner**
 
 - Every `ScanTypesEnum` mode
-- All five value types (`int`, `float`, `bool`, `str`, `bytes`)
+- Int8 / Int16 / Int32 / Int64, Float / Double, Boolean, String (UTF-8) and
+  Byte Array value types
 - Range search
-- AOB / byte signature search
-- Regex search
+- AOB / byte signature search (IDA-style)
+- Regex (string) search — a text regex matched against UTF-8 memory. The
+  Length field sets the maximum match width; matching is byte-wise, so `.`
+  spans one byte (use `.+` for multibyte characters)
 
 **🔁 Refine workflow**
 
@@ -66,7 +69,7 @@ name or PID.
 - Same engine as `scan_pointer_paths`
 - Save scans to JSON
 - Rescan / compare scans to narrow them down
-- Build live `RemotePointer` from a result
+- Send a resolved address straight to the Cheat Table
 
 **🗺️ Memory map**
 
@@ -81,7 +84,7 @@ name or PID.
 **🪵 Log console**
 
 - Same stream as `logging.getLogger("PyMemoryEditor")`
-- Toggle DEBUG verbosity at runtime
+- Pick the log level (DEBUG / INFO / WARNING / ERROR) at runtime
 
 </td>
 </tr>

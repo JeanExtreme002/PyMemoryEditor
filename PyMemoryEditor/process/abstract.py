@@ -265,18 +265,35 @@ class AbstractProcess(ABC):
         for the provided value, returning the found addresses.
 
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8). Optional — defaults
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
+            any positive width is accepted (for ``int`` an unusual width such as
+            3 or 6 is rounded up to the next C integer type). Optional — defaults
             to ``None``: numeric types (int, float, bool) use their default
             width (int→4, float→8, bool→1) and ``str`` / ``bytes`` infer it from
             the encoded length of ``value``. Since it is optional, pass ``value``
             by keyword when omitting it: ``search_by_value(int, value=100)``.
         :param value: value to be queried (bool, int, float, str or bytes).
             Required.
-        :param scan_type: the way to compare the values.
+        :param scan_type: the way to compare the values. ``VALUE_BETWEEN`` and
+            ``NOT_VALUE_BETWEEN`` are not accepted here and raise ``ValueError``;
+            use ``search_by_value_between`` instead.
         :param progress_information: if True, a dictionary with the progress information will be returned.
         :param writeable_only: if True, search only at writeable memory regions.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
+        :raises ValueError: if ``scan_type`` is ``VALUE_BETWEEN`` or
+            ``NOT_VALUE_BETWEEN``, or if an ``int`` ``value`` does not fit in
+            ``bufflength`` bytes.
+
+        .. note::
+           This scan always restricts itself to readable, **non-shared**
+           regions (``writeable_only`` narrows it further to writable ones).
+           Shared / file-backed mappings (libc text, memory-mapped files) are
+           always skipped — they're noise a value scan rarely wants, and
+           excluding them keeps results identical across platforms. The same
+           filter is applied to a caller-supplied ``memory_regions`` list too
+           (that argument only skips region *enumeration*, not the filtering),
+           so shared regions can't be opted back in.
         """
         raise NotImplementedError()
 
@@ -298,7 +315,10 @@ class AbstractProcess(ABC):
             hex string with ``?`` wildcards (``"48 8B ? ? 00"``), a raw bytes
             regex, or a pre-compiled ``re.Pattern[bytes]``.
         :param byte_length: required when ``pattern`` is a regex / pre-compiled
-            Pattern — the number of bytes one match consumes. Ignored for
+            Pattern — the **maximum** number of bytes one match can consume. It
+            drives the chunk overlap so a match straddling a chunk boundary is
+            still found (a variable-width regex like ``Player[0-9]+`` has no
+            fixed width, so give the largest match you expect). Ignored for
             IDA-style strings (inferred from the token count).
         :param progress_information: if True, yields ``(address, info)``
             tuples (same shape as ``search_by_value``).
@@ -345,7 +365,9 @@ class AbstractProcess(ABC):
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes (1, 2, 4, 8). For numeric types
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
+            any positive width is accepted (for ``int`` an unusual width such as
+            3 or 6 is rounded up to the next C integer type). For numeric types
             (int, float, bool) you may omit this; defaults are int→4, float→8,
             bool→1. str and bytes require an explicit size.
 

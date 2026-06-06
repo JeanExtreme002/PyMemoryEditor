@@ -181,7 +181,7 @@ class WindowsProcess(AbstractProcess):
         self.__require_open()
         return IsProcess64Bit(self.__process_handle)
 
-    def get_memory_regions(self) -> Generator[dict, None, None]:
+    def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()
         return GetMemoryRegions(self.__process_handle)
 

@@ -56,7 +56,7 @@ There's a `read_*` / `write_*` pair for every common type — `read_float`,
 `read_bool`, `read_uint`, `read_string`, and more:
 
 ```python
-name = process.read_string(address, 32)     # up to 32 bytes, decoded as text
+name = process.read_string(address, 32)     # reads a 32-byte field, returned up to the first NUL
 ```
 
 Prefer to spell out the type yourself? The generic `read_process_memory` /

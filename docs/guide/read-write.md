@@ -21,7 +21,9 @@ process memory:
 For numeric types, you can pass `bufflength=None` (or just omit it) to use the
 default. For `str` and `bytes`, the size is **required when reading** (the
 library needs to know how many bytes to pull back) but **optional when
-writing** — a write simply stores the value you gave it.
+writing** — omit it to write the whole value, or pass it as a *maximum* width
+that truncates the value (it never pads). See [Writing a value](#writing-a-value)
+below.
 
 ```{tip}
 Prefer the **typed shortcuts** below (`read_int`, `write_float`, `read_string`…)
@@ -203,7 +205,9 @@ and `write_bytes(address, data)`.
   **read** (a write doesn't need it — it sizes itself to your value), **or** an
   `int` value doesn't fit in the chosen width (e.g. writing `2**40` with the
   default 4-byte width). Out-of-range integers are rejected up front rather than
-  silently truncated — widen `bufflength` to write a larger value.
+  silently truncated — widen `bufflength` to write a larger value. The unsigned
+  typed shortcuts (`write_uchar`, `write_uint`, …) likewise reject **negative**
+  values with the same `ValueError`.
 
 ## Reading many addresses efficiently
 

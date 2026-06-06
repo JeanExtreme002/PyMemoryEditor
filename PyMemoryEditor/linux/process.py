@@ -89,7 +89,7 @@ class LinuxProcess(AbstractProcess):
         self.__require_open()
         return is_process_64bit(self.pid)
 
-    def get_memory_regions(self) -> Generator[dict, None, None]:
+    def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()
         return get_memory_regions(self.pid)
 

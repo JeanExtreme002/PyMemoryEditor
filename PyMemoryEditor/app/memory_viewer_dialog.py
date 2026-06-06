@@ -24,7 +24,8 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess
 
-from ._widgets import parse_hex_address
+from ._auto_refresh_dialog import _DataWorker
+from ._widgets import parse_hex_address, shutdown_worker_thread
 
 
 # Child of the "PyMemoryEditor" logger, so the Log Console (which attaches a
@@ -54,6 +55,8 @@ class MemoryViewerDialog(QDialog):
     ):
         super().__init__(parent)
         self._process = process
+        # In-flight read worker (None when idle). Reads run off the UI thread.
+        self._worker: Optional[_DataWorker] = None
 
         self.setWindowTitle(f"Memory Viewer — PID {process.pid}")
         self.resize(820, 560)
@@ -148,19 +151,48 @@ class MemoryViewerDialog(QDialog):
             return None
 
     def refresh(self) -> None:
+        # Skip if a read is still running. The auto-refresh timer fires this
+        # repeatedly, and a large length (up to 65536) on a slow target
+        # (notably macOS Mach-VM) takes long enough that running it on the UI
+        # thread froze input — so the read now runs on a worker, and this guard
+        # self-throttles the cadence to the real read time instead of stacking
+        # workers.
+        if self._worker is not None and self._worker.isRunning():
+            return
         addr = self._parse_address()
         if addr is None:
             self._status.setText("Enter a hex address first.")
             return
         size = int(self._size_spin.value())
-        try:
-            data = self._process.read_process_memory(addr, bytes, size)
-            # The conversion/format must stay inside the guard: a backend that
-            # returns a non-buffer object would make bytes(data) raise TypeError,
-            # which (outside the try) escapes this slot and crashes the app.
-            if not isinstance(data, (bytes, bytearray)):
-                data = bytes(data)
-        except Exception as exc:  # noqa: BLE001 — surface every backend error
+        process = self._process
+
+        def fetch():
+            # Runs in the worker thread — never touches Qt widgets. addr/size
+            # travel back in the result so the rendered dump stays labelled with
+            # the range actually read even if the user edits the fields mid-read.
+            # Errors are returned (not raised) so the one result handler renders
+            # them with the same message/log the synchronous path produced.
+            try:
+                data = process.read_process_memory(addr, bytes, size)
+                # A backend returning a non-buffer object would make bytes(data)
+                # raise — keep that conversion inside the guard so it surfaces as
+                # a "Read failed" status rather than crashing the worker.
+                if not isinstance(data, (bytes, bytearray)):
+                    data = bytes(data)
+                return addr, size, bytes(data), None
+            except Exception as exc:  # noqa: BLE001 — surface every backend error
+                return addr, size, None, exc
+
+        worker = _DataWorker(fetch, self)
+        worker.ready.connect(self._on_read_result)
+        worker.finished.connect(self._on_worker_finished)
+        self._worker = worker
+        worker.start()
+
+    def _on_read_result(self, result) -> None:
+        """Render a finished read (UI thread). ``result`` is the fetch tuple."""
+        addr, size, data, exc = result
+        if exc is not None:
             self._dump.setPlainText("")
             self._status.setText(f"Read failed: {type(exc).__name__}: {exc}")
             _LOG.warning(
@@ -172,8 +204,14 @@ class MemoryViewerDialog(QDialog):
             )
             return
 
-        self._dump.setPlainText(_format_hex_dump(addr, bytes(data)))
+        self._dump.setPlainText(_format_hex_dump(addr, data))
         self._status.setText(f"Read {len(data):,} bytes from 0x{addr:X}")
+
+    def _on_worker_finished(self) -> None:
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            worker.deleteLater()
 
     def _toggle_auto(self, on: bool) -> None:
         self._auto_btn.setText("Auto-refresh: On" if on else "Auto-refresh: Off")
@@ -230,4 +268,9 @@ class MemoryViewerDialog(QDialog):
 
     def closeEvent(self, event) -> None:
         self._timer.stop()
+        # Unhook + join the read worker; if it's still wedged in a backend call
+        # it's detached rather than destroyed under us (same safety the
+        # auto-refresh dialogs use).
+        shutdown_worker_thread(self._worker, wait_ms=1000)
+        self._worker = None
         super().closeEvent(event)

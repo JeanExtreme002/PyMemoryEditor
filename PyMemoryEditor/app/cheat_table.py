@@ -21,7 +21,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -84,6 +84,7 @@ class CheatTable(QWidget):
         # the UI thread isn't blocked when the target is slow.
         self._poller = _CheatPollWorker(process, self)
         self._poller.values_ready.connect(self._on_values_ready)
+        self._poller.freeze_failed.connect(self._on_freeze_failed)
         self._poller.start()
 
         # A short cadence to push fresh entry snapshots into the worker. This
@@ -253,7 +254,7 @@ class CheatTable(QWidget):
         self._table.setItem(row, self.COL_TYPE, type_item)
 
         value_item = QTableWidgetItem(self._value_text_for(entry))
-        value_item.setToolTip("Double-click to write a new value into the process.")
+        value_item.setToolTip(self._VALUE_TOOLTIP)
         self._table.setItem(row, self.COL_VALUE, value_item)
 
     def _value_text_for(self, entry: CheatEntry) -> str:
@@ -381,6 +382,45 @@ class CheatTable(QWidget):
                 entry = self._entries[row]
                 entry.last_value = value
                 self._update_value_cell(row, entry)
+        finally:
+            self._suspend_signals = False
+
+    # Foreground for a row whose frozen value can't be written back. A muted
+    # red that stays readable on both the light and dark table palettes.
+    _FREEZE_FAIL_COLOR = QColor("#d9534f")
+    _VALUE_TOOLTIP = "Double-click to write a new value into the process."
+
+    def _on_freeze_failed(self, failures: dict) -> None:
+        """Flag rows whose freeze write is failing; clear those that recovered.
+
+        The poller emits the full current failure map (identity key →
+        ``"ErrorType: message"``) only when it changes, so reconciling every row
+        against it here is cheap and keeps the cue in sync: a red value cell plus
+        an explanatory tooltip while a freeze keeps failing, restored to normal
+        the moment the write lands again. Without this, a frozen value that the
+        backend silently refuses to write looked identical to one that worked.
+        """
+        rows_by_key: Dict[Tuple[int, type, int], int] = {}
+        for row, entry in enumerate(self._entries):
+            rows_by_key[(entry.address, entry.spec.pytype, entry.length)] = row
+
+        # setForeground / setToolTip flip data roles on the value cell, which
+        # would re-enter _on_cell_changed and try to "write" the unchanged text.
+        self._suspend_signals = True
+        try:
+            for key, row in rows_by_key.items():
+                item = self._table.item(row, self.COL_VALUE)
+                if item is None:
+                    continue
+                message = failures.get(key)
+                if message is not None:
+                    item.setForeground(QBrush(self._FREEZE_FAIL_COLOR))
+                    item.setToolTip("Freeze write is failing — %s" % message)
+                else:
+                    # Clear the override (Qt falls back to the palette default)
+                    # and restore the normal tooltip.
+                    item.setData(Qt.ForegroundRole, None)
+                    item.setToolTip(self._VALUE_TOOLTIP)
         finally:
             self._suspend_signals = False
 

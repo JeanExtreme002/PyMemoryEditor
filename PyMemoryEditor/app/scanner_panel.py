@@ -252,12 +252,14 @@ class ScannerPanel(QWidget):
             return
 
         is_pattern = spec.is_pattern
+        is_regex = spec.is_regex
         is_string = spec.pytype is str and not is_pattern
 
-        # AOB pattern mode reuses the "Value" line for the pattern string and
-        # hides / forces the rest of the value-shape controls (length,
-        # second value, scan-type combo) because none of them apply to
-        # pattern matching.
+        # Pattern modes reuse the "Value" line for the pattern and force the
+        # scan-type combo to EXACT (Bigger/Smaller/Between don't apply). The
+        # IDA form also hides the length (its match width is inferred from the
+        # token count), but a *regex* has no inferable width, so its Length
+        # field stays enabled and supplies search_by_pattern's byte_length.
         #
         # String (UTF-8) also locks the length field: the buffer width is the
         # UTF-8 byte length of the typed text (multi-byte aware), so letting the
@@ -265,17 +267,29 @@ class ScannerPanel(QWidget):
         # value they entered. The field stays visible as a read-only readout
         # kept in sync by _sync_string_length / _on_value_text_changed.
         self._length_spin.setEnabled(
-            spec.accepts_length_override and not is_pattern and not is_string
+            (spec.accepts_length_override and not is_pattern and not is_string)
+            or is_regex
         )
 
-        if is_pattern:
+        if is_regex:
+            self._value_edit.setPlaceholderText(
+                "e.g. Player[0-9]+  (text regex, matched against UTF-8 memory)"
+            )
+        elif is_pattern:
             self._value_edit.setPlaceholderText(
                 'e.g. "48 8B ? ? 00 00" (IDA-style hex with ? wildcards)'
             )
         else:
             self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
 
-        if is_pattern:
+        if is_regex:
+            # Length = the regex's max match width in bytes (byte_length); it
+            # drives the chunk overlap so a match straddling a chunk boundary is
+            # still found. Seed it with the spec's generous default.
+            self._length_spin.setMaximum(1024)
+            self._length_spin.setValue(spec.length)
+            self._length_spin.setSuffix("  bytes  (max match width)")
+        elif is_pattern:
             # No meaningful length for an AOB pattern; the scanner derives it.
             self._length_spin.setMaximum(1024)
             self._length_spin.setValue(1)

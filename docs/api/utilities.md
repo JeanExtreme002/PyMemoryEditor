@@ -65,6 +65,8 @@ from PyMemoryEditor.util import (
       number of bytes one match consumes.
    :raises ValueError: malformed IDA-style token, or ``byte_length`` omitted
       for a regex / pre-compiled pattern.
+   :raises TypeError: if ``pattern`` is not a ``str``, ``bytes`` or
+      ``re.Pattern[bytes]``.
 ```
 
 ### Example
@@ -73,7 +75,7 @@ from PyMemoryEditor.util import (
 from PyMemoryEditor.util import compile_pattern
 
 regex, byte_length = compile_pattern("48 8B ? 00 00")
-print(regex.pattern)   # b'\\x48\\x8B.\\x00\\x00'
+print(regex.pattern)   # b'H\x8b.\x00\x00'  (re.escape prints 0x48 as 'H')
 print(byte_length)     # 5
 ```
 

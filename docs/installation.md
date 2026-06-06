@@ -8,7 +8,7 @@ any platform.
 
 <table>
 <tr><td><b>Python</b></td><td>3.10 or newer</td></tr>
-<tr><td><b>Operating systems</b></td><td>🪟 Windows · 🐧 Linux (32-bit and 64-bit) · 🍎 macOS (64-bit)</td></tr>
+<tr><td><b>Operating systems</b></td><td>🪟 Windows · 🐧 Linux · 🍎 macOS</td></tr>
 </table>
 <br>
 
