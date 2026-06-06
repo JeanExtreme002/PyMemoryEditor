@@ -24,13 +24,13 @@ from .functions import (
     get_modules,
     get_task_for_pid,
     get_threads,
-    is_task_64bit,
     read_process_memory,
     release_task,
     search_addresses_by_pattern,
     search_addresses_by_value,
     search_values_by_addresses,
     write_process_memory,
+    _detect_task_64bit,
 )
 
 
@@ -55,6 +55,7 @@ class MacProcess(AbstractProcess):
         permission=None,
         case_sensitive: bool = True,
         exact_match: bool = True,
+        strict_bitness: bool = False,
     ):
         """
         :param process_name: name of the target process.
@@ -67,12 +68,16 @@ class MacProcess(AbstractProcess):
         :param case_sensitive: when False, process_name matching ignores case.
         :param exact_match: when False, ``process_name`` is matched as a
             substring (e.g. ``"chrome"`` finds ``"Google Chrome"``).
+        :param strict_bitness: raise ``BitnessDetectionError`` instead of
+            defaulting to 64-bit when no Mach-O header can be read. See
+            :class:`~PyMemoryEditor.AbstractProcess`.
         """
         super().__init__(
             process_name=process_name,
             pid=pid,
             case_sensitive=case_sensitive,
             exact_match=exact_match,
+            strict_bitness=strict_bitness,
         )
 
         # `permission` is accepted for cross-platform parity but has no effect
@@ -131,9 +136,9 @@ class MacProcess(AbstractProcess):
             # interpreter is shutting down.
             pass
 
-    def _detect_is_64bit(self) -> bool:
+    def _detect_is_64bit(self) -> Optional[bool]:
         self.__require_open()
-        return is_task_64bit(self.__task)
+        return _detect_task_64bit(self.__task)
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()

@@ -894,14 +894,14 @@ def get_modules(task: int) -> Generator[ModuleInfo, None, None]:
         )
 
 
-def is_task_64bit(task: int) -> bool:
+def _detect_task_64bit(task: int) -> Optional[bool]:
     """
-    Return ``True`` if the target task is 64-bit, ``False`` if 32-bit.
-
-    Reads the Mach-O header magic of a loaded image (every image in a process
-    shares its bitness): ``MH_MAGIC_64`` means 64-bit, ``MH_MAGIC`` means
-    32-bit. macOS has shipped 64-bit only since Catalina (10.15), so if no
-    image header can be read this defaults to ``True``.
+    Return ``True``/``False`` from the Mach-O header magic of a loaded image
+    (every image in a process shares its bitness): ``MH_MAGIC_64`` means 64-bit,
+    ``MH_MAGIC`` means 32-bit. Returns ``None`` when no image header can be read.
+    The raw *mechanism*: no guessing and no warning — the caller decides what an
+    unknown result means (the public :func:`is_task_64bit` defaults to 64-bit;
+    ``AbstractProcess.is_64bit`` honors ``strict_bitness``).
     """
     for module in get_modules(task):
         try:
@@ -914,10 +914,22 @@ def is_task_64bit(task: int) -> bool:
             return True
         if magic == _MH_MAGIC_32:
             return False
+    return None
 
-    # No readable image header — macOS is 64-bit only on every supported
-    # release, so 64-bit is the safe guess; warn so a wrong pointer-width
-    # default (used by the pointer APIs) is traceable rather than silent.
+
+def is_task_64bit(task: int) -> bool:
+    """
+    Return ``True`` if the target task is 64-bit, ``False`` if 32-bit.
+
+    Thin *policy* wrapper over :func:`_detect_task_64bit`. macOS has shipped
+    64-bit only since Catalina (10.15), so when no image header can be read this
+    defaults to ``True``; it warns so a wrong pointer-width default (used by the
+    pointer APIs) is traceable rather than silent.
+    """
+    detected = _detect_task_64bit(task)
+    if detected is not None:
+        return detected
+
     _logger.warning(
         "is_task_64bit: no readable Mach-O header for task %d; assuming 64-bit "
         "(macOS has been 64-bit only since Catalina).",

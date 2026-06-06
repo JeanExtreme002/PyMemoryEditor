@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import ctypes
+import logging
 import sys
 from abc import ABC, abstractmethod
 from typing import (
@@ -18,6 +20,7 @@ from typing import (
 
 from ..enums import ScanTypesEnum
 from ..util import UNSET, _check_int_fits
+from .errors import BitnessDetectionError
 from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .region import MemoryRegion, MemoryRegionSnapshot
@@ -27,6 +30,8 @@ if TYPE_CHECKING:
     from .pointer_scan import PointerPath
     from .remote_pointer import RemotePointer
 
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 T = TypeVar("T")
 
@@ -44,6 +49,7 @@ class AbstractProcess(ABC):
         pid: Optional[int] = None,
         case_sensitive: bool = True,
         exact_match: bool = True,
+        strict_bitness: bool = False,
     ):
         """
         :param process_name: name of the target process.
@@ -54,6 +60,12 @@ class AbstractProcess(ABC):
             substring — ``"chrome"`` matches ``"chrome.exe"`` / ``"Google Chrome"``.
             If more than one process matches, ``AmbiguousProcessNameError`` is
             raised so you can pick a PID from the list.
+        :param strict_bitness: when True, :attr:`is_64bit` raises
+            :class:`~PyMemoryEditor.BitnessDetectionError` if the target's
+            32-/64-bit width can't be read from its headers, instead of falling
+            back to the host word size. Use it when a wrong pointer-width
+            default would be worse than a hard failure (the pointer APIs rely on
+            it). Check :attr:`is_bitness_certain` for the non-strict signal.
         """
         self._process_info = ProcessInfo()
 
@@ -75,6 +87,10 @@ class AbstractProcess(ABC):
         # Cache for the target's bitness — resolved lazily on first access of
         # `is_64bit` / `pointer_size` (a syscall per backend) and reused after.
         self._is_64bit_cache: Optional[bool] = None
+        # Whether that resolution read the target's headers (True/False) or fell
+        # back to a host-word-size guess (False). Set alongside the cache.
+        self._bitness_certain: Optional[bool] = None
+        self._strict_bitness = strict_bitness
 
     def __enter__(self):
         return self
@@ -87,7 +103,7 @@ class AbstractProcess(ABC):
         return self._process_info.pid
 
     @abstractmethod
-    def _detect_is_64bit(self) -> bool:
+    def _detect_is_64bit(self) -> Optional[bool]:
         """
         Detect whether the target process is 64-bit. Backend-specific:
 
@@ -97,6 +113,11 @@ class AbstractProcess(ABC):
           (read from ``/proc/<pid>/exe`` or a file-backed image mapping).
         * **macOS** — the Mach-O header magic of a loaded image
           (``MH_MAGIC_64`` vs ``MH_MAGIC``).
+
+        Returns ``True``/``False`` when the headers can be read, or ``None`` when
+        the bitness is *undeterminable* — :attr:`is_64bit` then either falls back
+        to the host word size or raises (see ``strict_bitness``). This is the raw
+        mechanism only: implementations must **not** guess or warn here.
 
         Called once by :attr:`is_64bit`, which caches the result. Implementations
         may assume the process is still open.
@@ -116,10 +137,53 @@ class AbstractProcess(ABC):
         :meth:`resolve_pointer_chain`, :meth:`scan_pointer_paths`,
         :meth:`get_pointer` and :class:`~PyMemoryEditor.RemotePointer`: leave
         ``ptr_size`` as ``None`` and the right pointer width (4 or 8) is used.
+
+        When the backend can't read the target's headers, the result depends on
+        ``strict_bitness`` (passed to the constructor): the default ``False``
+        falls back to the **host** word size and logs a WARNING — convenient,
+        but possibly wrong for a cross-bitness target (a 32-bit process on a
+        64-bit host) — while ``True`` raises
+        :class:`~PyMemoryEditor.BitnessDetectionError`. Either way,
+        :attr:`is_bitness_certain` reports whether the value was read or guessed.
         """
         if self._is_64bit_cache is None:
-            self._is_64bit_cache = bool(self._detect_is_64bit())
+            detected = self._detect_is_64bit()
+            if detected is not None:
+                self._is_64bit_cache = bool(detected)
+                self._bitness_certain = True
+            elif self._strict_bitness:
+                raise BitnessDetectionError(self.pid)
+            else:
+                host_is_64bit = ctypes.sizeof(ctypes.c_void_p) == 8
+                _logger.warning(
+                    "Could not determine the bitness of process %d from its "
+                    "headers; assuming the host word size (%d-bit). The "
+                    "pointer-width default used by resolve_pointer_chain / "
+                    "RemotePointer / scan_pointer_paths may be wrong for a "
+                    "cross-bitness target — pass ptr_size explicitly, or open "
+                    "the process with strict_bitness=True to raise instead.",
+                    self.pid,
+                    64 if host_is_64bit else 32,
+                )
+                self._is_64bit_cache = host_is_64bit
+                self._bitness_certain = False
         return self._is_64bit_cache
+
+    @property
+    def is_bitness_certain(self) -> bool:
+        """
+        ``True`` if :attr:`is_64bit` was read from the target's own headers,
+        ``False`` if it fell back to a guess of the host word size because they
+        couldn't be read.
+
+        When ``False`` the automatic ``ptr_size`` default may be wrong for a
+        cross-bitness target — pass ``ptr_size`` explicitly to the pointer APIs,
+        or open the process with ``strict_bitness=True`` to turn the guess into
+        a :class:`~PyMemoryEditor.BitnessDetectionError` instead. Accessing this
+        resolves :attr:`is_64bit` if it hasn't been already.
+        """
+        self.is_64bit  # force detection (and the strict_bitness check) to run
+        return bool(self._bitness_certain)
 
     @property
     def pointer_size(self) -> int:

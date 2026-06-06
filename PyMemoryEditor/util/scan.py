@@ -4,7 +4,7 @@ import re
 import struct
 import sys
 from bisect import bisect_left
-from typing import Generator, Iterable, Literal, Optional, Sequence, Tuple, Type, Union, cast
+from typing import Callable, Generator, Iterable, Literal, Optional, Sequence, Tuple, Type, Union, cast
 
 from ..enums import ScanTypesEnum
 from . import scan_numpy
@@ -214,6 +214,46 @@ def scan_memory_for_exact_value(
             yield offset
 
 
+def _make_predicate(
+    scan_type: ScanTypesEnum,
+    target: Union[int, float],
+    start: Union[int, float],
+    end: Union[int, float],
+) -> Callable[[Union[int, float]], bool]:
+    """
+    Return a single-value predicate ``value -> bool`` implementing ``scan_type``
+    against the decoded ``target`` (or the ``start`` / ``end`` pair for the
+    BETWEEN variants).
+
+    This is the ONE place the eight comparison semantics live. All three scan
+    loops call it — the ``struct.iter_unpack`` numeric fast path, the
+    ``int.from_bytes`` fallback, and the ordered-string fast path — so a change
+    to a comparison can't silently diverge between them. (Previously each of
+    those branches inlined its own copy: sixteen near-identical loop bodies.)
+    The closure is built once per ``scan_memory`` call, outside the hot loop, so
+    the per-element cost is a single Python call rather than the re-evaluated
+    ``scan_type`` chain. The fast/slow equivalence is pinned by
+    ``tests/test_scan_properties.py``.
+    """
+    if scan_type is ScanTypesEnum.EXACT_VALUE:
+        return lambda value: value == target
+    if scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
+        return lambda value: value != target
+    if scan_type is ScanTypesEnum.BIGGER_THAN:
+        return lambda value: value > target
+    if scan_type is ScanTypesEnum.SMALLER_THAN:
+        return lambda value: value < target
+    if scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
+        return lambda value: value >= target
+    if scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
+        return lambda value: value <= target
+    if scan_type is ScanTypesEnum.VALUE_BETWEEN:
+        return lambda value: start <= value <= end
+    if scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN:
+        return lambda value: not (start <= value <= end)
+    raise ValueError("Unsupported scan_type: %r" % (scan_type,))
+
+
 def _scan_string_ordered(
     data: bytes,
     end: int,
@@ -349,50 +389,20 @@ def scan_memory(
                 yield from offsets
                 return
 
+        # One predicate (built once, outside the loop) drives every scan_type,
+        # so the comparison semantics aren't duplicated per branch. The value
+        # production stays inlined (the C-level struct.iter_unpack), keeping the
+        # hot loop to a single Python call per element.
+        predicate = _make_predicate(
+            scan_type, target_value_decoded, start_target_value, end_target_value
+        )
         unpacker = struct.iter_unpack(fmt, buffer[:total])
         offset = 0
         step = target_value_size
-
-        if scan_type is ScanTypesEnum.EXACT_VALUE:
-            for (value,) in unpacker:
-                if value == target_value_decoded:
-                    yield offset
-                offset += step
-        elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
-            for (value,) in unpacker:
-                if value != target_value_decoded:
-                    yield offset
-                offset += step
-        elif scan_type is ScanTypesEnum.BIGGER_THAN:
-            for (value,) in unpacker:
-                if value > target_value_decoded:
-                    yield offset
-                offset += step
-        elif scan_type is ScanTypesEnum.SMALLER_THAN:
-            for (value,) in unpacker:
-                if value < target_value_decoded:
-                    yield offset
-                offset += step
-        elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
-            for (value,) in unpacker:
-                if value >= target_value_decoded:
-                    yield offset
-                offset += step
-        elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
-            for (value,) in unpacker:
-                if value <= target_value_decoded:
-                    yield offset
-                offset += step
-        elif scan_type is ScanTypesEnum.VALUE_BETWEEN:
-            for (value,) in unpacker:
-                if start_target_value <= value <= end_target_value:
-                    yield offset
-                offset += step
-        elif scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN:
-            for (value,) in unpacker:
-                if not (start_target_value <= value <= end_target_value):
-                    yield offset
-                offset += step
+        for (value,) in unpacker:
+            if predicate(value):
+                yield offset
+            offset += step
         return
 
     # Fallback: strings (byte-by-byte) or numeric with unusual sizes (3/6/7).
@@ -409,85 +419,37 @@ def scan_memory(
     # byte-class prefilter finds those candidates in C, skipping the huge NUL
     # runs of reserved memory instead of stepping every byte in Python. Numerics
     # with unusual sizes (3/6/7) decode little-endian and fall through unchanged.
+    # Build the comparison predicate once — shared by the ordered-string fast
+    # path below and the byte-by-byte fallback loop, so neither re-inlines the
+    # eight scan_type branches.
+    predicate = _make_predicate(
+        scan_type, target_value_decoded, start_target_value, end_target_value
+    )
+
     if is_string:
         spec = None
         if first_byte is not None and scan_type is ScanTypesEnum.BIGGER_THAN:
-            spec = (first_byte, 0xFF, frozenset((first_byte,)),
-                    lambda v: v > target_value_decoded)
+            spec = (first_byte, 0xFF, frozenset((first_byte,)), predicate)
         elif first_byte is not None and scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
-            spec = (first_byte, 0xFF, frozenset((first_byte,)),
-                    lambda v: v >= target_value_decoded)
+            spec = (first_byte, 0xFF, frozenset((first_byte,)), predicate)
         elif first_byte is not None and scan_type is ScanTypesEnum.SMALLER_THAN:
-            spec = (0x00, first_byte, frozenset((first_byte,)),
-                    lambda v: v < target_value_decoded)
+            spec = (0x00, first_byte, frozenset((first_byte,)), predicate)
         elif first_byte is not None and scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
-            spec = (0x00, first_byte, frozenset((first_byte,)),
-                    lambda v: v <= target_value_decoded)
+            spec = (0x00, first_byte, frozenset((first_byte,)), predicate)
         elif (
             scan_type is ScanTypesEnum.VALUE_BETWEEN
             and start_first_byte is not None
             and end_first_byte is not None
         ):
             spec = (start_first_byte, end_first_byte,
-                    frozenset((start_first_byte, end_first_byte)),
-                    lambda v: start_target_value <= v <= end_target_value)
+                    frozenset((start_first_byte, end_first_byte)), predicate)
         if spec is not None:
             yield from _scan_string_ordered(data, end, target_value_size, *spec)
             return
 
-    if scan_type is ScanTypesEnum.EXACT_VALUE:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if value == target_value_decoded:
-                yield offset
-    elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if value != target_value_decoded:
-                yield offset
-    elif scan_type is ScanTypesEnum.BIGGER_THAN:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if value > target_value_decoded:
-                yield offset
-    elif scan_type is ScanTypesEnum.SMALLER_THAN:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if value < target_value_decoded:
-                yield offset
-    elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if value >= target_value_decoded:
-                yield offset
-    elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if value <= target_value_decoded:
-                yield offset
-    elif scan_type is ScanTypesEnum.VALUE_BETWEEN:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if start_target_value <= value <= end_target_value:
-                yield offset
-    elif scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN:
-        for offset in range(0, end, step):
-            value = int_from_bytes(
-                data[offset : offset + target_value_size], byte_order, signed=signed
-            )
-            if not (start_target_value <= value <= end_target_value):
-                yield offset
+    for offset in range(0, end, step):
+        value = int_from_bytes(
+            data[offset : offset + target_value_size], byte_order, signed=signed
+        )
+        if predicate(value):
+            yield offset

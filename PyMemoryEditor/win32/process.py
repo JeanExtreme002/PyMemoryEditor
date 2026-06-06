@@ -26,12 +26,12 @@ from .functions import (
     GetModules,
     GetProcessHandle,
     GetThreads,
-    IsProcess64Bit,
     ReadProcessMemory,
     SearchAddressesByPattern,
     SearchAddressesByValue,
     SearchValuesByAddresses,
     WriteProcessMemory,
+    _detect_process_64bit,
 )
 
 
@@ -93,6 +93,7 @@ class WindowsProcess(AbstractProcess):
         permission: Union[ProcessOperationsEnum, int] = DEFAULT_PERMISSION,
         case_sensitive: bool = False,
         exact_match: bool = True,
+        strict_bitness: bool = False,
     ):
         """
         :param process_name: name of the target process.
@@ -113,6 +114,7 @@ class WindowsProcess(AbstractProcess):
             pid=pid,
             case_sensitive=case_sensitive,
             exact_match=exact_match,
+            strict_bitness=strict_bitness,
         )
         self.__closed = False
 
@@ -177,9 +179,9 @@ class WindowsProcess(AbstractProcess):
             raise OSError("CloseHandle failed.")
         return True
 
-    def _detect_is_64bit(self) -> bool:
+    def _detect_is_64bit(self) -> Optional[bool]:
         self.__require_open()
-        return IsProcess64Bit(self.__process_handle)
+        return _detect_process_64bit(self.__process_handle)
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()

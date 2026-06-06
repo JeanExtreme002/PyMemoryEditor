@@ -18,6 +18,7 @@ from .enums import ScanTypesEnum
 from .process.abstract import AbstractProcess
 from .process.errors import (
     AmbiguousProcessNameError,
+    BitnessDetectionError,
     ClosedProcess,
     ProcessIDNotExistsError,
     ProcessNotFoundError,
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
 __all__ = (
     "AbstractProcess",
     "AmbiguousProcessNameError",
+    "BitnessDetectionError",
     "ClosedProcess",
     "MemoryRegion",
     "MemoryRegionSnapshot",

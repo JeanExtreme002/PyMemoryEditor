@@ -11,8 +11,9 @@ The backend ``get_memory_regions()`` generators yield instances of
     / ``is_shared``,
   - the backing file ``path`` (when the platform exposes it cheaply),
   - and the original platform descriptor in ``struct`` (a
-    ``MEMORY_BASIC_INFORMATION`` on Windows, the privileges-string struct on
-    Linux, the VM struct on macOS).
+    ``MEMORY_BASIC_INFORMATION_32`` / ``MEMORY_BASIC_INFORMATION_64`` on
+    Windows, the privileges-string ``MEMORY_BASIC_INFORMATION`` on Linux, the
+    VM struct on macOS).
 
 Portable client code never touches ``struct`` — the booleans cover every
 read/write/execute/shared question. Backends use :func:`make_region` to build
@@ -53,9 +54,11 @@ class MemoryRegion:
 
     :param address: base address of the region.
     :param size: region size in bytes.
-    :param struct: platform-specific descriptor (``MEMORY_BASIC_INFORMATION``
-        on Windows / Linux; the macOS VM struct). Portable code should rely on
-        the boolean fields below instead of poking at this directly.
+    :param struct: platform-specific descriptor
+        (``MEMORY_BASIC_INFORMATION_32`` / ``MEMORY_BASIC_INFORMATION_64`` on
+        Windows; ``MEMORY_BASIC_INFORMATION`` on Linux; the macOS VM struct).
+        Portable code should rely on the boolean fields below instead of poking
+        at this directly.
     :param is_readable: ``True`` when the region can be read.
     :param is_writable: ``True`` when the region can be written.
     :param is_executable: ``True`` when the region contains executable code.

@@ -16,10 +16,10 @@ from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
 from .functions import (
+    _detect_process_64bit,
     get_memory_regions,
     get_modules,
     get_threads,
-    is_process_64bit,
     read_process_memory,
     search_addresses_by_pattern,
     search_addresses_by_value,
@@ -44,6 +44,7 @@ class LinuxProcess(AbstractProcess):
         permission=None,
         case_sensitive: bool = True,
         exact_match: bool = True,
+        strict_bitness: bool = False,
     ):
         """
         :param process_name: name of the target process.
@@ -56,12 +57,16 @@ class LinuxProcess(AbstractProcess):
         :param case_sensitive: when False, process_name matching ignores case.
         :param exact_match: when False, ``process_name`` is matched as a
             substring (e.g. ``"chrome"`` finds ``"chromium-browser"``).
+        :param strict_bitness: raise ``BitnessDetectionError`` instead of
+            guessing the host word size when the target's ELF class can't be
+            read. See :class:`~PyMemoryEditor.AbstractProcess`.
         """
         super().__init__(
             process_name=process_name,
             pid=pid,
             case_sensitive=case_sensitive,
             exact_match=exact_match,
+            strict_bitness=strict_bitness,
         )
         self.__closed = False
 
@@ -85,9 +90,9 @@ class LinuxProcess(AbstractProcess):
         self.__closed = True
         return True
 
-    def _detect_is_64bit(self) -> bool:
+    def _detect_is_64bit(self) -> Optional[bool]:
         self.__require_open()
-        return is_process_64bit(self.pid)
+        return _detect_process_64bit(self.pid)
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()

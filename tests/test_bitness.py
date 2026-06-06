@@ -10,6 +10,7 @@ running interpreter's pointer width on all three platforms.
 """
 
 import ctypes
+import logging
 import os
 import sys
 
@@ -19,7 +20,7 @@ if sys.platform not in ("win32", "darwin") and not sys.platform.startswith("linu
     pytest.skip("Platform not supported by PyMemoryEditor", allow_module_level=True)
 
 
-from PyMemoryEditor import OpenProcess  # noqa: E402
+from PyMemoryEditor import BitnessDetectionError, OpenProcess  # noqa: E402
 
 
 HOST_IS_64BIT = ctypes.sizeof(ctypes.c_void_p) == 8
@@ -75,3 +76,55 @@ def test_remote_pointer_defaults_to_detected_ptr_size(process):
 
     assert pointer.address == ctypes.addressof(target)
     assert (pointer.value & 0xFFFFFFFF) == 0x0BADF00D
+
+
+# --- strict_bitness / is_bitness_certain -------------------------------- #
+#
+# The self-process always has a readable header, so detection is certain; the
+# undeterminable path (a cross-bitness target whose header can't be read) is
+# forced by stubbing the backend's raw detector to return None — the contract
+# `_detect_is_64bit` uses to signal "unknown".
+
+
+def test_is_bitness_certain_true_for_readable_target(process):
+    """A target whose header is readable (here, ourselves) is certain."""
+    assert process.is_bitness_certain is True
+    assert process.is_64bit is HOST_IS_64BIT
+
+
+def test_undeterminable_falls_back_to_host_and_warns(process, monkeypatch, caplog):
+    """Non-strict (default): an unknown bitness guesses the host word size,
+    flags the result as uncertain, and logs a WARNING."""
+    monkeypatch.setattr(process, "_detect_is_64bit", lambda: None)
+    process._is_64bit_cache = None  # clear any cached detection
+    process._bitness_certain = None
+
+    with caplog.at_level(logging.WARNING, logger="PyMemoryEditor"):
+        assert process.is_64bit is HOST_IS_64BIT
+    assert process.is_bitness_certain is False
+    assert any(
+        record.levelno == logging.WARNING and "bitness" in record.getMessage().lower()
+        for record in caplog.records
+    )
+
+
+def test_strict_bitness_raises_when_undeterminable(monkeypatch):
+    """strict_bitness=True turns the guess into a BitnessDetectionError."""
+    handle = OpenProcess(pid=os.getpid(), strict_bitness=True)
+    try:
+        monkeypatch.setattr(handle, "_detect_is_64bit", lambda: None)
+        with pytest.raises(BitnessDetectionError) as excinfo:
+            _ = handle.is_64bit
+        assert excinfo.value.pid == os.getpid()
+    finally:
+        handle.close()
+
+
+def test_strict_bitness_succeeds_when_determinable():
+    """strict_bitness must not interfere when the header is readable."""
+    handle = OpenProcess(pid=os.getpid(), strict_bitness=True)
+    try:
+        assert handle.is_64bit is HOST_IS_64BIT
+        assert handle.is_bitness_certain is True
+    finally:
+        handle.close()

@@ -305,16 +305,18 @@ def _read_elf_class(path: str) -> Optional[int]:
     return ident[4]  # e_ident[EI_CLASS]: 1 = ELFCLASS32, 2 = ELFCLASS64
 
 
-def is_process_64bit(pid: int) -> bool:
+def _detect_process_64bit(pid: int) -> Optional[bool]:
     """
-    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+    Return ``True``/``False`` from the ELF ``EI_CLASS`` byte of the target's
+    executable, or ``None`` when no header could be read. The raw *mechanism*:
+    no guessing and no warning — the caller decides what an unknown result
+    means (the public :func:`is_process_64bit` falls back to the host word size;
+    ``AbstractProcess.is_64bit`` honors ``strict_bitness``).
 
-    Reads the ``EI_CLASS`` byte of the process's ELF executable. The primary
-    source is ``/proc/<pid>/exe``; if that symlink can't be read (a different
-    user without ``CAP_SYS_PTRACE``), it falls back to the first file-backed,
-    executable mapping in ``/proc/<pid>/maps`` — the main image or a shared
-    library, which share the process's bitness. As a last resort it assumes the
-    host's word size.
+    The primary source is ``/proc/<pid>/exe``; if that symlink can't be read (a
+    different user without ``CAP_SYS_PTRACE``), it falls back to the first
+    file-backed, executable mapping in ``/proc/<pid>/maps`` — the main image or
+    a shared library, which share the process's bitness.
     """
     ei_class = _read_elf_class("/proc/{}/exe".format(pid))
 
@@ -334,10 +336,22 @@ def is_process_64bit(pid: int) -> bool:
         return True
     if ei_class == 1:
         return False
+    return None
 
-    # Couldn't determine it — assume the host's word size (the usual case).
-    # Warn so a wrong pointer-width default (used by the pointer APIs) is
-    # traceable instead of a silent mis-detection on a cross-bitness target.
+
+def is_process_64bit(pid: int) -> bool:
+    """
+    Return ``True`` if the target process is 64-bit, ``False`` if 32-bit.
+
+    Thin *policy* wrapper over :func:`_detect_process_64bit`: when no ELF class
+    can be read it assumes the host's word size (the usual case) and warns so a
+    wrong pointer-width default (used by the pointer APIs) is traceable instead
+    of a silent mis-detection on a cross-bitness target.
+    """
+    detected = _detect_process_64bit(pid)
+    if detected is not None:
+        return detected
+
     _logger.warning(
         "is_process_64bit: could not read the ELF class for pid %d; assuming "
         "the host word size. Pointer-width detection may be wrong for a "

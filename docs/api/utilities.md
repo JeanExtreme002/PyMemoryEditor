@@ -8,6 +8,7 @@ arbitrary region for scanning.
 ```python
 from PyMemoryEditor.util import (
     resolve_bufflength,
+    resolve_bufflength_for_value,
     convert_from_byte_array,
     value_to_bytes,
     values_to_bytes,
@@ -18,6 +19,7 @@ from PyMemoryEditor.util import (
     scan_memory_for_exact_value,
     PatternLike,
     DEFAULT_MAX_REGION_CHUNK,
+    NUMPY_AVAILABLE,
 )
 ```
 
@@ -31,6 +33,17 @@ from PyMemoryEditor.util import (
 
    :raises ValueError: ``bufflength`` is required for ``pytype=str`` /
       ``pytype=bytes``.
+
+.. py:function:: resolve_bufflength_for_value(pytype, bufflength, *values)
+
+   Like :py:func:`resolve_bufflength`, but for operations that already carry
+   the value(s) being matched (the ``search_by_value`` family). When
+   ``bufflength`` is ``None``: numeric / bool types fall back to the default
+   width (int→4, float→8, bool→1); ``str`` / ``bytes`` infer the width from the
+   longest encoded value instead of raising (``str`` encoded as UTF-8), so
+   ``search_by_value(str, value="hi")`` works without the caller counting
+   bytes. For a range search the shorter endpoint is NUL-padded up to this
+   width.
 
 .. py:function:: convert_from_byte_array(byte_array, pytype, length)
 
@@ -97,9 +110,11 @@ print(byte_length)     # 5
 
 .. py:function:: iter_region_chunks(region_size, target_value_size, max_chunk=DEFAULT_MAX_REGION_CHUNK)
 
-   Yield ``(offset, chunk_size)`` pairs that walk a single memory region in
-   bounded-size chunks. Regions up to ``max_chunk`` yield a single chunk; larger
-   ones are split into **contiguous, non-overlapping** chunks whose size is a
+   Return an iterable of ``(offset, chunk_size)`` pairs that walk a single
+   memory region in bounded-size chunks. Regions up to ``max_chunk`` return a
+   single-element tuple (avoiding generator overhead in the common, hot path);
+   larger ones return a lazy generator that yields **contiguous,
+   non-overlapping** chunks whose size is a
    multiple of ``target_value_size`` so a typed numeric scan never splits a value
    across a boundary. Boundary handling for *patterns* is done one level up by
    the scanner (it overlaps consecutive chunks by ``pattern_length - 1`` bytes);
@@ -112,6 +127,13 @@ print(byte_length)     # 5
    Low-level scan kernels used by the backends. Public for advanced use only —
    the high-level :py:meth:`search_by_value` / :py:meth:`search_by_pattern`
    methods are the recommended API.
+
+.. py:data:: NUMPY_AVAILABLE
+
+   ``True`` when NumPy is importable, in which case eligible numeric scans use
+   the vectorized fast path. Install it via the ``speed`` extra
+   (``pip install PyMemoryEditor[speed]``). Scan results are identical with or
+   without it.
 ```
 
 ## Region predicates
@@ -139,8 +161,10 @@ from PyMemoryEditor.process.region import (
 .. py:function:: is_region_executable(struct)
 .. py:function:: is_region_shared(struct)
 
-   True/False from a platform descriptor (``MEMORY_BASIC_INFORMATION`` on
-   Windows/Linux; the VM struct on macOS). For a fully-populated region,
+   True/False from a platform descriptor
+   (``MEMORY_BASIC_INFORMATION_32`` / ``MEMORY_BASIC_INFORMATION_64`` on
+   Windows; ``MEMORY_BASIC_INFORMATION`` on Linux; the VM struct on macOS). For
+   a fully-populated region,
    prefer the boolean attributes on :py:class:`MemoryRegion`
    (``region.is_readable``, etc.).
 
