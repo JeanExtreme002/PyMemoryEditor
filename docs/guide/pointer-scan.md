@@ -91,13 +91,13 @@ solid pointers remain.
 ```python
 # Run 1 — scan and save.
 pointer_paths = process.scan_pointer_paths(address)
-process.save_pointer_paths(pointer_paths, "scan1.json")
+process.save_pointer_paths(pointer_paths, "scan.json")
 
 # ... close the target, restart it, find the value's new address again ...
 
 # Run 2 — keep only the saved paths that still reach it.
-survivors = process.rescan_pointer_paths("scan1.json", new_address)
-process.save_pointer_paths(survivors, "scan2.json")
+survivors = process.rescan_pointer_paths("scan.json", new_address)
+process.save_pointer_paths(survivors, "scan.json")
 ```
 
 ### Compare independent scans
@@ -117,6 +117,17 @@ Once you're down to one pointer, use it forever:
 ```python
 live = path.rebase(process).to_pointer(process, pytype=int, bufflength=4)
 live.value = 9999
+```
+
+### Load saved paths
+
+Once you have a refined scan file, load it directly with
+`load_pointer_paths` — no need to rescan again:
+
+```python
+paths = process.load_pointer_paths("scan.json")
+pointer = paths[0].rebase(process).to_pointer(process)
+pointer.write(9999)
 ```
 
 ## Persistence helpers
