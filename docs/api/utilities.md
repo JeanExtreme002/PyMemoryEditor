@@ -170,14 +170,18 @@ from PyMemoryEditor.process.region import (
 
 .. py:function:: region_path(struct)
 
-   Best-effort path of the file backing the region, or ``""`` when unknown
-   (Linux only — Windows/macOS would need extra syscalls).
+   Best-effort path of the file backing the region, or ``""`` when unknown.
+   Linux reads it from ``/proc/<pid>/maps``; Windows uses
+   ``GetMappedFileNameW`` (NT device path); macOS uses
+   ``proc_regionfilename``.
 
-.. py:function:: make_region(address, size, struct)
+.. py:function:: make_region(address, size, struct, *, path="")
 
    Build a fully-populated :py:class:`MemoryRegion` from a platform struct.
    The four boolean fields and ``path`` are computed once via the predicates
-   above. Backends call this once per region; user code rarely needs it.
+   above. When *path* is non-empty it overrides the struct-based
+   ``region_path()`` lookup. Backends call this once per region; user code
+   rarely needs it.
 ```
 
 ```{seealso}

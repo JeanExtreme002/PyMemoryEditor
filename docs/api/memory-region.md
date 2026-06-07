@@ -63,8 +63,9 @@ of memory with its address, size, permissions and backing path.
       :type: str
 
       Best-effort path of the file backing the region, or ``""`` when
-      unknown. Linux exposes this directly from ``/proc/<pid>/maps``;
-      Windows and macOS would need extra syscalls and report ``""``.
+      unknown or anonymous. Linux reads it from ``/proc/<pid>/maps``;
+      Windows uses ``GetMappedFileNameW`` (NT device path); macOS uses
+      ``proc_regionfilename``.
 ```
 
 ## `MemoryRegionSnapshot`
