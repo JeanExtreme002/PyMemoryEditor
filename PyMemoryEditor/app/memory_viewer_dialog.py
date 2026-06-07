@@ -86,8 +86,14 @@ class MemoryViewerDialog(QDialog):
         self._size_spin.setSingleStep(16)
         top.addWidget(self._size_spin)
 
+        spin_h = self._size_spin.sizeHint().height()
+
         refresh_btn = QPushButton("Read")
         refresh_btn.setObjectName("secondary")
+        refresh_btn.setStyleSheet(
+            f"min-height: 0px; max-height: {spin_h}px; padding: 2px 14px;"
+        )
+        refresh_btn.setFixedHeight(spin_h)
         refresh_btn.clicked.connect(self.refresh)
         top.addWidget(refresh_btn)
         layout.addLayout(top)
