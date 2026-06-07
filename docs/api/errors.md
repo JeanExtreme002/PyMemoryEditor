@@ -18,6 +18,7 @@ except PyMemoryEditorError as exc:
 ```text
 Exception
 └── PyMemoryEditorError
+    ├── BitnessDetectionError
     ├── ClosedProcess
     ├── ProcessIDNotExistsError
     ├── ProcessNotFoundError
@@ -110,6 +111,36 @@ try:
 except AmbiguousProcessNameError as exc:
     print("Multiple matches:", exc.pids)
     process = OpenProcess(pid=exc.pids[0])
+```
+
+### `BitnessDetectionError`
+
+Raised when `strict_bitness=True` and the target's 32-/64-bit width could
+not be read from its own headers (the ELF class on Linux, the Mach-O magic
+on macOS, `IsWow64Process` on Windows).
+
+Without strict mode the library falls back to the host word size — a guess
+that may silently produce wrong pointer-width defaults.
+
+```{eval-rst}
+.. py:exception:: BitnessDetectionError
+
+   .. py:attribute:: pid
+      :type: int
+
+      The PID whose bitness could not be determined.
+```
+
+Example:
+
+```python
+from PyMemoryEditor import OpenProcess, BitnessDetectionError
+
+try:
+    with OpenProcess(pid=1234, strict_bitness=True) as process:
+        print(process.is_64bit)
+except BitnessDetectionError as exc:
+    print(f"Could not detect bitness of PID {exc.pid}")
 ```
 
 ## Standard exceptions
