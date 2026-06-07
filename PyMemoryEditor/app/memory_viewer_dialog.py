@@ -117,6 +117,10 @@ class MemoryViewerDialog(QDialog):
         write_btn = QPushButton("Write Hex Below…")
         write_btn.clicked.connect(self._write_bytes)
         auto_row.addWidget(write_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        auto_row.addWidget(close_btn)
         layout.addLayout(auto_row)
 
         self._dump = QPlainTextEdit()
