@@ -370,7 +370,10 @@ class MemoryMapDialog(AutoRefreshTableDialog):
         scroll_value = self._table.verticalScrollBar().value()
 
         total = len(self._snapshot)
-        total_bytes = sum(int(region.size) for region in self._snapshot)
+        total_bytes = sum(
+            int(region.size) for region in self._snapshot
+            if region.is_readable or region.is_writable or region.is_executable
+        )
 
         # Disable sorting while rebuilding so the model isn't re-sorted on every
         # appendRow (and rows don't shuffle mid-build).

@@ -128,7 +128,7 @@ class _ProcessListWorker(QThread):
                     mem = _macos_phys_footprint(pid)
                 if mem < 0:
                     try:
-                        # RSS — physical memory in use. VMS on macOS is useless
+                        # RSS — physical memory in use. VMS is useless
                         # here: the kernel reserves huge virtual ranges for
                         # dyld/frameworks/malloc zones, so every process looks
                         # like 100s of GB.
@@ -219,7 +219,7 @@ class OpenProcessDialog(QDialog):
 
         self._model = QStandardItemModel(0, 4, self)
         self._model.setHorizontalHeaderLabels(
-            ["PID", "Process Name", "Memory (RSS)", "User"]
+            ["PID", "Process Name", "Memory", "User"]
         )
 
         self._proxy = _ProcessSortProxy(self)
