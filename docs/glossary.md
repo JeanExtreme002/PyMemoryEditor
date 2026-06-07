@@ -43,8 +43,8 @@ Memory region
 
 Module
    A file mapped into a process — the main executable plus every shared
-   library it loaded. PyMemoryEditor surfaces them as
-   :py:class:`ModuleInfo`.
+   library it loaded. PyMemoryEditor surfaces them as [`ModuleInfo`](api/module-info.md).
+
 
 Pointer chain
    A static base plus a series of offsets:

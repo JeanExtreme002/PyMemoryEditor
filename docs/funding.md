@@ -1,6 +1,6 @@
 # Funding
 
-If PyMemoryEditor is useful to you, consider supporting the project:
+If PyMemoryEditor is useful to you, consider [supporting the project](https://github.com/sponsors/JeanExtreme002):
 
 <iframe src="https://github.com/sponsors/JeanExtreme002/button" title="Sponsor JeanExtreme002" height="32" width="114" style="border: 0; border-radius: 6px;"></iframe>
 
