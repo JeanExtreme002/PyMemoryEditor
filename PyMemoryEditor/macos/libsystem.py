@@ -237,6 +237,18 @@ libsystem.proc_pidpath.argtypes = (
 )
 libsystem.proc_pidpath.restype = ctypes.c_int
 
+# int proc_regionfilename(int pid, uint64_t address, void *buffer, uint32_t buffersize);
+# Returns the file path backing the memory region at *address* (like Linux's
+# /proc/<pid>/maps 6th column). Returns the path length on success, 0 when the
+# region has no backing file or on failure.
+libsystem.proc_regionfilename.argtypes = (
+    ctypes.c_int,
+    ctypes.c_uint64,
+    ctypes.c_void_p,
+    ctypes.c_uint32,
+)
+libsystem.proc_regionfilename.restype = ctypes.c_int
+
 # char *mach_error_string(mach_error_t error_value);
 libsystem.mach_error_string.argtypes = (ctypes.c_int,)
 libsystem.mach_error_string.restype = ctypes.c_char_p

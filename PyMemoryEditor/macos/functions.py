@@ -209,7 +209,21 @@ def _region_is_shared(task: int, address: int, basic_shared: int) -> bool:
     return _region_user_tag(task, address) == VM_MEMORY_SHARED_PMAP
 
 
-def get_memory_regions(task: int) -> Generator[MemoryRegion, None, None]:
+_PROC_REGIONFILENAME_BUF_SIZE = 1024
+
+
+def _get_region_filename(pid: int, address: int) -> str:
+    """Return the file path backing the region at *address*, or ``""``."""
+    buf = ctypes.create_string_buffer(_PROC_REGIONFILENAME_BUF_SIZE)
+    length = libsystem.proc_regionfilename(
+        pid, address, buf, _PROC_REGIONFILENAME_BUF_SIZE
+    )
+    if length <= 0:
+        return ""
+    return buf.value.decode("utf-8", errors="replace")
+
+
+def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None, None]:
     """
     Yield a :class:`MemoryRegion` describing each memory region of the task.
 
@@ -266,6 +280,7 @@ def get_memory_regions(task: int) -> Generator[MemoryRegion, None, None]:
             address=address.value,
             size=size.value,
             struct=region_struct,
+            path=_get_region_filename(pid, address.value) if pid else "",
         )
 
         if size.value == 0:

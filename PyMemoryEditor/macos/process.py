@@ -142,7 +142,7 @@ class MacProcess(AbstractProcess):
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()
-        return get_memory_regions(self.__task)
+        return get_memory_regions(self.__task, self.pid)
 
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         self.__require_open()
