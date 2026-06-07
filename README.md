@@ -82,11 +82,9 @@ That's it — read, write or scan another process in three lines, the same way o
 
 ## What's inside
 
-<table>
-<tr>
-<td width="50%" valign="top">
+### 🐍 The Python library
 
-**🐍 The Python library**
+Full control over another process's memory — in a few lines of Python:
 
 - ✅ **Read & write** values (`int`, `float`, `bool`, `str`, `bytes`)
 - 🔍 **Value scan** with eight comparison modes
@@ -96,21 +94,15 @@ That's it — read, write or scan another process in three lines, the same way o
 - 🗺️ **Memory map**, **modules**, **threads**
 - 🧱 **Allocate & free** remote memory (Windows / macOS)
 
-</td>
-<td width="50%" valign="top">
+### 🖥️ The bundled GUI app
 
-**🖥️ The bundled GUI app**
-
-- 🎯 **Scanner** — every scan mode, ranges, regex/AOB search
-- 🔁 **Refine workflow** — First Scan → Next Scan…
-- 📋 **Cheat table** — freeze / write values, JSON import/export
-- 🔗 **Pointer scan** — export, rescan & compare
-- 🗺️ **Memory map** with R/W/X flags
-- 🔬 **Hex viewer** with write-back
-
-</td>
-</tr>
-</table>
+All the library's power — no code required:
+- ⚡ **Zero setup** — attach to a process and start scanning in seconds
+- 🧲 **Refine workflow** — First Scan → Next Scan with live visual feedback
+- 📋 **Cheat table** — freeze / write values on the fly, JSON import/export
+- 🔬 **Hex viewer** — browse raw memory and write back inline
+- 🧩 **Pointer scan UI** — scan, export & rescan across sessions with a few clicks
+- 🎨 **One-click access** — every feature at your fingertips, no code needed
 
 ---
 
