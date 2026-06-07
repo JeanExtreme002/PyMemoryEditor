@@ -33,12 +33,7 @@ name or PID.
 
 ## What's inside
 
-<table class="inside-grid">
-<tr>
-<td width="50%" valign="top">
-
 **🎯 Scanner**
-
 - Every `ScanTypesEnum` mode
 - Int8 / Int16 / Int32 / Int64, Float / Double, Boolean, String (UTF-8) and
   Byte Array value types
@@ -49,46 +44,33 @@ name or PID.
   spans one byte (use `.+` for multibyte characters)
 
 **🔁 Refine workflow**
-
 - **First Scan → Next Scan** (Cheat Engine style)
 - Six Next Scan comparisons (increased / decreased / changed / unchanged, plus
   increased-by / decreased-by)
 - Live progress
 
 **📋 Cheat table**
-
 - Freeze / write values continuously
 - Per-entry custom labels
 - JSON import/export
 
-</td>
-<td width="50%" valign="top">
-
 **🔗 Pointer scan**
-
 - Same engine as `scan_pointer_paths`
 - Save scans to JSON
 - Rescan / compare scans to narrow them down
 - Send a resolved address straight to the Cheat Table
 
 **🗺️ Memory map**
-
 - All regions with R/W/X flags
 - Backing file path per region (Linux; blank where the OS doesn't expose it)
 
 **🔬 Hex viewer**
-
 - Live dump with write-back
 - Go to any address, with auto-refresh
 
 **🪵 Log console**
-
 - Same stream as `logging.getLogger("PyMemoryEditor")`
 - Pick the log level (DEBUG / INFO / WARNING / ERROR) at runtime
-
-</td>
-</tr>
-</table>
 
 ```{admonition} Cross-platform dark theme
 :class: tip
