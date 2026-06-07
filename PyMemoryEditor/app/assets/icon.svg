@@ -9,52 +9,112 @@
   consistently inside the window chrome on every platform.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Chip leads (QFP package, 8 per side) -->
-  <g fill="#9AA3B7">
+  <defs>
+    <!-- Metallic gradient for leads (vertical) -->
+    <linearGradient id="leadGradV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D4DAE8"/>
+      <stop offset="40%" stop-color="#8A95AB"/>
+      <stop offset="60%" stop-color="#A8B2C4"/>
+      <stop offset="100%" stop-color="#6B7690"/>
+    </linearGradient>
+    <!-- Metallic gradient for leads (horizontal) -->
+    <linearGradient id="leadGradH" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#D4DAE8"/>
+      <stop offset="40%" stop-color="#8A95AB"/>
+      <stop offset="60%" stop-color="#A8B2C4"/>
+      <stop offset="100%" stop-color="#6B7690"/>
+    </linearGradient>
+    <!-- Teal glow for chip border -->
+    <filter id="borderGlow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Subtle inner shadow for chip body -->
+    <filter id="innerShadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="shadow"/>
+      <feOffset dx="0" dy="2"/>
+      <feComposite in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1"/>
+      <feFlood flood-color="#000000" flood-opacity="0.4"/>
+      <feComposite in2="SourceAlpha" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Gradient for chip body edge -->
+    <linearGradient id="borderGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5EEAD4"/>
+      <stop offset="50%" stop-color="#2DD4BF"/>
+      <stop offset="100%" stop-color="#14B8A6"/>
+    </linearGradient>
+    <!-- Gradient for nucleus inner line -->
+    <linearGradient id="nucleusGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2DD4BF" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#5EEAD4" stop-opacity="0.25"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Chip leads (QFP package, 8 per side) — tapered, rounded, metallic -->
+  <g>
     <!-- Top leads -->
-    <rect x="102" y="68"  width="28" height="32" rx="3"/>
-    <rect x="142" y="68"  width="28" height="32" rx="3"/>
-    <rect x="182" y="68"  width="28" height="32" rx="3"/>
-    <rect x="222" y="68"  width="28" height="32" rx="3"/>
-    <rect x="262" y="68"  width="28" height="32" rx="3"/>
-    <rect x="302" y="68"  width="28" height="32" rx="3"/>
-    <rect x="342" y="68"  width="28" height="32" rx="3"/>
-    <rect x="382" y="68"  width="28" height="32" rx="3"/>
+    <rect x="106" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="146" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="186" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="226" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="266" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="306" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="346" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="386" y="62" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
     <!-- Bottom leads -->
-    <rect x="102" y="412" width="28" height="32" rx="3"/>
-    <rect x="142" y="412" width="28" height="32" rx="3"/>
-    <rect x="182" y="412" width="28" height="32" rx="3"/>
-    <rect x="222" y="412" width="28" height="32" rx="3"/>
-    <rect x="262" y="412" width="28" height="32" rx="3"/>
-    <rect x="302" y="412" width="28" height="32" rx="3"/>
-    <rect x="342" y="412" width="28" height="32" rx="3"/>
-    <rect x="382" y="412" width="28" height="32" rx="3"/>
+    <rect x="106" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="146" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="186" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="226" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="266" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="306" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="346" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
+    <rect x="386" y="412" width="20" height="38" rx="5" fill="url(#leadGradV)"/>
     <!-- Left leads -->
-    <rect x="68"  y="102" width="32" height="28" rx="3"/>
-    <rect x="68"  y="142" width="32" height="28" rx="3"/>
-    <rect x="68"  y="182" width="32" height="28" rx="3"/>
-    <rect x="68"  y="222" width="32" height="28" rx="3"/>
-    <rect x="68"  y="262" width="32" height="28" rx="3"/>
-    <rect x="68"  y="302" width="32" height="28" rx="3"/>
-    <rect x="68"  y="342" width="32" height="28" rx="3"/>
-    <rect x="68"  y="382" width="32" height="28" rx="3"/>
+    <rect x="62"  y="106" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="62"  y="146" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="62"  y="186" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="62"  y="226" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="62"  y="266" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="62"  y="306" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="62"  y="346" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="62"  y="386" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
     <!-- Right leads -->
-    <rect x="412" y="102" width="32" height="28" rx="3"/>
-    <rect x="412" y="142" width="32" height="28" rx="3"/>
-    <rect x="412" y="182" width="32" height="28" rx="3"/>
-    <rect x="412" y="222" width="32" height="28" rx="3"/>
-    <rect x="412" y="262" width="32" height="28" rx="3"/>
-    <rect x="412" y="302" width="32" height="28" rx="3"/>
-    <rect x="412" y="342" width="32" height="28" rx="3"/>
-    <rect x="412" y="382" width="32" height="28" rx="3"/>
+    <rect x="412" y="106" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="412" y="146" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="412" y="186" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="412" y="226" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="412" y="266" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="412" y="306" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="412" y="346" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
+    <rect x="412" y="386" width="38" height="20" rx="5" fill="url(#leadGradH)"/>
   </g>
 
-  <!-- Chip body -->
-  <rect x="96" y="96" width="320" height="320" rx="26"
-        fill="#0F1419" stroke="#2DD4BF" stroke-width="3"/>
+  <!-- Chip body — dark base -->
+  <rect x="96" y="96" width="320" height="320" rx="28" fill="#0F1419"/>
+
+  <!-- Chip outer border — glowing teal gradient -->
+  <rect x="96" y="96" width="320" height="320" rx="28"
+        fill="none" stroke="url(#borderGrad)" stroke-width="2.5"
+        filter="url(#borderGlow)"/>
+
+  <!-- Nucleus inner contour — subtle rounded inset with gradient -->
+  <rect x="126" y="126" width="260" height="260" rx="18"
+        fill="none" stroke="url(#nucleusGrad)" stroke-width="1.2"/>
 
   <!-- Pin-1 indicator dot -->
-  <circle cx="120" cy="120" r="6" fill="#2DD4BF" opacity="0.75"/>
+  <circle cx="120" cy="120" r="5" fill="#2DD4BF" opacity="0.8"/>
+
+  <!-- Corner accent marks (modern chip detail) -->
+  <line x1="104" y1="400" x2="118" y2="400" stroke="#2DD4BF" stroke-width="1" opacity="0.4"/>
+  <line x1="400" y1="104" x2="400" y2="118" stroke="#2DD4BF" stroke-width="1" opacity="0.4"/>
 
   <!-- Python logo (interlocking L-shapes), centered on the chip face -->
   <g transform="translate(141, 141)">
