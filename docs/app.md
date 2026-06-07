@@ -17,8 +17,7 @@ If you're new to memory editing, **start with the app** before writing code.
 pip install "PyMemoryEditor[app]"
 ```
 
-The `app` extra adds PySide6 and psutil to the install (psutil powers the
-GUI's process picker). The library itself stays dependency-free.
+The `app` extra pulls in PySide6 and other dependencies. The core library remains dependency-free.
 
 ## Launch
 
@@ -35,42 +34,38 @@ name or PID.
 
 **🎯 Scanner**
 - Every `ScanTypesEnum` mode
-- Int8 / Int16 / Int32 / Int64, Float / Double, Boolean, String (UTF-8) and
-  Byte Array value types
-- Range search
-- AOB / byte signature search (IDA-style)
-- Regex (string) search — a text regex matched against UTF-8 memory. The
-  Length field sets the maximum match width; matching is byte-wise, so `.`
-  spans one byte (use `.+` for multibyte characters)
+- All integer widths, Float, Double, Boolean, String (UTF-8), and Byte Array
+- Range, AOB / byte-signature (IDA-style), and regex search
 
-**🔁 Refine workflow**
+**🧲 Refine workflow**
 - **First Scan → Next Scan** (Cheat Engine style)
-- Six Next Scan comparisons (increased / decreased / changed / unchanged, plus
-  increased-by / decreased-by)
-- Live progress
+- Six more comparison modes (increased, decreased, changed, …)
+- Live progress bar
 
 **📋 Cheat table**
-- Freeze / write values continuously
+- Live value updates
+- Freeze or overwrite values continuously
 - Per-entry custom labels
-- JSON import/export
-
-**🔗 Pointer scan**
-- Same engine as `scan_pointer_paths`
-- Save scans to JSON
-- Rescan / compare scans to narrow them down
-- Send a resolved address straight to the Cheat Table
+- JSON import / export
 
 **🗺️ Memory map**
-- All regions with R/W/X flags
-- Backing file path per region (Linux; blank where the OS doesn't expose it)
+- All regions with their attributes (address, size, R/W/X permissions)
+- Auto-refresh as the memory layout changes
+- Allocate and free memory directly from the map
 
 **🔬 Hex viewer**
-- Live dump with write-back
-- Go to any address, with auto-refresh
+- Live hex dump with in-place write-back
+- Jump to any address, with auto-refresh
 
-**🪵 Log console**
-- Same stream as `logging.getLogger("PyMemoryEditor")`
-- Pick the log level (DEBUG / INFO / WARNING / ERROR) at runtime
+**📦 Modules**
+- All loaded modules (DLLs / .so / .dylib) with base address, size, and path
+- Auto-refresh as modules are loaded or unloaded
+- Double-click to open in the Hex Viewer
+
+**🧩 Pointer scan**
+- Same engine as `scan_pointer_paths`
+- Save / load scans as JSON
+- Rescan and compare to narrow results down
 
 ```{admonition} Cross-platform dark theme
 :class: tip
@@ -86,7 +81,7 @@ from the **Theme** button on the toolbar; your choice is remembered between runs
    *First Scan*.
 3. **Refine** with Next Scan after the value changes — pick *Exact Value* with
    the new number, or one of the *increased / decreased / changed* shortcuts.
-4. When the list is small, **double-click** a result to add it to the
+4. **Double-click** a result to add it to the
    **Cheat Table**.
 5. **Freeze** the value with the checkbox or change it from the Cheat Table.
 6. (Optional) **Run a Pointer Scan** on the result to find a chain that

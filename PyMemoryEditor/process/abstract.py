@@ -1094,8 +1094,8 @@ class AbstractProcess(ABC):
         -------
         ::
 
-            survivors = process.rescan_pointer_paths("scan1.json", new_address)
-            process.save_pointer_paths(survivors, "scan2.json")
+            survivors = process.rescan_pointer_paths("scan.json", new_address)
+            process.save_pointer_paths(survivors, "scan.json")
         """
         from .pointer_scan import PointerPath
 

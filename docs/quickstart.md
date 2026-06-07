@@ -1,18 +1,10 @@
 # Quick Start
 
-Five minutes from `pip install` to overwriting a value in another process.
+Five minutes from [`pip install`](installation.md) to overwriting a value in another process.
 
-## 1. Install
+## 1. Open a process
 
-```bash
-pip install PyMemoryEditor
-```
-
-(See [Installation](installation.md) for the GUI app or installing from source.)
-
-## 2. Open a process
-
-PyMemoryEditor exposes a single entry point: `OpenProcess`. You can target a
+PyMemoryEditor exposes a single entry point: [`OpenProcess`](guide/opening-process.md). Target a
 process by **name** or **PID**:
 
 ```python
@@ -32,10 +24,7 @@ with OpenProcess(name="notepad.exe") as process:
     ...
 ```
 
-By default, `OpenProcess` opens a **read + write** handle. No special permission
-flag needed for the common case.
-
-## 3. Read and write a value
+## 2. Read and write a value
 
 The easiest way is the **typed shortcuts** — the size is baked into the method
 name, so there's nothing to remember:
@@ -46,31 +35,32 @@ from PyMemoryEditor import OpenProcess
 with OpenProcess(name="notepad.exe") as process:
     address = 0x0005000C
 
-    value = process.read_int(address)       # read a 4-byte int
+    value = process.read_int(address)      # read a 4-byte int
     print("Current:", value)
 
-    process.write_int(address, value + 7)   # write it back
+    process.write_int(address, value + 7)  # write it back
 ```
 
-There's a `read_*` / `write_*` pair for every common type — `read_float`,
-`read_bool`, `read_uint`, `read_string`, and more:
+There's a `read_*` / `write_*` pair for every common type:
 
 ```python
-name = process.read_string(address, 32)     # reads a 32-byte field, returned up to the first NUL
+name = process.read_string(address, 32)  # reads a 32-byte field, returned up to the first NUL
 ```
 
-Prefer to spell out the type yourself? The generic `read_process_memory` /
-`write_process_memory` cover every case too — see
-[Reading and writing memory](guide/read-write.md).
+For the generic API, see [Reading and writing memory](guide/read-write.md).
 
-## 4. Run your first scan
+## 3. Run your first scan
 
 You rarely know the address of a value up front — you **find it by scanning**.
 `search_by_value` yields every address holding a given value:
 
 ```python
+from PyMemoryEditor import OpenProcess
+
+target_value = 100
+
 with OpenProcess(name="game.exe") as process:
-    for address in process.search_by_value(int, value=100):
+    for address in process.search_by_value(int, value=target_value):
         print(f"Found at 0x{address:X}")
 ```
 
@@ -78,15 +68,13 @@ That's the same operation Cheat Engine performs in its **First Scan** button.
 [See the searching guide](guide/searching.md) for all eight comparison modes
 and the refine workflow.
 
-## 5. The Cheat Engine workflow
+## 4. The Cheat Engine workflow
 
 The classic loop is:
 
-1. **Scan** for a value you can see (e.g. your health is `100`) — you get back
-   many candidate addresses.
+1. **Scan** for a value you can see (e.g. your health is `100`)
 2. **Let the value change** in the target (you take damage → `95`).
-3. **Refine**: keep only the addresses that now hold the new value. Repeat
-   until one address remains — that's your value.
+3. **Refine**: keep only the addresses that now hold the new value. 
 4. **Read, write or freeze** it.
 
 ```python
@@ -109,45 +97,35 @@ with OpenProcess(name="game.exe") as process:
 For big targets, see [the refine-scan workflow](guide/searching.md#the-refine-scan-workflow)
 to cache the region map once.
 
-## 6. Pointer scanning — make an address survive restarts
+## 5. Pointer scanning — make an address survive restarts
 
-The address you just found is **useless next launch**. The OS loads everything
-somewhere new every time (ASLR), so `0x1FA3C140` today is garbage tomorrow.
-The fix is a **static pointer path**: a chain that starts at a fixed location
-inside a loaded module and dereferences its way to your value — so the same
-recipe keeps working across restarts.
-
-PyMemoryEditor finds these for you. `scan_pointer_paths` is a **reverse pointer
-scan** (Cheat Engine's "Pointer scan"): give it the value's address *right now*,
-and it discovers the static paths that resolve to it.
+Addresses change every launch (ASLR). A **pointer path** starts from a fixed
+module offset and dereferences its way to your value — surviving restarts.
 
 ```python
+# 1. Scan — find pointer paths that resolve to the target address.
 with OpenProcess(name="game.exe") as process:
-    # The value lives here this run (e.g. from search_by_value above).
-    for path in process.scan_pointer_paths(0x1FA3C140, max_depth=4):
-        print(path)
-        # "game.exe"+0x10F4F4 -> [+0x0] -> +0x158
-        print(hex(path.resolve(process)))
-```
-
-Each result is a `PointerPath` carrying the module + offsets — the part that
-survives a restart. Save the reliable ones and reuse them later:
-
-```python
-with OpenProcess(name="game.exe") as process:
-    paths = list(process.scan_pointer_paths(0x1FA3C140, max_depth=4))
+    # ... search for the address
+    paths = list(process.scan_pointer_paths(target_address, max_depth=3))
     process.save_pointer_paths(paths, "health.json")
 
-# ...next launch, the absolute address has changed but the path still works:
+# ... restart the game, find the value's new address again ..
+
+# 2. Rescan — keep only paths that still resolve to the new address.
 with OpenProcess(name="game.exe") as process:
-    survivors = process.rescan_pointer_paths("health.json", 0x2B7C0140)
-    pointer = survivors[0].rebase(process).to_pointer(process)
+    # ... search for the new address again
+    survivors = process.rescan_pointer_paths("health.json", new_target_address)
+    process.save_pointer_paths(survivors, "health.json")
+
+# 3. Load — use the saved paths directly.
+with OpenProcess(name="game.exe") as process:
+    paths = process.load_pointer_paths("health.json")
+    pointer = paths[0].rebase(process).to_pointer(process)
     pointer.write(9999)
 ```
 
-[See the pointer scan guide](guide/pointer-scan.md) for tuning the scan
-(`max_depth`, `max_offset`), the multi-run refine workflow, and intersecting
-independent scans with `compare_pointer_scans`.
+[See the pointer scan guide](guide/pointer-scan.md) for tuning options and the
+multi-run refine workflow.
 
 ## Next steps
 
