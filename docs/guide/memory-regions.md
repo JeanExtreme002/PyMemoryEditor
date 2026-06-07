@@ -36,7 +36,7 @@ Each region is an instance of `MemoryRegion` — an immutable
 <tr><td><code>is_writable</code></td><td data-label="Type"><code>bool</code></td><td data-label="Meaning">True if the region can be written.</td></tr>
 <tr><td><code>is_executable</code></td><td data-label="Type"><code>bool</code></td><td data-label="Meaning">True if the region contains executable code.</td></tr>
 <tr><td><code>is_shared</code></td><td data-label="Type"><code>bool</code></td><td data-label="Meaning">True if the region is a shared/file-backed mapping.</td></tr>
-<tr><td><code>path</code></td><td data-label="Type"><code>str</code></td><td data-label="Meaning">Best-effort path of the file backing the region; populated on Linux (from <code>/proc/&lt;pid&gt;/maps</code>), <code>""</code> when unknown.</td></tr>
+<tr><td><code>path</code></td><td data-label="Type"><code>str</code></td><td data-label="Meaning">Best-effort path of the file backing the region. Linux reads it from <code>/proc/&lt;pid&gt;/maps</code>; Windows uses <code>GetMappedFileNameW</code> (NT device path); macOS uses <code>proc_regionfilename</code>. Empty string when unknown or anonymous.</td></tr>
 <tr><td><code>struct</code></td><td data-label="Type">platform-specific</td><td data-label="Meaning">Raw platform descriptor (see below).</td></tr>
 </table>
 
