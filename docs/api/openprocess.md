@@ -23,7 +23,7 @@ All three subclass `AbstractProcess` and share the API documented below.
 ## Construction
 
 ```{eval-rst}
-.. py:class:: OpenProcess(*, name=None, pid=None, permission=<platform default>, case_sensitive=<platform default>, exact_match=True)
+.. py:class:: OpenProcess(*, name=None, pid=None, permission=<platform default>, case_sensitive=<platform default>, exact_match=True, strict_bitness=False)
 
    Open a target process. ``OpenProcess`` resolves to the concrete backend for
    the host OS, so the ``permission`` and ``case_sensitive`` defaults are
@@ -44,6 +44,11 @@ All three subclass `AbstractProcess` and share the API documented below.
       ignores case. Default is ``False`` on Windows, ``True`` elsewhere.
    :param bool exact_match: when ``False``, ``name`` matches as a
       substring (``"chrome"`` matches ``"chrome.exe"``).
+   :param bool strict_bitness: when ``True``, :py:attr:`is_64bit` raises
+      :py:exc:`BitnessDetectionError` if the target's 32-/64-bit width
+      can't be read from its headers, instead of falling back to the host
+      word size. Use it when a wrong pointer-width default would be worse
+      than a hard failure.
 
    :raises ProcessNotFoundError: no process matches ``name``.
    :raises ProcessIDNotExistsError: ``pid`` doesn't exist.
@@ -92,6 +97,33 @@ with OpenProcess(
    The conventional "main thread" of the target — by convention, the thread
    with the smallest ``tid``. Returns ``None`` if the process has no listable
    threads (rare).
+
+.. py:attribute:: is_64bit
+   :type: bool
+
+   ``True`` if the target process is 64-bit, ``False`` if it is 32-bit.
+   Detected once on first access (via headers: ELF class on Linux, Mach-O
+   magic on macOS, ``IsWow64Process`` on Windows) and cached.
+
+   When the backend can't read the headers, the result depends on
+   ``strict_bitness``: ``False`` (default) falls back to the host word size
+   and logs a WARNING; ``True`` raises
+   :py:exc:`BitnessDetectionError`.
+
+.. py:attribute:: is_bitness_certain
+   :type: bool
+
+   ``True`` if :py:attr:`is_64bit` was read from the target's own headers,
+   ``False`` if it fell back to a guess of the host word size.
+
+   When ``False`` the automatic ``ptr_size`` default may be wrong for a
+   cross-bitness target — pass ``ptr_size`` explicitly to the pointer APIs.
+
+.. py:attribute:: pointer_size
+   :type: int
+
+   Pointer width of the target process in bytes — ``8`` for a 64-bit target,
+   ``4`` for a 32-bit one. Derived from :py:attr:`is_64bit`.
 ```
 
 ## Methods
