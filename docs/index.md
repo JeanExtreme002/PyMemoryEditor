@@ -136,9 +136,10 @@ used throughout these docs, plus how to contribute and the project's license.
 platform-notes
 troubleshooting
 guide/logging
-glossary
 contributing
+funding
 license
+glossary
 ```
 
 ## Project links
