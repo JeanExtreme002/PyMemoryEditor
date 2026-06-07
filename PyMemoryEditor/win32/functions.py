@@ -200,6 +200,23 @@ _MEM_RELEASE = 0x8000
 # works for both data and injected code (matches the common tooling default).
 _DEFAULT_ALLOC_PROTECT = MemoryProtectionsEnum.PAGE_EXECUTE_READWRITE.value
 
+# psapi.dll — used for GetMappedFileNameW to resolve backing file paths for
+# memory regions. The "K32" prefixed versions live in kernel32.dll on Win7+,
+# but importing psapi directly works from XP through 11.
+psapi = ctypes.WinDLL("psapi.dll", use_last_error=True)
+
+# DWORD GetMappedFileNameW(HANDLE hProcess, LPVOID lpv,
+#                          LPWSTR lpFilename, DWORD nSize);
+psapi.GetMappedFileNameW.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.LPVOID,
+    ctypes.wintypes.LPWSTR,
+    ctypes.wintypes.DWORD,
+)
+psapi.GetMappedFileNameW.restype = ctypes.wintypes.DWORD
+
+_MAPPED_FILENAME_BUF_SIZE = 512
+
 
 system_information = SYSTEM_INFO()
 kernel32.GetSystemInfo(ctypes.byref(system_information))
@@ -321,6 +338,24 @@ def CloseProcessHandle(process_handle: int) -> int:
     return kernel32.CloseHandle(process_handle)
 
 
+def _get_mapped_filename(process_handle: int, address: int) -> str:
+    """Return the NT device path backing *address*, or ``""`` on failure.
+
+    Wraps ``GetMappedFileNameW`` (psapi.dll). The result is an NT path like
+    ``\\Device\\HarddiskVolume3\\Windows\\System32\\ntdll.dll`` — the same
+    format Cheat Engine and other tools display. Converting to a DOS path
+    (``C:\\...``) would require ``QueryDosDevice`` for each volume, which is
+    costly and unnecessary for display purposes.
+    """
+    buf = ctypes.create_unicode_buffer(_MAPPED_FILENAME_BUF_SIZE)
+    length = psapi.GetMappedFileNameW(
+        process_handle, address, buf, _MAPPED_FILENAME_BUF_SIZE
+    )
+    if length == 0:
+        return ""
+    return buf.value
+
+
 def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]:
     """
     Yield a :class:`MemoryRegion` for every region in the target's address space.
@@ -387,6 +422,7 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
 
         yield make_region(
             address=current_address, size=region.RegionSize, struct=region,
+            path=_get_mapped_filename(process_handle, current_address),
         )
 
         if region.RegionSize == 0:

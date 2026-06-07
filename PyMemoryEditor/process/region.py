@@ -64,8 +64,9 @@ class MemoryRegion:
     :param is_executable: ``True`` when the region contains executable code.
     :param is_shared: ``True`` when the region is a shared/file-backed mapping.
     :param path: best-effort path of the file backing the region, or ``""``
-        when unknown (Linux exposes this directly from ``/proc/<pid>/maps``;
-        Windows and macOS would need extra syscalls and report ``""``).
+        when unknown or anonymous. Linux reads it from ``/proc/<pid>/maps``;
+        Windows uses ``GetMappedFileNameW`` (NT device path); macOS uses
+        ``proc_regionfilename``.
     """
 
     address: int
@@ -164,9 +165,8 @@ def region_path(struct: Any) -> str:
     """
     Best-effort path of the file backing the region, or "" when unknown.
 
-    Linux can derive it from /proc/<pid>/maps (already populated). Win32 and
-    macOS would require extra syscalls (GetMappedFileName / proc_regionfilename)
-    that the backends don't currently make.
+    Linux reads it from /proc/<pid>/maps. Win32 uses GetMappedFileNameW
+    (returns NT device paths). macOS uses proc_regionfilename.
     """
     if hasattr(struct, "Path"):
         try:
@@ -185,13 +185,18 @@ def region_path(struct: Any) -> str:
     return ""
 
 
-def make_region(address: int, size: int, struct: Any) -> MemoryRegion:
+def make_region(address: int, size: int, struct: Any, *, path: str = "") -> MemoryRegion:
     """Build a fully-populated :class:`MemoryRegion` from a platform struct.
 
     Backends call this once per region instead of constructing a dict and
     enriching it in a second step. Computing every boolean upfront keeps the
     public type immutable and removes a class of "what fields are populated?"
     bugs that the old enrichment pattern was prone to.
+
+    :param path: optional pre-resolved file path for the region. When non-empty
+        this overrides the struct-based ``region_path()`` lookup (used by the
+        Windows and macOS backends which resolve the path via dedicated syscalls
+        rather than embedding it in the struct).
     """
     return MemoryRegion(
         address=address,
@@ -201,7 +206,7 @@ def make_region(address: int, size: int, struct: Any) -> MemoryRegion:
         is_writable=is_region_writable(struct),
         is_executable=is_region_executable(struct),
         is_shared=is_region_shared(struct),
-        path=region_path(struct),
+        path=path or region_path(struct),
     )
 
 

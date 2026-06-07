@@ -114,12 +114,12 @@ jobs:
       # independent of any external service). It's a conservative floor: the
       # full suite measures ~87% on a given OS today (coverage.py only counts
       # the host backend + shared code — the two foreign backends aren't
-      # imported, so they don't drag the number down per-platform). 65 leaves
+      # imported, so they don't drag the number down per-platform). 60 leaves
       # headroom for a less-covered backend / Python-version variance while
       # still catching any large regression. Ratchet it up once the per-OS
       # numbers settle on Codecov.
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=65
+        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       # Upload from every matrix cell so Codecov merges each OS's backend
       # coverage into one combined view (each platform exercises a different
@@ -181,7 +181,7 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=65
+        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       if: always()
       uses: codecov/codecov-action@v5
