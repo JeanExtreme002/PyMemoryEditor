@@ -187,13 +187,13 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
 
     with mapping_file:
         for line in mapping_file:
-            region_information = line.split()
+            region_information = line.split(maxsplit=5)
 
             try:
                 addressing_range, privileges, offset, device, inode = (
                     region_information[0:5]
                 )
-                path = region_information[5] if len(region_information) >= 6 else ""
+                path = region_information[5].strip() if len(region_information) >= 6 else ""
 
                 start_address, end_address = [
                     int(addr, 16) for addr in addressing_range.split("-")
