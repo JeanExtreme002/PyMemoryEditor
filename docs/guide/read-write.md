@@ -195,6 +195,60 @@ Need the raw bytes with zero interpretation? Use `read_bytes(address, length)`
 and `write_bytes(address, data)`.
 ```
 
+## Reusing a buffer (zero-copy reads)
+
+Every `read_process_memory` call **allocates a fresh Python object** for the
+result. That's fine for one-off reads, but in a tight loop that reads the same
+region thousands of times — a recorder, a live overlay, a poller — those
+throwaway objects pile up and keep the garbage collector busy.
+
+`read_process_memory_into(address, buffer)` reads straight into a buffer **you
+own and reuse**, so a long-running loop runs with constant memory instead of a
+steady stream of allocations:
+
+```python
+buffer = bytearray(16)            # allocate once
+
+with OpenProcess(name="game.exe") as process:
+    while recording:
+        process.read_process_memory_into(0x7FF40010, buffer)
+        handle(buffer)            # same buffer, refilled in place every loop
+```
+
+It fills **`len(buffer)` bytes** (the buffer's size decides how much is read)
+and returns the number of bytes read. The bytes land verbatim — no decoding —
+so reinterpret them yourself with `int.from_bytes`, `struct.unpack`, a `numpy`
+view, and so on.
+
+Any writable, contiguous buffer works — a `bytearray`, a `ctypes` array, a
+writable `memoryview`, or a `numpy` array (sized in **bytes**, so a 4-element
+`int32` array reads 16 bytes):
+
+```python
+import numpy as np
+
+frame = np.zeros(4, dtype=np.int32)             # 16 bytes
+process.read_process_memory_into(0x7FF40010, frame)
+# frame now holds the four int32 values, no per-read allocation
+```
+
+### Method signature
+
+```{eval-rst}
+.. py:method:: read_process_memory_into(address, buffer)
+   :no-index:
+
+   :param int address: target memory address.
+   :param buffer: a writable, contiguous buffer-protocol object
+      (``bytearray``, ``ctypes`` array, writable ``memoryview``, ``numpy``
+      array, …). Its byte length sets how many bytes are read; the bytes are
+      written in place with no decoding.
+   :return: the number of bytes read (the buffer's byte length on success).
+   :raises TypeError: if ``buffer`` is not a writable buffer (e.g. ``bytes``).
+   :raises ValueError: if ``buffer`` is empty or not contiguous.
+   :raises OSError: if the read fails or returns fewer bytes than requested.
+```
+
 ## Common errors
 
 - **`OSError`** — the address may have been freed between scan and write, or

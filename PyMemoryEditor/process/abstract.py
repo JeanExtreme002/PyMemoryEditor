@@ -450,6 +450,49 @@ class AbstractProcess(ABC):
         raise NotImplementedError()
 
     @abstractmethod
+    def read_process_memory_into(self, address: int, buffer: object) -> int:
+        """
+        Read ``len(buffer)`` bytes from ``address`` directly into a
+        pre-allocated, writable ``buffer`` and return the number of bytes read.
+
+        This is the zero-copy counterpart of :meth:`read_process_memory`: where
+        that method allocates a fresh object on every call, this one fills a
+        buffer you own and reuse. In a tight polling / recording loop that reads
+        the same-sized region over and over, reusing one buffer keeps memory use
+        constant instead of producing a stream of short-lived objects for the
+        garbage collector to reclaim.
+
+        :param address: target memory address (ex: 0x006A9EC0).
+        :param buffer: any writable, contiguous buffer-protocol object — a
+            ``bytearray``, a ``ctypes`` array, a writable ``memoryview``, a
+            ``numpy`` array, etc. Its byte length determines how many bytes are
+            read; an element-typed buffer (e.g. a ``numpy`` ``int32`` array) is
+            sized in **bytes**, not elements. The bytes are written in place; no
+            decoding is performed (this is the raw-``bytes`` read path). Decode
+            or reinterpret them yourself afterwards
+            (``int.from_bytes`` / ``struct.unpack`` / ``numpy`` views / ...).
+        :return: the number of bytes read — always equal to the buffer's byte
+            length on success (a short read raises instead, mirroring
+            :meth:`read_process_memory`).
+
+        :raises TypeError: if ``buffer`` is not a writable buffer (e.g. an
+            immutable ``bytes`` object).
+        :raises ValueError: if ``buffer`` is empty or not contiguous.
+        :raises OSError: if the read fails, or returns fewer bytes than
+            requested (e.g. the range crosses an unreadable/freed page).
+
+        Example
+        -------
+        ::
+
+            buffer = bytearray(16)
+            while recording:
+                process.read_process_memory_into(addr, buffer)
+                handle(buffer)        # same buffer reused every iteration
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
     def write_process_memory(
         self,
         address: int,

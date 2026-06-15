@@ -27,6 +27,7 @@ from .functions import (
     GetProcessHandle,
     GetThreads,
     ReadProcessMemory,
+    ReadProcessMemoryInto,
     SearchAddressesByPattern,
     SearchAddressesByValue,
     SearchValuesByAddresses,
@@ -312,6 +313,11 @@ class WindowsProcess(AbstractProcess):
             pytype,
             resolve_bufflength(pytype, bufflength),
         )
+
+    def read_process_memory_into(self, address: int, buffer: object) -> int:
+        self.__require_open()
+        self.__require_read()
+        return ReadProcessMemoryInto(self.__process_handle, address, buffer)
 
     def write_process_memory(
         self,

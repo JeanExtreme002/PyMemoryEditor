@@ -28,6 +28,7 @@ from ..process.scanning import (
 from ..process.thread_info import ThreadInfo
 from ..util import (
     _validate_pytype,
+    as_writable_c_buffer,
     get_c_type_of,
     values_to_bytes,
 )
@@ -543,6 +544,18 @@ def read_process_memory(
         return bytes(data)
     else:
         return data.value
+
+
+def read_process_memory_into(task: int, address: int, buffer) -> int:
+    """
+    Read ``len(buffer)`` bytes from ``address`` directly into the writable
+    ``buffer``, with no intermediate allocation. Returns the number of bytes
+    read (always the buffer's byte length on success; a short read raises
+    ``MachPartialReadError``).
+    """
+    c_buffer = as_writable_c_buffer(buffer)
+    size = len(c_buffer)
+    return _mach_read(task, address, ctypes.addressof(c_buffer), size)
 
 
 def write_process_memory(

@@ -25,6 +25,7 @@ from .functions import (
     get_task_for_pid,
     get_threads,
     read_process_memory,
+    read_process_memory_into,
     release_task,
     search_addresses_by_pattern,
     search_addresses_by_value,
@@ -291,6 +292,10 @@ class MacProcess(AbstractProcess):
         return read_process_memory(
             self.__task, address, pytype, resolve_bufflength(pytype, bufflength)
         )
+
+    def read_process_memory_into(self, address: int, buffer: object) -> int:
+        self.__require_open()
+        return read_process_memory_into(self.__task, address, buffer)
 
     def write_process_memory(
         self,

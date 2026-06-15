@@ -4,6 +4,7 @@ from .convert import (
     UNSET,
     _check_int_fits,
     _validate_pytype,
+    as_writable_c_buffer,
     convert_from_byte_array,
     get_c_type_of,
     prepare_write,
