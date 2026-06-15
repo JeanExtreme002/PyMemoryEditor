@@ -21,6 +21,7 @@ from .functions import (
     get_modules,
     get_threads,
     read_process_memory,
+    read_process_memory_into,
     search_addresses_by_pattern,
     search_addresses_by_value,
     search_values_by_addresses,
@@ -116,6 +117,10 @@ class LinuxProcess(AbstractProcess):
         return read_process_memory(
             self.pid, address, pytype, resolve_bufflength(pytype, bufflength)
         )
+
+    def read_process_memory_into(self, address: int, buffer: object) -> int:
+        self.__require_open()
+        return read_process_memory_into(self.pid, address, buffer)
 
     def search_by_addresses(
         self,

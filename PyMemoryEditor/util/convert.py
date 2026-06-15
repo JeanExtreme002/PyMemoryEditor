@@ -209,6 +209,54 @@ def prepare_write(
     return pytype, length, value
 
 
+def as_writable_c_buffer(buffer: Any) -> "ctypes.Array":
+    """
+    Wrap a writable buffer-protocol object as a ``ctypes`` ``c_char`` array
+    that shares the same underlying storage, so a backend can read process
+    memory *directly into the caller's buffer* with no intermediate
+    allocation. Returning the ``ctypes`` array (rather than a bare address)
+    keeps a reference to the source alive for as long as the caller holds it,
+    which is what makes the address safe to pass to the OS read call.
+
+    Accepts anything exposing a writable, contiguous buffer — ``bytearray``,
+    a ``ctypes`` array, a writable ``memoryview``, a ``numpy`` array, etc. The
+    array's byte length is taken from the buffer itself (``memoryview.nbytes``),
+    so element-typed buffers like a ``numpy`` ``int32`` array are sized in
+    bytes, not elements.
+
+    :raises TypeError: if ``buffer`` does not support the buffer protocol or is
+        read-only (e.g. ``bytes`` — use ``bytearray`` instead).
+    :raises ValueError: if ``buffer`` is empty or not contiguous.
+    """
+    try:
+        view = memoryview(buffer)
+    except TypeError:
+        raise TypeError(
+            "buffer must support the writable buffer protocol "
+            "(e.g. bytearray, a ctypes array, or a numpy array), got %s."
+            % type(buffer).__name__
+        )
+
+    try:
+        if view.readonly:
+            raise TypeError(
+                "buffer must be writable; got a read-only buffer "
+                "(e.g. bytes). Use bytearray or another writable buffer."
+            )
+        if not view.contiguous:
+            raise ValueError("buffer must be contiguous.")
+        nbytes = view.nbytes
+    finally:
+        # Release the inspection view promptly so it never lingers as an extra
+        # export on the source object (e.g. blocking a later bytearray resize).
+        view.release()
+
+    if nbytes == 0:
+        raise ValueError("buffer must have a non-zero length.")
+
+    return (ctypes.c_char * nbytes).from_buffer(buffer)
+
+
 def convert_from_byte_array(
     byte_array: ctypes.Array, pytype: Type[T], length: int
 ) -> T:

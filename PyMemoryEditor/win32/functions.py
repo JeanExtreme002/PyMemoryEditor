@@ -27,6 +27,7 @@ from ..process.scanning import (
 from ..process.thread_info import ThreadInfo
 from ..util import (
     _validate_pytype,
+    as_writable_c_buffer,
     get_c_type_of,
     values_to_bytes,
 )
@@ -499,6 +500,40 @@ def ReadProcessMemory(
         return bytes(data)
     else:
         return data.value
+
+
+def ReadProcessMemoryInto(process_handle: int, address: int, buffer) -> int:
+    """
+    Read ``len(buffer)`` bytes from ``address`` directly into the writable
+    ``buffer``, with no intermediate allocation. Returns the number of bytes
+    read.
+
+    Raises OSError if the read fails or returns fewer bytes than requested
+    (same partial-read guard as :func:`ReadProcessMemory`).
+    """
+    c_buffer = as_writable_c_buffer(buffer)
+    size = len(c_buffer)
+    bytes_read = ctypes.c_size_t(0)
+
+    ctypes.set_last_error(0)
+    success = kernel32.ReadProcessMemory(
+        process_handle,
+        ctypes.c_void_p(address),
+        ctypes.byref(c_buffer),
+        size,
+        ctypes.byref(bytes_read),
+    )
+
+    if not success:
+        _raise_last_error("ReadProcessMemory")
+
+    if bytes_read.value != size:
+        raise OSError(
+            "ReadProcessMemory partial read at 0x%X: %d of %d bytes read."
+            % (address, bytes_read.value, size)
+        )
+
+    return bytes_read.value
 
 
 def _read_region(process_handle: int, address: int, size: int):

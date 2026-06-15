@@ -30,6 +30,7 @@ from ..process.scanning import (
 from ..process.thread_info import ThreadInfo
 from ..util import (
     _validate_pytype,
+    as_writable_c_buffer,
     get_c_type_of,
     values_to_bytes,
 )
@@ -376,6 +377,18 @@ def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int
         return bytes(data)
     else:
         return data.value
+
+
+def read_process_memory_into(pid: int, address: int, buffer) -> int:
+    """
+    Read ``len(buffer)`` bytes from ``address`` directly into the writable
+    ``buffer``, with no intermediate allocation. Returns the number of bytes
+    read (always the buffer's byte length on success; a short read raises
+    ``_LinuxPartialIOError``).
+    """
+    c_buffer = as_writable_c_buffer(buffer)
+    size = len(c_buffer)
+    return _process_vm_readv(pid, addressof(c_buffer), address, size)
 
 
 def search_addresses_by_value(

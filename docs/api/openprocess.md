@@ -158,6 +158,23 @@ with OpenProcess(
    :returns: the original ``value`` you passed in — **not** the truncated/encoded
       form actually written (a capped ``str``/``bytes`` write returns the full
       original value).
+
+.. py:method:: read_process_memory_into(address, buffer)
+
+   Read ``len(buffer)`` raw bytes from ``address`` directly into a
+   pre-allocated, writable ``buffer`` (no intermediate allocation) — the
+   zero-copy counterpart of :py:meth:`read_process_memory` for tight
+   read-the-same-region loops. See :doc:`../guide/read-write` for examples.
+
+   :param int address: target memory address.
+   :param buffer: any writable, contiguous buffer-protocol object
+      (``bytearray``, ``ctypes`` array, writable ``memoryview``, ``numpy``
+      array, …). Its byte length sets how many bytes are read; the bytes land
+      verbatim (no decoding).
+   :returns: the number of bytes read (the buffer's byte length on success).
+   :raises TypeError: if ``buffer`` is not a writable buffer (e.g. ``bytes``).
+   :raises ValueError: if ``buffer`` is empty or not contiguous.
+   :raises OSError: if the read fails or returns fewer bytes than requested.
 ```
 
 ### Typed shortcuts
