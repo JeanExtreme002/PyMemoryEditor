@@ -66,6 +66,22 @@ class NumericItem(QStandardItem):
     Used by columns showing formatted numbers (sizes, addresses, PIDs) so the
     table sorts by the underlying value rather than the lexical label.
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._data = 0
+
+    def setData(self, value: int, role: int = Qt.UserRole + 1):
+        if role >= Qt.UserRole:
+            self._data = value
+            self.emitDataChanged()
+        else:
+            super().setData(value, role)
+
+    def data(self, role: int = Qt.UserRole + 1) -> int:
+        if role >= Qt.UserRole:
+            return self._data
+        else:
+            return super().data(role)
 
     def __lt__(self, other):
         try:
