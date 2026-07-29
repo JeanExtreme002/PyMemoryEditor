@@ -476,6 +476,9 @@ def main(argv=None):
 
     from ._icon import app_icon
 
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("PyMemoryEditor")
     app.setApplicationDisplayName("PyMemoryEditor App")
