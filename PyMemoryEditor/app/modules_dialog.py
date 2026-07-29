@@ -21,7 +21,7 @@ same patterns (background worker, sortable table, Close button).
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -167,6 +167,7 @@ class ModulesDialog(AutoRefreshTableDialog):
 
             base = int(module.base_address)
             base_item = NumericItem(f"0x{base:016X}")
+            base_item.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
             base_item.setData(base, Qt.UserRole)
 
             size = int(module.size)
