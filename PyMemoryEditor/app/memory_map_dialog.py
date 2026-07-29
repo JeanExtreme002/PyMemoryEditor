@@ -19,7 +19,7 @@ import sys
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QGuiApplication, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QFont, QGuiApplication, QStandardItem, QStandardItemModel, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -391,6 +391,7 @@ class MemoryMapDialog(AutoRefreshTableDialog):
             shown += 1
 
             addr_item = NumericItem(f"0x{addr:016X}")
+            addr_item.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
             addr_item.setData(addr, Qt.UserRole)
 
             size_item = NumericItem(_format_size(size))
