@@ -19,7 +19,7 @@ import sys
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QGuiApplication, QStandardItem, QStandardItemModel, QFontDatabase
+from PySide6.QtGui import QFont, QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -38,7 +38,7 @@ from PyMemoryEditor import AbstractProcess, MemoryRegion, MemoryRegionSnapshot
 
 from ._auto_refresh_dialog import AutoRefreshTableDialog
 from ._widgets import NumericItem
-
+from .pointer_scan_dialog import _MONO
 
 def _format_size(size: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
@@ -380,6 +380,8 @@ class MemoryMapDialog(AutoRefreshTableDialog):
         self._table.setSortingEnabled(False)
         self._model.setRowCount(0)
 
+        mono_font = QFont(_MONO, 10)
+
         shown = 0
         for region in self._snapshot:
             addr = int(region.address)
@@ -391,7 +393,7 @@ class MemoryMapDialog(AutoRefreshTableDialog):
             shown += 1
 
             addr_item = NumericItem(f"0x{addr:016X}")
-            addr_item.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+            addr_item.setFont(mono_font)
             addr_item.setData(addr, Qt.UserRole)
 
             size_item = NumericItem(_format_size(size))
