@@ -189,5 +189,7 @@ def test_pyside_widget_regressions(qtbot):
 
     item3 = _widgets.NumericItem()
     item3.setData('123456')
+    item < item3
 
+    item3.setData('hello world')
     item < item3
