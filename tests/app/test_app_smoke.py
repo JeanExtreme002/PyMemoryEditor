@@ -162,3 +162,32 @@ def test_pointer_scan_dialog_constructs_and_prefills(qtbot):
         dialog.close()
     finally:
         process.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_pyside_widget_regressions(qtbot):
+    """
+    Test for Pyside related regressions, like potential overflow and comparison in NumericItem.
+    """
+
+    from PyMemoryEditor.app import _widgets
+
+    unsigned_64bit_max = 0xffff_ffff_ffff_ffff
+    big_number = 2 ** 128
+
+    # Overflow regressions.
+    item = _widgets.NumericItem()
+    item.setData(unsigned_64bit_max)
+    assert item.data() == unsigned_64bit_max
+
+    item2 = _widgets.NumericItem()
+    item2.setData(big_number)
+    assert item2.data() == big_number
+
+    # Segmentation fault regression (recursive stack overflow).
+    item < item2
+
+    item3 = _widgets.NumericItem()
+    item3.setData('123456')
+
+    item < item3
