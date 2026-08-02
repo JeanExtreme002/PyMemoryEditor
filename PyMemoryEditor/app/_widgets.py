@@ -6,7 +6,7 @@ Centralises tiny helpers (numeric sort items, hex address parsing) that
 previously appeared duplicated across several dialog modules.
 """
 
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QStandardItem
@@ -65,29 +65,35 @@ class NumericItem(QStandardItem):
 
     Used by columns showing formatted numbers (sizes, addresses, PIDs) so the
     table sorts by the underlying value rather than the lexical label.
+
+    The data storage interface for QStandardItem is overridden because the Pyside6
+    bindings do not seem to support, detect, or coerce to unsigned integers,
+    leading to overflow errors when converting from large Python ints to fixed
+    size signed integers in Qt. The workaround is to keep the potentially overflowing
+    integers on the Python side.
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._data = 0
+        self._user_data: dict[int, Any] = {}
 
-    def setData(self, value: int, role: int = Qt.UserRole + 1):
+    def setData(self, value: Any, role: int = Qt.UserRole + 1):
         if role >= Qt.UserRole:
-            self._data = value
+            self._user_data[int(role)] = value
             self.emitDataChanged()
         else:
             super().setData(value, role)
 
-    def data(self, role: int = Qt.UserRole + 1) -> int:
+    def data(self, role: int = Qt.UserRole + 1) -> Any:
         if role >= Qt.UserRole:
-            return self._data
+            return self._user_data[int(role)]
         else:
             return super().data(role)
 
-    def __lt__(self, other):
+    def __lt__(self, other: QStandardItem) -> bool:
         try:
             return int(self.data(Qt.UserRole)) < int(other.data(Qt.UserRole))
         except (TypeError, ValueError):
-            return super().__lt__(other)
+            return self.text() < other.text()
 
 
 def parse_hex_address(text: str) -> Optional[int]:
