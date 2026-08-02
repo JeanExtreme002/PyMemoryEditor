@@ -42,6 +42,7 @@ from ._widgets import NumericItem
 from .memory_map_dialog import _format_size
 from .pointer_scan_dialog import _MONO
 
+
 class ModulesDialog(AutoRefreshTableDialog):
     """Shows the output of ``get_modules()`` in a sortable, filterable table."""
 

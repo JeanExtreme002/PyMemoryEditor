@@ -40,6 +40,7 @@ from ._auto_refresh_dialog import AutoRefreshTableDialog
 from ._widgets import NumericItem
 from .pointer_scan_dialog import _MONO
 
+
 def _format_size(size: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     s = float(size)
