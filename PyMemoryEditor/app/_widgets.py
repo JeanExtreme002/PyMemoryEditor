@@ -76,22 +76,22 @@ class NumericItem(QStandardItem):
         super().__init__(*args, **kwargs)
         self._user_data: dict[int, Any] = {}
 
-    def setData(self, value: Any, role: int = Qt.UserRole + 1):
+    def setData(self, value: Any, role: int = Qt.UserRole):
         if role >= Qt.UserRole:
             self._user_data[int(role)] = value
             self.emitDataChanged()
         else:
             super().setData(value, role)
 
-    def data(self, role: int = Qt.UserRole + 1) -> Any:
+    def data(self, role: int = Qt.UserRole) -> Any:
         if role >= Qt.UserRole:
-            return self._user_data[int(role)]
+            return self._user_data.get(int(role))
         else:
             return super().data(role)
 
     def __lt__(self, other: QStandardItem) -> bool:
         try:
-            return int(self.data(Qt.UserRole)) < int(other.data(Qt.UserRole))
+            return int(self.data()) < int(other.data())
         except (TypeError, ValueError):
             return self.text() < other.text()
 
