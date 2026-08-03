@@ -38,9 +38,8 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, ModuleInfo
 
 from ._auto_refresh_dialog import AutoRefreshTableDialog
-from ._widgets import NumericItem
+from ._widgets import MONOSPACE_FAMILY, NumericItem
 from .memory_map_dialog import _format_size
-from .pointer_scan_dialog import _MONO
 
 
 class ModulesDialog(AutoRefreshTableDialog):
@@ -158,7 +157,7 @@ class ModulesDialog(AutoRefreshTableDialog):
         self._table.setSortingEnabled(False)
         self._model.setRowCount(0)
 
-        mono_font = QFont(_MONO, 10)
+        mono_font = QFont(MONOSPACE_FAMILY, 10)
 
         shown = 0
         for module in self._modules:

@@ -12,6 +12,11 @@ from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QStandardItem
 
 
+# Monospace stack used across the app for address/value text. An explicit
+# family list rather than the platform's default fixed font, so every table
+# renders addresses at the same family and size on every OS.
+MONOSPACE_FAMILY = "Menlo, Consolas, Courier New"
+
 # Workers that wouldn't stop in time on close are parked here so they are never
 # destroyed while still running (that aborts the whole process with
 # "QThread: Destroyed while thread is still running"). The list is module-level

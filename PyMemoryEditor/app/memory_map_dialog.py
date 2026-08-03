@@ -37,8 +37,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, MemoryRegion, MemoryRegionSnapshot
 
 from ._auto_refresh_dialog import AutoRefreshTableDialog
-from ._widgets import NumericItem
-from .pointer_scan_dialog import _MONO
+from ._widgets import MONOSPACE_FAMILY, NumericItem
 
 
 def _format_size(size: int) -> str:
@@ -266,7 +265,7 @@ class MemoryMapDialog(AutoRefreshTableDialog):
 
         self._size_edit = QLineEdit()
         self._size_edit.setPlaceholderText("amount")
-        self._size_edit.setFont(QFont("Menlo, Consolas, Courier New", 10))
+        self._size_edit.setFont(QFont(MONOSPACE_FAMILY, 10))
         self._size_edit.setFixedWidth(140)
         self._size_edit.returnPressed.connect(self._on_allocate)
         footer.addWidget(self._size_edit)
@@ -381,7 +380,7 @@ class MemoryMapDialog(AutoRefreshTableDialog):
         self._table.setSortingEnabled(False)
         self._model.setRowCount(0)
 
-        mono_font = QFont(_MONO, 10)
+        mono_font = QFont(MONOSPACE_FAMILY, 10)
 
         shown = 0
         for region in self._snapshot:
