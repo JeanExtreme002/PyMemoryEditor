@@ -89,12 +89,6 @@ class NumericItem(QStandardItem):
         else:
             return super().data(role)
 
-    def text(self) -> str:
-        try:
-            return str(self.data())
-        except (KeyError):
-            return super().text()
-
     def __lt__(self, other: QStandardItem) -> bool:
         try:
             return int(self.data()) < int(other.data())

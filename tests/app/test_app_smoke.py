@@ -184,12 +184,34 @@ def test_pyside_widget_regressions(qtbot):
     item2.setData(big_number)
     assert item2.data() == big_number
 
-    # Segmentation fault regression (recursive stack overflow).
-    item < item2
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QStandardItemModel
 
-    item3 = _widgets.NumericItem()
-    item3.setData('123456')
-    item < item3
+    # Non-numeric payloads must fall back to the labels instead of recursing
+    # into QStandardItem::operator< (that recursion segfaulted mid-sort).
+    assert item < item2
 
+    item3 = _widgets.NumericItem('aaa')
     item3.setData('hello world')
-    item < item3
+    item4 = _widgets.NumericItem('bbb')
+    item4.setData('hello world')
+    assert item3 < item4
+    assert not (item4 < item3)
+
+    # Distinct user roles must not share a slot.
+    item5 = _widgets.NumericItem()
+    item5.setData(111, Qt.UserRole)
+    item5.setData(222, Qt.UserRole + 1)
+    assert item5.data(Qt.UserRole) == 111
+    assert item5.data(Qt.UserRole + 1) == 222
+
+    # The path that actually crashed: the C++ sort driving the comparisons over
+    # a column mixing payloads and None (the process picker's memory column).
+    model = QStandardItemModel()
+    for label, payload in (('120 MB', 120), ('-', None), ('8 MB', 8), ('-', None)):
+        row_item = _widgets.NumericItem(label)
+        row_item.setData(payload, Qt.UserRole)
+        model.appendRow([row_item])
+    model.sort(0, Qt.AscendingOrder)
+    order = [model.item(row, 0).data(Qt.DisplayRole) for row in range(model.rowCount())]
+    assert order.index('8 MB') < order.index('120 MB')
