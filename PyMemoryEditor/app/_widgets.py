@@ -6,11 +6,16 @@ Centralises tiny helpers (numeric sort items, hex address parsing) that
 previously appeared duplicated across several dialog modules.
 """
 
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QStandardItem
 
+
+# Monospace stack used across the app for address/value text. An explicit
+# family list rather than the platform's default fixed font, so every table
+# renders addresses at the same family and size on every OS.
+MONOSPACE_FAMILY = "Menlo, Consolas, Courier New"
 
 # Workers that wouldn't stop in time on close are parked here so they are never
 # destroyed while still running (that aborts the whole process with
@@ -65,13 +70,42 @@ class NumericItem(QStandardItem):
 
     Used by columns showing formatted numbers (sizes, addresses, PIDs) so the
     table sorts by the underlying value rather than the lexical label.
+
+    The data storage interface is overridden because Qt keeps item data in a
+    QVariant, whose integers cap at qint64. Values past 2**63 can't make that
+    conversion — Linux x86-64 maps [vsyscall] at 0xffffffffff600000, so the
+    memory map hands one such address to the C++ side and gets "OverflowError:
+    int too big to convert", leaving the table half-populated. The workaround
+    is to keep user-role payloads on the Python side, where an int is an int.
+
+    The flip side: those payloads never reach the C++ model, so read them off
+    the item (``item.data(role)``) and never through ``model.data(index,
+    role)`` — that path converts the value back into a QVariant and overflows
+    all over again.
     """
 
-    def __lt__(self, other):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._user_data: dict[int, Any] = {}
+
+    def setData(self, value: Any, role: int = Qt.UserRole):
+        if role >= Qt.UserRole:
+            self._user_data[int(role)] = value
+            self.emitDataChanged()
+        else:
+            super().setData(value, role)
+
+    def data(self, role: int = Qt.UserRole) -> Any:
+        if role >= Qt.UserRole:
+            return self._user_data.get(int(role))
+        else:
+            return super().data(role)
+
+    def __lt__(self, other: QStandardItem) -> bool:
         try:
-            return int(self.data(Qt.UserRole)) < int(other.data(Qt.UserRole))
+            return int(self.data()) < int(other.data())
         except (TypeError, ValueError):
-            return super().__lt__(other)
+            return self.text() < other.text()
 
 
 def parse_hex_address(text: str) -> Optional[int]:

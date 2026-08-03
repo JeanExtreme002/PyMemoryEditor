@@ -21,7 +21,7 @@ same patterns (background worker, sortable table, Close button).
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QFont, QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, ModuleInfo
 
 from ._auto_refresh_dialog import AutoRefreshTableDialog
-from ._widgets import NumericItem
+from ._widgets import MONOSPACE_FAMILY, NumericItem
 from .memory_map_dialog import _format_size
 
 
@@ -157,6 +157,8 @@ class ModulesDialog(AutoRefreshTableDialog):
         self._table.setSortingEnabled(False)
         self._model.setRowCount(0)
 
+        mono_font = QFont(MONOSPACE_FAMILY, 10)
+
         shown = 0
         for module in self._modules:
             if needle and needle not in module.name.lower() and needle not in module.path.lower():
@@ -167,6 +169,7 @@ class ModulesDialog(AutoRefreshTableDialog):
 
             base = int(module.base_address)
             base_item = NumericItem(f"0x{base:016X}")
+            base_item.setFont(mono_font)
             base_item.setData(base, Qt.UserRole)
 
             size = int(module.size)

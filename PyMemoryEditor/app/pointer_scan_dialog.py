@@ -52,14 +52,19 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, PointerPath
 from PyMemoryEditor.process.pointer_scan import intersect_pointer_paths
 
-from ._widgets import NumericItem, parse_hex_address, shutdown_worker_thread
+from ._widgets import (
+    MONOSPACE_FAMILY,
+    NumericItem,
+    parse_hex_address,
+    shutdown_worker_thread,
+)
 from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec
 
 
 _LOG = logging.getLogger(__name__)
 
-# Monospace stack used elsewhere in the app for address/value text.
-_MONO = "Menlo, Consolas, Courier New"
+# Short alias for the app-wide monospace stack (used on every row built here).
+_MONO = MONOSPACE_FAMILY
 
 # Stream resolved paths to the table in batches this size, so a scan that finds
 # thousands of paths updates the UI smoothly instead of one row at a time.
