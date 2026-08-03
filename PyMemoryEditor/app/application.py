@@ -6,6 +6,8 @@ A Cheat-Engine-inspired memory scanner built on PySide6 (Qt for Python),
 working on Windows, Linux and macOS.
 """
 import sys
+import signal
+import contextlib
 from dataclasses import dataclass
 
 from PyMemoryEditor import __version__
@@ -451,6 +453,18 @@ QLabel#processBadge {
 """
 
 
+@contextlib.contextmanager
+def scoped_signal_handler(signalnum, handler):
+    """
+    Temporarily change a signal handler in the scope of a with block.
+    """
+    previous_handler = signal.signal(signalnum, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signalnum, previous_handler)
+
+
 def main(argv=None):
     """
     Entry point for the ``pymemoryeditor`` console script.
@@ -466,47 +480,51 @@ def main(argv=None):
     if len(argv) > 1 and argv[1].strip() in ["--version", "-v"]:
         return print(__version__)
 
-    _abort_if_qt_unavailable()
+    # Qt's event loop blocks inside C++, so Python's default SIGINT handler only
+    # runs once the interpreter next regains control. In practice it raised
+    # KeyboardInterrupt inside our own _PointerCursorFilter.eventFilter override, where
+    # PySide6 swallows it and merely prints a traceback (#76). Hand SIGINT back
+    # to the OS so Ctrl+C from a terminal terminates the app immediately, and
+    # keep the previous handler so in-process callers are not left with SIG_DFL.
+    with scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
+        _abort_if_qt_unavailable()
 
-    from PySide6.QtCore import QSettings
-    from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QSettings
+        from PySide6.QtWidgets import QApplication
 
-    from .main_window import MainWindow
-    from .open_process_dialog import OpenProcessDialog
+        from .main_window import MainWindow
+        from .open_process_dialog import OpenProcessDialog
 
-    from ._icon import app_icon
+        from ._icon import app_icon
 
-    import signal
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+        app = QApplication.instance() or QApplication(argv)
+        app.setApplicationName("PyMemoryEditor")
+        app.setApplicationDisplayName("PyMemoryEditor App")
+        # OrganizationName is required for QSettings() to resolve a stable path
+        # on every platform.
+        app.setOrganizationName("PyMemoryEditor")
+        app.setWindowIcon(app_icon())
 
-    app = QApplication.instance() or QApplication(argv)
-    app.setApplicationName("PyMemoryEditor")
-    app.setApplicationDisplayName("PyMemoryEditor App")
-    # OrganizationName is required for QSettings() to resolve a stable path
-    # on every platform.
-    app.setOrganizationName("PyMemoryEditor")
-    app.setWindowIcon(app_icon())
+        saved_theme = str(QSettings().value("theme", DEFAULT_THEME_ID))
+        apply_theme(app, saved_theme)
 
-    saved_theme = str(QSettings().value("theme", DEFAULT_THEME_ID))
-    apply_theme(app, saved_theme)
+        picker = OpenProcessDialog()
+        if picker.exec() != picker.DialogCode.Accepted:
+            return
 
-    picker = OpenProcessDialog()
-    if picker.exec() != picker.DialogCode.Accepted:
-        return
+        process = picker.process
+        if process is None:
+            return
 
-    process = picker.process
-    if process is None:
-        return
-
-    window = MainWindow(process)
-    window.show()
-    try:
-        app.exec()
-    finally:
+        window = MainWindow(process)
+        window.show()
         try:
-            process.close()
-        except Exception:
-            pass
+            app.exec()
+        finally:
+            try:
+                process.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
