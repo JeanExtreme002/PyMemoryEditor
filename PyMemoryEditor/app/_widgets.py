@@ -71,12 +71,19 @@ class NumericItem(QStandardItem):
     Used by columns showing formatted numbers (sizes, addresses, PIDs) so the
     table sorts by the underlying value rather than the lexical label.
 
-    The data storage interface for QStandardItem is overridden because the Pyside6
-    bindings do not seem to support, detect, or coerce to unsigned integers,
-    leading to overflow errors when converting from large Python ints to fixed
-    size signed integers in Qt. The workaround is to keep the potentially overflowing
-    integers on the Python side.
+    The data storage interface is overridden because Qt keeps item data in a
+    QVariant, whose integers cap at qint64. Values past 2**63 can't make that
+    conversion — Linux x86-64 maps [vsyscall] at 0xffffffffff600000, so the
+    memory map hands one such address to the C++ side and gets "OverflowError:
+    int too big to convert", leaving the table half-populated. The workaround
+    is to keep user-role payloads on the Python side, where an int is an int.
+
+    The flip side: those payloads never reach the C++ model, so read them off
+    the item (``item.data(role)``) and never through ``model.data(index,
+    role)`` — that path converts the value back into a QVariant and overflows
+    all over again.
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._user_data: dict[int, Any] = {}
