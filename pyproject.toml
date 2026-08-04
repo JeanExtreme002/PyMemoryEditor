@@ -91,7 +91,10 @@ dev = [
 ]
 
 [project.scripts]
-pymemoryeditor = "PyMemoryEditor.app.application:main"
+# main_cli wraps main() with the SIGINT scope guard that makes Ctrl+C kill the
+# app from a terminal (#76). Library callers should use main() directly, which
+# installs no signal handler.
+pymemoryeditor = "PyMemoryEditor.app.application:main_cli"
 
 [project.urls]
 Homepage = "https://github.com/JeanExtreme002/PyMemoryEditor"

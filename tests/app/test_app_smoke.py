@@ -15,6 +15,9 @@ These tests don't try to exercise scanning end-to-end. They just verify:
      version flag).
   3. With PySide6 available, the ``MainWindow`` and ``CheatTable`` widgets can
      be constructed against a self-PID ``OpenProcess`` and torn down cleanly.
+  4. Ctrl+C handling stays where it belongs: ``main_cli()`` scopes SIG_DFL to
+     the run so a terminal can kill the blocked Qt event loop, while ``main()``
+     leaves the process-wide handler untouched for in-process callers.
 
 Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
 the ``app`` extra).
@@ -53,20 +56,11 @@ def test_version_flag_prints_and_exits(capsys):
     assert result is None
 
 
-def test_main_restores_sigint_handler(monkeypatch):
-    """
-    ``main()`` hands SIGINT to the OS so Ctrl+C can kill the app (#76), but it
-    must put the caller's handler back on the way out — ``main()`` is a
-    supported in-process entry point, so leaving SIG_DFL behind would silently
-    break an embedder's own shutdown handling.
-    """
-    import signal
-
-    from PyMemoryEditor.app import application, open_process_dialog
+def _stub_cancelled_picker(monkeypatch):
+    """Make the process picker cancel, so main() returns before building a window."""
+    from PyMemoryEditor.app import open_process_dialog
 
     class _RejectedDialog:
-        """Picker stub that cancels, so main() returns before building a window."""
-
         class DialogCode:
             Accepted = 1
 
@@ -77,13 +71,62 @@ def test_main_restores_sigint_handler(monkeypatch):
 
     monkeypatch.setattr(open_process_dialog, "OpenProcessDialog", _RejectedDialog)
 
-    def _sentinel(signum, frame):  # pragma: no cover - installed, never raised
-        pass
 
-    original = signal.signal(signal.SIGINT, _sentinel)
+def _sentinel_handler(signum, frame):  # pragma: no cover - installed, never raised
+    pass
+
+
+def test_main_leaves_the_callers_sigint_handler_alone(monkeypatch):
+    """
+    ``main()`` is a supported in-process entry point, so it must not touch the
+    process-wide SIGINT handler: an embedder's own Ctrl+C handling has to
+    survive running the app. The terminal-facing behaviour lives in
+    ``main_cli()`` instead.
+    """
+    import signal
+
+    from PyMemoryEditor.app import application
+
+    _stub_cancelled_picker(monkeypatch)
+
+    original = signal.signal(signal.SIGINT, _sentinel_handler)
     try:
         assert application.main(["pymemoryeditor"]) is None
-        assert signal.getsignal(signal.SIGINT) is _sentinel
+        assert signal.getsignal(signal.SIGINT) is _sentinel_handler
+    finally:
+        signal.signal(signal.SIGINT, original)
+
+
+def test_main_cli_scopes_sig_dfl_to_the_run(monkeypatch):
+    """
+    ``main_cli()`` is what the console script and ``python -m`` invoke. It hands
+    SIGINT to the OS so Ctrl+C kills the blocked Qt event loop (#76), then puts
+    the previous handler back so the change doesn't outlive the run.
+    """
+    import signal
+
+    from PyMemoryEditor.app import application, open_process_dialog
+
+    seen = {}
+
+    class _ProbingDialog:
+        class DialogCode:
+            Accepted = 1
+
+        def exec(self):
+            # Sampled mid-run: this is where the Qt event loop would block.
+            seen["inside"] = signal.getsignal(signal.SIGINT)
+            return 0
+
+        process = None
+
+    monkeypatch.setattr(open_process_dialog, "OpenProcessDialog", _ProbingDialog)
+
+    original = signal.signal(signal.SIGINT, _sentinel_handler)
+    try:
+        assert application.main_cli(["pymemoryeditor"]) is None
+        assert seen["inside"] is signal.SIG_DFL
+        assert signal.getsignal(signal.SIGINT) is _sentinel_handler
     finally:
         signal.signal(signal.SIGINT, original)
 

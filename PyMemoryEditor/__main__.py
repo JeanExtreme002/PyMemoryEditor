@@ -1,4 +1,4 @@
-from PyMemoryEditor.app.application import main
+from PyMemoryEditor.app.application import main_cli
 
 if __name__ == "__main__":
-    main()
+    main_cli()
