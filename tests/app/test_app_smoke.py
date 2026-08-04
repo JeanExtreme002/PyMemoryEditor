@@ -117,6 +117,36 @@ def test_scoped_signal_handler_is_a_noop_off_the_main_thread():
     assert outcome.get("error") is None
 
 
+def test_scoped_signal_handler_tolerates_unknown_previous_handler(monkeypatch):
+    """
+    ``signal.signal`` reports ``None`` as the previous handler when "an unknown
+    handler is in effect" — one installed outside Python, which is what an
+    embedding host may have done before the signal module initialized. Handing
+    that ``None`` back to ``signal.signal`` raises TypeError, so the guard has
+    to skip the restore rather than crash on the way out of a good run.
+    """
+    import signal
+
+    from PyMemoryEditor.app.application import _scoped_signal_handler
+
+    real_signal = signal.signal
+    original = signal.getsignal(signal.SIGINT)
+
+    def fake_signal(signum, handler):
+        """Report None on the way in, like a C-installed handler would."""
+        real_signal(signum, handler)
+        return None if handler is signal.SIG_DFL else original
+
+    monkeypatch.setattr(signal, "signal", fake_signal)
+    try:
+        with _scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
+            pass
+    finally:
+        monkeypatch.undo()
+        if original is not None:
+            signal.signal(signal.SIGINT, original)
+
+
 def test_app_modules_import_cleanly():
     """Every app submodule should import without side effects beyond Qt setup."""
     # Order matches the dependency graph: leaves first, container last.

@@ -465,12 +465,23 @@ def _scoped_signal_handler(signalnum, handler):
     try:
         previous_handler = signal.signal(signalnum, handler)
     except ValueError:
+        # Off the main thread. (`signal.signal` also raises ValueError for a
+        # signal number the platform rejects, but the only call site passes
+        # SIGINT, which every supported platform has.)
         yield
         return
     try:
         yield
     finally:
-        signal.signal(signalnum, previous_handler)
+        # `signal.signal` reports None when "an unknown handler is in effect",
+        # i.e. one installed outside Python — plausible when the app is
+        # embedded in a host that set SIGINT up in C before the signal module
+        # initialized. Passing that None back raises TypeError, which would
+        # blow up on the way out of a run that otherwise succeeded, so leave
+        # the handler alone instead: SIG_DFL is closer to the host's intent
+        # than a crash.
+        if previous_handler is not None:
+            signal.signal(signalnum, previous_handler)
 
 
 def main(argv=None):
