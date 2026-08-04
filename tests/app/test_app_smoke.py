@@ -53,6 +53,70 @@ def test_version_flag_prints_and_exits(capsys):
     assert result is None
 
 
+def test_main_restores_sigint_handler(monkeypatch):
+    """
+    ``main()`` hands SIGINT to the OS so Ctrl+C can kill the app (#76), but it
+    must put the caller's handler back on the way out — ``main()`` is a
+    supported in-process entry point, so leaving SIG_DFL behind would silently
+    break an embedder's own shutdown handling.
+    """
+    import signal
+
+    from PyMemoryEditor.app import application, open_process_dialog
+
+    class _RejectedDialog:
+        """Picker stub that cancels, so main() returns before building a window."""
+
+        class DialogCode:
+            Accepted = 1
+
+        def exec(self):
+            return 0  # anything != Accepted
+
+        process = None
+
+    monkeypatch.setattr(open_process_dialog, "OpenProcessDialog", _RejectedDialog)
+
+    def _sentinel(signum, frame):  # pragma: no cover - installed, never raised
+        pass
+
+    original = signal.signal(signal.SIGINT, _sentinel)
+    try:
+        assert application.main(["pymemoryeditor"]) is None
+        assert signal.getsignal(signal.SIGINT) is _sentinel
+    finally:
+        signal.signal(signal.SIGINT, original)
+
+
+def test_scoped_signal_handler_is_a_noop_off_the_main_thread():
+    """
+    ``signal.signal`` only works on the main thread. The helper must degrade to
+    a no-op there instead of raising, so an embedder that drives the app from a
+    worker thread keeps working.
+    """
+    import signal
+    import threading
+
+    from PyMemoryEditor.app.application import _scoped_signal_handler
+
+    outcome = {}
+
+    def worker():
+        try:
+            with _scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
+                outcome["body_ran"] = True
+            outcome["error"] = None
+        except BaseException as exc:  # noqa: BLE001 - report, don't swallow
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=10)
+
+    assert outcome.get("body_ran") is True
+    assert outcome.get("error") is None
+
+
 def test_app_modules_import_cleanly():
     """Every app submodule should import without side effects beyond Qt setup."""
     # Order matches the dependency graph: leaves first, container last.

@@ -454,11 +454,19 @@ QLabel#processBadge {
 
 
 @contextlib.contextmanager
-def scoped_signal_handler(signalnum, handler):
+def _scoped_signal_handler(signalnum, handler):
     """
     Temporarily change a signal handler in the scope of a with block.
+
+    Becomes a no-op off the main thread, where `signal.signal` raises
+    ValueError: an embedder driving the app from a worker thread shouldn't be
+    hard-crashed just because the Ctrl+C handler can't be installed there.
     """
-    previous_handler = signal.signal(signalnum, handler)
+    try:
+        previous_handler = signal.signal(signalnum, handler)
+    except ValueError:
+        yield
+        return
     try:
         yield
     finally:
@@ -482,11 +490,12 @@ def main(argv=None):
 
     # Qt's event loop blocks inside C++, so Python's default SIGINT handler only
     # runs once the interpreter next regains control. In practice it raised
-    # KeyboardInterrupt inside our own _PointerCursorFilter.eventFilter override, where
-    # PySide6 swallows it and merely prints a traceback (#76). Hand SIGINT back
-    # to the OS so Ctrl+C from a terminal terminates the app immediately, and
-    # keep the previous handler so in-process callers are not left with SIG_DFL.
-    with scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
+    # KeyboardInterrupt inside our own _PointerCursorFilter.eventFilter
+    # override, where PySide6 swallows it and merely prints a traceback (#76).
+    # Hand SIGINT back to the OS so Ctrl+C from a terminal terminates the app
+    # immediately, and restore the previous handler on the way out so
+    # in-process callers are not left with SIG_DFL.
+    with _scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
         _abort_if_qt_unavailable()
 
         from PySide6.QtCore import QSettings
