@@ -15,6 +15,9 @@ These tests don't try to exercise scanning end-to-end. They just verify:
      version flag).
   3. With PySide6 available, the ``MainWindow`` and ``CheatTable`` widgets can
      be constructed against a self-PID ``OpenProcess`` and torn down cleanly.
+  4. Ctrl+C handling stays where it belongs: ``main_cli()`` scopes SIG_DFL to
+     the run so a terminal can kill the blocked Qt event loop, while ``main()``
+     leaves the process-wide handler untouched for in-process callers.
 
 Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
 the ``app`` extra).
@@ -51,6 +54,140 @@ def test_version_flag_prints_and_exits(capsys):
     # `print(...)` returns None; the explicit return value isn't load-bearing
     # but we assert the call didn't raise.
     assert result is None
+
+
+def _stub_cancelled_picker(monkeypatch):
+    """Make the process picker cancel, so main() returns before building a window."""
+    from PyMemoryEditor.app import open_process_dialog
+
+    class _RejectedDialog:
+        class DialogCode:
+            Accepted = 1
+
+        def exec(self):
+            return 0  # anything != Accepted
+
+        process = None
+
+    monkeypatch.setattr(open_process_dialog, "OpenProcessDialog", _RejectedDialog)
+
+
+def _sentinel_handler(signum, frame):  # pragma: no cover - installed, never raised
+    pass
+
+
+def test_main_leaves_the_callers_sigint_handler_alone(monkeypatch):
+    """
+    ``main()`` is a supported in-process entry point, so it must not touch the
+    process-wide SIGINT handler: an embedder's own Ctrl+C handling has to
+    survive running the app. The terminal-facing behaviour lives in
+    ``main_cli()`` instead.
+    """
+    import signal
+
+    from PyMemoryEditor.app import application
+
+    _stub_cancelled_picker(monkeypatch)
+
+    original = signal.signal(signal.SIGINT, _sentinel_handler)
+    try:
+        assert application.main(["pymemoryeditor"]) is None
+        assert signal.getsignal(signal.SIGINT) is _sentinel_handler
+    finally:
+        signal.signal(signal.SIGINT, original)
+
+
+def test_main_cli_scopes_sig_dfl_to_the_run(monkeypatch):
+    """
+    ``main_cli()`` is what the console script and ``python -m`` invoke. It hands
+    SIGINT to the OS so Ctrl+C kills the blocked Qt event loop (#76), then puts
+    the previous handler back so the change doesn't outlive the run.
+    """
+    import signal
+
+    from PyMemoryEditor.app import application, open_process_dialog
+
+    seen = {}
+
+    class _ProbingDialog:
+        class DialogCode:
+            Accepted = 1
+
+        def exec(self):
+            # Sampled mid-run: this is where the Qt event loop would block.
+            seen["inside"] = signal.getsignal(signal.SIGINT)
+            return 0
+
+        process = None
+
+    monkeypatch.setattr(open_process_dialog, "OpenProcessDialog", _ProbingDialog)
+
+    original = signal.signal(signal.SIGINT, _sentinel_handler)
+    try:
+        assert application.main_cli(["pymemoryeditor"]) is None
+        assert seen["inside"] is signal.SIG_DFL
+        assert signal.getsignal(signal.SIGINT) is _sentinel_handler
+    finally:
+        signal.signal(signal.SIGINT, original)
+
+
+def test_scoped_signal_handler_is_a_noop_off_the_main_thread():
+    """
+    ``signal.signal`` only works on the main thread. The helper must degrade to
+    a no-op there instead of raising, so an embedder that drives the app from a
+    worker thread keeps working.
+    """
+    import signal
+    import threading
+
+    from PyMemoryEditor.app.application import _scoped_signal_handler
+
+    outcome = {}
+
+    def worker():
+        try:
+            with _scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
+                outcome["body_ran"] = True
+            outcome["error"] = None
+        except BaseException as exc:  # noqa: BLE001 - report, don't swallow
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=10)
+
+    assert outcome.get("body_ran") is True
+    assert outcome.get("error") is None
+
+
+def test_scoped_signal_handler_tolerates_unknown_previous_handler(monkeypatch):
+    """
+    ``signal.signal`` reports ``None`` as the previous handler when "an unknown
+    handler is in effect" — one installed outside Python, which is what an
+    embedding host may have done before the signal module initialized. Handing
+    that ``None`` back to ``signal.signal`` raises TypeError, so the guard has
+    to skip the restore rather than crash on the way out of a good run.
+    """
+    import signal
+
+    from PyMemoryEditor.app.application import _scoped_signal_handler
+
+    real_signal = signal.signal
+    original = signal.getsignal(signal.SIGINT)
+
+    def fake_signal(signum, handler):
+        """Report None on the way in, like a C-installed handler would."""
+        real_signal(signum, handler)
+        return None if handler is signal.SIG_DFL else original
+
+    monkeypatch.setattr(signal, "signal", fake_signal)
+    try:
+        with _scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
+            pass
+    finally:
+        monkeypatch.undo()
+        if original is not None:
+            signal.signal(signal.SIGINT, original)
 
 
 def test_app_modules_import_cleanly():

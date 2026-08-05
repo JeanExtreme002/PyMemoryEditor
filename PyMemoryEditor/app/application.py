@@ -6,6 +6,8 @@ A Cheat-Engine-inspired memory scanner built on PySide6 (Qt for Python),
 working on Windows, Linux and macOS.
 """
 import sys
+import signal
+import contextlib
 from dataclasses import dataclass
 
 from PyMemoryEditor import __version__
@@ -451,14 +453,50 @@ QLabel#processBadge {
 """
 
 
+@contextlib.contextmanager
+def _scoped_signal_handler(signalnum, handler):
+    """
+    Temporarily change a signal handler in the scope of a with block.
+
+    Becomes a no-op off the main thread, where `signal.signal` raises
+    ValueError: an embedder driving the app from a worker thread shouldn't be
+    hard-crashed just because the Ctrl+C handler can't be installed there.
+    """
+    try:
+        previous_handler = signal.signal(signalnum, handler)
+    except ValueError:
+        # Off the main thread. (`signal.signal` also raises ValueError for a
+        # signal number the platform rejects, but the only call site passes
+        # SIGINT, which every supported platform has.)
+        yield
+        return
+    try:
+        yield
+    finally:
+        # `signal.signal` reports None when "an unknown handler is in effect",
+        # i.e. one installed outside Python — plausible when the app is
+        # embedded in a host that set SIGINT up in C before the signal module
+        # initialized. Passing that None back raises TypeError, which would
+        # blow up on the way out of a run that otherwise succeeded, so leave
+        # the handler alone instead: SIG_DFL is closer to the host's intent
+        # than a crash.
+        if previous_handler is not None:
+            signal.signal(signalnum, previous_handler)
+
+
 def main(argv=None):
     """
-    Entry point for the ``pymemoryeditor`` console script.
+    Run the app. Safe to call in-process: it installs no signal handler.
 
     ``argv`` defaults to ``sys.argv`` so packaging tools (which call
     ``main()`` with no arguments) keep working. Tests and embedders can pass
     an explicit list — previously a positional ``*args`` was accepted but
     ignored, which made the parameter meaningless.
+
+    Terminal users want Ctrl+C to kill the app, which takes a process-wide
+    signal change — see :func:`main_cli`, the console-script entry point.
+    Library callers get this function untouched so embedding the app can't
+    disturb the host's own SIGINT handling.
     """
     if argv is None:
         argv = sys.argv
@@ -506,5 +544,23 @@ def main(argv=None):
             pass
 
 
+def main_cli(argv=None):
+    """
+    Entry point for the ``pymemoryeditor`` console script and ``python -m``.
+
+    Qt's event loop blocks inside C++, so Python's default SIGINT handler only
+    runs once the interpreter next regains control. In practice it raised
+    KeyboardInterrupt inside our own _PointerCursorFilter.eventFilter override,
+    where PySide6 swallows it and merely prints a traceback (#76). Hand SIGINT
+    back to the OS for the duration of the run so Ctrl+C from a terminal
+    terminates the app immediately.
+
+    Kept separate from :func:`main` so that process-wide change only happens
+    when the app *is* the process, never when it is embedded in someone else's.
+    """
+    with _scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
+        return main(argv)
+
+
 if __name__ == "__main__":
-    main()
+    main_cli()
