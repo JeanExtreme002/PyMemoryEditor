@@ -194,6 +194,8 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         worker.start()
 
     def _handle_ready(self, data) -> None:
+        if getattr(self, "_teardown_done", False):
+            return
         self._has_data = True
         self._last_error = None
         self._failing_since = None
@@ -222,7 +224,16 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         modal's nested loop lets the poll keep running underneath it, and a
         target that fails on alternating ticks then stacks a fresh modal on each
         failure until the interpreter runs out of stack.
+
+        Nothing is reported for a dialog the user already dismissed: the
+        teardown disconnects the worker, but a delivery already queued when
+        that happened must not raise a modal over a window that is gone (and
+        during ``MainWindow.closeEvent`` that modal would be a nested event
+        loop in the middle of teardown).
         """
+        if getattr(self, "_teardown_done", False):
+            return
+
         if self._failing_since is None:
             self._failing_since = QElapsedTimer()
             self._failing_since.start()

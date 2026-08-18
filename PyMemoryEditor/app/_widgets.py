@@ -8,7 +8,7 @@ previously appeared duplicated across several dialog modules.
 
 from typing import Any, Callable, Iterable, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import QObject, Qt, QThread
 from PySide6.QtGui import QStandardItem
 
 
@@ -44,7 +44,13 @@ def shutdown_worker_thread(worker: Optional[QThread], wait_ms: int = 2000) -> No
     if callable(cancel):
         cancel()
     try:
-        worker.disconnect()  # drop every outgoing connection at once
+        # The four-argument static form, not `worker.disconnect()`: the bare
+        # call raises TypeError in PySide6 ("not enough arguments"), and with
+        # the except below swallowing it nothing was ever disconnected — every
+        # slot still fired after this returned. `worker.disconnect(worker)` is
+        # no good either: it only drops connections whose *receiver* is the
+        # worker, and every slot here belongs to the owning dialog.
+        QObject.disconnect(worker, None, None, None)
     except (RuntimeError, TypeError):
         pass
 

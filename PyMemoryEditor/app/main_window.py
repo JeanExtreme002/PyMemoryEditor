@@ -897,9 +897,11 @@ class MainWindow(QMainWindow):
         # here can *force* a thread wedged in a backend read to return — the
         # cheat poller and the dialog fetch workers fall back to being detached
         # (see shutdown_worker_thread) when they blow their join, and one of
-        # those can still be mid-read when this closes. Harmless in practice:
-        # those fetches are read-only and their signals are already
-        # disconnected, so the backend errors out into a result nobody reads.
+        # those can still be *inside a read* when this closes. That window is
+        # accepted, not eliminated: the read itself is the exposure (a recycled
+        # HANDLE on Windows, a deallocated Mach port on macOS), and all that can
+        # be said for it is that the fetches are read-only and their results are
+        # disconnected, so nothing wrong reaches the UI.
         try:
             old_process.close()
         except Exception:

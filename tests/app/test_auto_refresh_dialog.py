@@ -368,10 +368,48 @@ def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(
         assert reported == []
 
         state["threads"] = []  # the target exits
-        _spin(qapp, 600)
+        # 300 ms poll: one tick to see the empty list, another to call it, and
+        # the grace window on top before it is worth telling the user.
+        _spin(qapp, 1400)
 
         assert len(reported) == 1
         assert "exited" in reported[0]
+    finally:
+        dialog.close()
+        _spin(qapp, 50)
+
+
+def test_threads_dialog_tolerates_a_single_empty_enumeration(qapp, dialog_parent):
+    """One empty snapshot is not proof of death.
+
+    ``Thread32First`` can legally come up dry on a live process, and the first
+    fetch is reported the moment it fails — so announcing the target's death on
+    a single blip would be a lie the user sees immediately.
+    """
+    from PyMemoryEditor.app.threads_dialog import ThreadsDialog
+    from PyMemoryEditor.process.thread_info import ThreadInfo
+
+    alive = [ThreadInfo(tid=1, start_address=None, state="S", priority=20, raw="1")]
+    state = {"threads": [], "calls": 0}
+
+    class _Process:
+        pid = 4242
+
+        def get_threads(self):
+            state["calls"] += 1
+            # Empty once, then healthy again.
+            return iter(state["threads"] if state["calls"] > 1 else [])
+
+    reported = []
+    dialog = ThreadsDialog(_Process(), parent=dialog_parent)
+    dialog._on_data_failed = lambda message: reported.append(message)
+    try:
+        state["threads"] = alive
+        _spin(qapp, 500)
+
+        assert reported == []  # the blip healed, nobody was told anything
+        assert dialog._model.rowCount() == 1
+        assert dialog._auto_timer.isActive()
     finally:
         dialog.close()
         _spin(qapp, 50)
@@ -416,3 +454,53 @@ def test_hex_viewer_stops_polling_and_logs_once_on_a_dead_target(
     finally:
         viewer.close()
         _spin(qapp, 50)
+
+
+def test_shutdown_really_disconnects_the_worker(qapp, dialog_parent, make_dialog):
+    """`worker.disconnect()` is a no-op in PySide6 — it raises TypeError.
+
+    `shutdown_worker_thread` swallowed that, so every "a late emit can't touch a
+    dismissed dialog" claim in this app rested on a call that disconnected
+    nothing. The four-argument static form is the one that works for slots that
+    are bound methods of the owning dialog.
+    """
+    from PyMemoryEditor.app._auto_refresh_dialog import _DataWorker
+    from PyMemoryEditor.app._widgets import shutdown_worker_thread
+
+    dialog = make_dialog()
+    # Quiesce the dialog first: with its own poll running, a result already in
+    # flight would land during the pump below and move the counters for reasons
+    # that have nothing to do with this test.
+    dialog._auto_timer.stop()
+    _spin(qapp, 100)
+    rendered, errors = dialog.rendered, len(dialog.errors)
+
+    worker = _DataWorker(lambda: ["x"], dialog)
+    worker.ready.connect(dialog._handle_ready)
+    worker.failed.connect(dialog._handle_failed)
+
+    shutdown_worker_thread(worker, wait_ms=0)
+    worker.ready.emit(["late"])
+    worker.failed.emit("late failure")
+    qapp.processEvents()
+
+    assert dialog.rendered == rendered
+    assert len(dialog.errors) == errors
+
+
+def test_a_dismissed_dialog_reports_nothing(qapp, make_dialog):
+    """Belt and braces for the same hazard, from the receiving end.
+
+    A delivery already queued when the teardown ran must not pop a modal over a
+    window that is gone — during ``MainWindow.closeEvent`` that would be a
+    nested event loop in the middle of teardown.
+    """
+    dialog = make_dialog()
+    dialog.accept()
+    _spin(qapp, 50)
+
+    dialog._handle_failed("late failure")
+    dialog._handle_ready(["late"])
+
+    assert dialog.errors == []
+    assert dialog.gave_up == 0

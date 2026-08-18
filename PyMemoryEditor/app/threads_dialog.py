@@ -43,6 +43,9 @@ class ThreadsDialog(AutoRefreshTableDialog):
         # self-throttles if an enumeration takes longer than the interval.
         super().__init__(process, refresh_interval_ms=300, parent=parent)
         self._threads: List[ThreadInfo] = []
+        # Consecutive empty enumerations (see _fetch_data). Touched only from
+        # the worker thread, one fetch at a time.
+        self._empty_streak = 0
 
         self.setWindowTitle(f"Threads — PID {process.pid}")
         self.resize(640, 520)
@@ -113,10 +116,19 @@ class ThreadsDialog(AutoRefreshTableDialog):
         # where macOS raises. Without this the window would sit at "0 thread(s)"
         # against a dead target, never reporting and never giving up, while the
         # Memory Map and Modules windows next to it say the process is gone.
+        #
+        # Two in a row before saying so: an empty snapshot is legal-but-rare on
+        # Windows (Thread32First can come up dry on a live process), and the
+        # *first* fetch is reported the moment it fails — so a single blip would
+        # otherwise announce the death of a process that is very much alive.
         if not threads:
-            raise RuntimeError(
-                "The process reported no threads — it has most likely exited."
-            )
+            self._empty_streak += 1
+            if self._empty_streak >= 2:
+                raise RuntimeError(
+                    "The process reported no threads — it has most likely exited."
+                )
+            return threads
+        self._empty_streak = 0
         return threads
 
     def _on_data_ready(self, threads) -> None:
