@@ -1010,10 +1010,9 @@ class MainWindow(QMainWindow):
         if worker.isRunning():
             # Still wedged in a backend call. Detach it from this window so the
             # imminent window destruction can't destroy a live QThread, and keep
-            # it referenced until it finishes on its own. It goes in the shared
-            # registry, not a list of our own: a scan worker still reading is
-            # precisely what must hold the process handle open in
-            # _change_process and at app exit.
+            # it referenced until it finishes on its own — in the shared
+            # registry rather than a list of our own, so every thread that
+            # outlived its owner is in one place.
             detach_worker(worker)
         else:
             worker.deleteLater()
