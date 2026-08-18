@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess
 
 from ._auto_refresh_dialog import _DataWorker
-from ._widgets import parse_hex_address, shutdown_worker_thread
+from ._widgets import TearsDownOnClose, parse_hex_address, shutdown_worker_thread
 
 
 # Child of the "PyMemoryEditor" logger, so the Log Console (which attaches a
@@ -47,7 +47,7 @@ def _format_hex_dump(base: int, data: bytes) -> str:
     return "\n".join(lines)
 
 
-class MemoryViewerDialog(QDialog):
+class MemoryViewerDialog(TearsDownOnClose, QDialog):
     """Hex viewer + auto-refresh, with a "write bytes back" button."""
 
     def __init__(
@@ -276,11 +276,10 @@ class MemoryViewerDialog(QDialog):
         self._status.setText(f"Wrote {len(data)} bytes to 0x{addr:X}.")
         self.refresh()
 
-    def closeEvent(self, event) -> None:
+    def _teardown(self) -> None:
         self._timer.stop()
         # Unhook + join the read worker; if it's still wedged in a backend call
         # it's detached rather than destroyed under us (same safety the
         # auto-refresh dialogs use).
         shutdown_worker_thread(self._worker, wait_ms=1000)
         self._worker = None
-        super().closeEvent(event)

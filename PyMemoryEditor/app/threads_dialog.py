@@ -169,3 +169,9 @@ class ThreadsDialog(AutoRefreshTableDialog):
         QMessageBox.critical(
             self, "Threads", f"Failed to enumerate threads:\n\n{message}"
         )
+
+    def _on_polling_stopped(self) -> None:
+        self._count_label.setText(
+            "Failed to enumerate threads — auto-refresh stopped. "
+            "Close and reopen this window to retry."
+        )

@@ -87,6 +87,24 @@ from the **Theme** button on the toolbar; your choice is remembered between runs
 6. (Optional) **Run a Pointer Scan** on the result to find a chain that
    survives restarts.
 
+## When the target exits
+
+The app polls the target while you work — the Memory Map, Modules and Threads
+windows re-read it on a timer (a few times a second for Threads), and the main
+window checks every couple of seconds that it is still alive.
+
+When the process goes away (or you switch to another one via
+`File → Change Process…`), you get **one** notice per window rather than one per
+poll: the main window tells you the target exited, and any open auxiliary window
+reports the failure once, stops refreshing, and says so in its status line
+(`auto-refresh stopped`). Its table stays on the last data it read, so you can
+still copy an address out of it. Close and reopen the window to point it at a
+live target again.
+
+Brief hiccups don't trigger any of that — a read that fails and recovers within
+a few seconds is left alone, so a busy target loading libraries won't interrupt
+you.
+
 ## Importing & exporting
 
 The Cheat Table and Pointer Scan results are stored as plain **JSON**, so you

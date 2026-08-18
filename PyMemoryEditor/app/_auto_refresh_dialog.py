@@ -10,13 +10,34 @@ lifecycle boilerplate. That triplicated the fiddly bits (the in-flight guard
 that self-throttles the poll, the detach-on-shutdown safety) where a fix to one
 copy wouldn't reach the others. This owns the lifecycle once; subclasses provide
 only what differs: how to fetch the data, and how to render it.
+
+It also owns *when a failure is worth interrupting the user*, which a polling
+dialog cannot get wrong quietly: ``_on_data_failed`` is a modal, a modal runs a
+nested event loop, and a poll left running underneath one stacks a dialog per
+tick (issue #74). See :meth:`AutoRefreshTableDialog._handle_failed`.
 """
 from typing import Callable, Optional
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QThread, QTimer, Signal
 from PySide6.QtWidgets import QDialog
 
-from ._widgets import shutdown_worker_thread
+from ._widgets import TearsDownOnClose, shutdown_worker_thread
+
+
+# How long a target may keep failing before the auto-refresh gives up. A
+# failure is usually terminal — the target exited, or its handle was closed by
+# File → Change Process — but not always: a module/thread enumeration can blip
+# while the target loads images (``CreateToolhelp32Snapshot`` is documented to
+# fail with ``ERROR_BAD_LENGTH`` mid-load), and giving up on the first blip
+# would freeze a window that would have recovered on the next tick.
+#
+# Measured in wall-clock rather than ticks on purpose: "how long does the target
+# get to recover" is the same question for every dialog, but the intervals are
+# not (300 ms for Threads, 1000 ms for Memory Map / Modules), so a tick count
+# would hand them budgets that differ by 3x. What gets *reported* is decided
+# separately, in ``_handle_failed`` — this constant only bounds how long a
+# failing target keeps a worker running.
+_FAILURE_GRACE_MS = 3000
 
 
 class _DataWorker(QThread):
@@ -38,7 +59,7 @@ class _DataWorker(QThread):
         self.ready.emit(data)
 
 
-class AutoRefreshTableDialog(QDialog):
+class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
     """Owns the fetch-worker lifecycle + auto-refresh timer for a table dialog.
 
     Subclasses must:
@@ -57,6 +78,18 @@ class AutoRefreshTableDialog(QDialog):
         self._has_data = False
         self._refresh_interval_ms = refresh_interval_ms
         self._auto_timer: Optional[QTimer] = None
+        # Last error handed to ``_on_data_failed``, so a target that fails on
+        # every tick is reported once instead of once per tick. Cleared by a
+        # successful fetch or an explicit ``refresh()`` (see ``_handle_failed``).
+        self._last_error: Optional[str] = None
+        # Started on the first failure of a streak; None whenever the last
+        # fetch succeeded. Measures how long the target has been failing.
+        self._failing_since: Optional[QElapsedTimer] = None
+        # True from the moment the poll gives up until the next refresh(). Read
+        # by subclasses that rebuild their status line on user input (a filter
+        # keystroke), so the "stopped" note survives instead of being replaced
+        # by a count that looks live.
+        self._polling_gave_up = False
 
     def _start_auto_refresh(self) -> None:
         """Begin polling. Call once, after the first ``refresh()``.
@@ -67,7 +100,7 @@ class AutoRefreshTableDialog(QDialog):
         """
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(self._refresh_interval_ms)
-        self._auto_timer.timeout.connect(self.refresh)
+        self._auto_timer.timeout.connect(self._auto_refresh_tick)
         self._auto_timer.start()
 
     # ------------------------------------------------------------------ #
@@ -83,17 +116,50 @@ class AutoRefreshTableDialog(QDialog):
         raise NotImplementedError
 
     def _on_data_failed(self, message: str) -> None:
-        """Report a failed fetch. Runs on the UI thread."""
+        """Report a failed fetch. Runs on the UI thread.
+
+        Called only for a failure the user needs to see — the first fetch, or
+        the one that makes the poll give up — and never twice for the same
+        error (see :meth:`_handle_failed`), so a modal dialog is safe here.
+        """
         raise NotImplementedError
 
     def _set_loading_hint(self) -> None:
         """Optionally show a one-time loading message before the first fetch."""
+
+    def _on_polling_stopped(self) -> None:
+        """Note that the auto-refresh gave up. Runs on the UI thread.
+
+        Fires once, when a target has been failing for ``_FAILURE_GRACE_MS``
+        (see :meth:`_handle_failed`). The table is frozen on its last good data
+        from here on, so subclasses should say so — a silently stale window is
+        worse than an honest one. Optional.
+        """
 
     # ------------------------------------------------------------------ #
     # Lifecycle (shared)
     # ------------------------------------------------------------------ #
 
     def refresh(self) -> None:
+        """Fetch now, on the user's behalf.
+
+        Explicit (re)fetch: it clears the error latch and restarts a poll that
+        repeated failures stopped, so reopening the dialog against a live target
+        picks the cadence back up. The timer itself goes through
+        :meth:`_auto_refresh_tick` instead, which must *not* re-arm.
+        """
+        self._last_error = None
+        self._failing_since = None
+        self._polling_gave_up = False
+        if self._auto_timer is not None and not self._auto_timer.isActive():
+            self._auto_timer.start()
+        self._start_fetch()
+
+    def _auto_refresh_tick(self) -> None:
+        """Timer-driven fetch — never re-arms after a failure."""
+        self._start_fetch()
+
+    def _start_fetch(self) -> None:
         # Skip if a fetch is already in flight — the timer would otherwise stack
         # workers on a slow target. This self-throttles to the real fetch time.
         if self._worker is not None and self._worker.isRunning():
@@ -106,14 +172,68 @@ class AutoRefreshTableDialog(QDialog):
 
         worker = _DataWorker(self._fetch_data, self)
         worker.ready.connect(self._handle_ready)
-        worker.failed.connect(self._on_data_failed)
+        worker.failed.connect(self._handle_failed)
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
         worker.start()
 
     def _handle_ready(self, data) -> None:
         self._has_data = True
+        self._last_error = None
+        self._failing_since = None
         self._on_data_ready(data)
+
+    def _handle_failed(self, message: str) -> None:
+        """Handle a failed fetch: report it only when the user needs to know.
+
+        Once the target is gone (or its handle was closed by File → Change
+        Process) *every* tick fails, and ``_on_data_failed`` pops a **modal**
+        dialog. A modal runs a nested event loop, so the timer fires again while
+        it is up and the failures stack — hundreds of focus-stealing dialogs the
+        user could only escape by killing the app from another TTY (issue #74).
+
+        Reporting is therefore tied to the two moments where a failure actually
+        changes what the user sees:
+
+        * the **first** fetch fails — the window is empty, so there is nothing
+          to look at but the error;
+        * the poll **gives up** after ``_FAILURE_GRACE_MS`` of continuous
+          failure — the table is frozen on stale data from here on.
+
+        Everything in between heals quietly: the table keeps its last good rows
+        and the next tick usually recovers. That "quietly" is load-bearing, not
+        just tidy — reporting *every* failure re-opens the spam, because a
+        modal's nested loop lets the poll keep running underneath it, and a
+        target that fails on alternating ticks then stacks a fresh modal on each
+        failure until the interpreter runs out of stack.
+        """
+        if self._failing_since is None:
+            self._failing_since = QElapsedTimer()
+            self._failing_since.start()
+            gave_up = False
+        else:
+            gave_up = (
+                self._failing_since.elapsed() >= _FAILURE_GRACE_MS
+                and self._auto_timer is not None
+                and self._auto_timer.isActive()
+            )
+
+        if gave_up and self._auto_timer is not None:
+            self._auto_timer.stop()
+            self._polling_gave_up = True
+
+        # ``_last_error`` doubles as "already reported": it keeps a repeat of the
+        # same error quiet, and its None-ness marks a window that has never
+        # reported anything (cleared by a successful fetch and by refresh()).
+        never_reported_yet = not self._has_data and self._last_error is None
+        if (gave_up or never_reported_yet) and message != self._last_error:
+            self._last_error = message
+            self._on_data_failed(message)
+
+        # After the report, so the subclass's "stopped" note is what stays on
+        # screen once the user dismisses the modal.
+        if gave_up:
+            self._on_polling_stopped()
 
     def _on_worker_finished(self) -> None:
         worker = self._worker
@@ -121,11 +241,10 @@ class AutoRefreshTableDialog(QDialog):
         if worker is not None:
             worker.deleteLater()
 
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
+    def _teardown(self) -> None:
         if self._auto_timer is not None:
             self._auto_timer.stop()
         # Unhook + join the worker; if it can't stop in time it's detached
         # rather than destroyed under us.
         shutdown_worker_thread(self._worker, wait_ms=1000)
         self._worker = None
-        super().closeEvent(event)

@@ -22,7 +22,7 @@ from typing import List, Optional, Union
 
 import psutil
 
-from PySide6.QtCore import Qt, QEventLoop, QSettings, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QEventLoop, QSettings, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, __version__
 
 from ._icon import app_icon
+from ._widgets import call_when_detached_workers_finish, detach_worker
 from .application import DEFAULT_THEME_ID, THEMES, apply_theme
 from .cheat_entry import CheatEntry
 from .cheat_table import CheatTable
@@ -81,9 +82,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._process = process
         self._worker: Optional[Union[FirstScanWorker, RefineScanWorker]] = None
-        # Workers that wouldn't stop in time on shutdown are detached here so
-        # the closing window can't destroy a still-running QThread.
-        self._zombie_workers: List[QThread] = []
         self._region_snapshot: Optional[list] = None
         self._memory_map: Optional[MemoryMapDialog] = None
         self._hex_viewers: List[MemoryViewerDialog] = []
@@ -761,6 +759,17 @@ class MainWindow(QMainWindow):
     def _process_badge_text(self) -> str:
         return f"PID {self._process.pid}  ·  {self._proc_name}"
 
+    @property
+    def process(self) -> AbstractProcess:
+        """The handle this window is currently attached to.
+
+        Not necessarily the one it was constructed with: File → Change
+        Process… swaps it (and releases the old one), so anything outliving the
+        window — ``application.main``'s teardown — has to ask for it rather than
+        hold on to the handle it passed in.
+        """
+        return self._process
+
     def _window_title(self) -> str:
         # Qt prepends QGuiApplication.applicationDisplayName to the window
         # title on Windows/Linux; including it here would duplicate it.
@@ -836,7 +845,6 @@ class MainWindow(QMainWindow):
         self._proc_create_time = self._read_proc_create_time()
         self.setWindowTitle(self._window_title())
         self._process_badge.setText(self._process_badge_text())
-        self._region_snapshot = None
         self._results_model.clear()
         self._scanner.set_has_results(False)
         # If the previous target exited, _check_process_alive locked the scanner
@@ -845,8 +853,12 @@ class MainWindow(QMainWindow):
         self._scanner.set_busy(False)
 
         # Tear down auxiliary dialogs that hold a reference to the old
-        # process — reopening them rebuilds against the new target.
+        # process — reopening them rebuilds against the new target. The Memory
+        # Map belongs here too: it auto-refreshes on a timer, so leaving it open
+        # left it polling the handle closed just below — one of the two paths
+        # into the error-dialog spam of issue #74.
         for dialog_attr in (
+            "_memory_map",
             "_threads_dialog",
             "_modules_dialog",
             "_pointer_chain_dialog",
@@ -856,6 +868,20 @@ class MainWindow(QMainWindow):
             if existing is not None:
                 existing.close()
                 setattr(self, dialog_attr, None)
+
+        # Hex viewers keep their own auto-refresh timer against the old handle.
+        # Each is WA_DeleteOnClose and drops itself from this list on `destroyed`
+        # — which fires when the deleteLater is processed, i.e. after this method
+        # returns. So the copy is belt-and-braces and the clear() is what
+        # actually empties the list; neither is redundant.
+        for viewer in list(self._hex_viewers):
+            viewer.close()
+        self._hex_viewers.clear()
+
+        # Cleared *after* the teardown above: closing the Memory Map emits
+        # ``finished``, and its handler adopts that dialog's last snapshot as
+        # the cached one — which belongs to the process we just left.
+        self._region_snapshot = None
         # Replace the cheat table — old entries point at the previous process.
         # QSplitter has no QLayout, so we use its native replaceWidget(index).
         old_cheat = self._cheat
@@ -867,11 +893,21 @@ class MainWindow(QMainWindow):
             old_cheat.shutdown()
         except Exception:
             pass
-        # The old poller is joined now, so it's safe to release the old handle.
-        try:
-            old_process.close()
-        except Exception:
-            pass
+        # The old poller has been stopped, but nothing here can *force* a thread
+        # wedged in a backend read to return: both the cheat poller and the
+        # dialog fetch workers fall back to being detached when they blow their
+        # join. Releasing the handle under one of those is a read-after-close (a
+        # recycled HANDLE on Windows, a deallocated Mach port on macOS), so hand
+        # the close to the helper that waits for every detached worker. Nothing
+        # detached — the normal case — closes inline.
+
+        def _release_old_handle(process=old_process) -> None:
+            try:
+                process.close()
+            except Exception:
+                pass
+
+        call_when_detached_workers_finish(_release_old_handle)
         old_index = self._right_splitter.indexOf(old_cheat)
         self._cheat = CheatTable(self._process)
         self._cheat.pointer_scan_for_address.connect(self._open_pointer_scan_dialog)
@@ -914,6 +950,15 @@ class MainWindow(QMainWindow):
             dialog = getattr(self, attr, None)
             if dialog is not None:
                 dialog.close()
+
+        # Hex viewers run the same kind of read worker and are children of this
+        # window, so destroying it would take a running QThread down with it.
+        # No clear() here (unlike _change_process, which keeps running against a
+        # new target afterwards): this window is on its way out with the list.
+        # (The Pointer Chain dialog is deliberately absent from both lists: it
+        # resolves synchronously and starts no thread.)
+        for viewer in list(self._hex_viewers):
+            viewer.close()
 
         self.closing.emit()
         super().closeEvent(event)
@@ -968,19 +1013,14 @@ class MainWindow(QMainWindow):
 
         if worker.isRunning():
             # Still wedged in a backend call. Detach it from this window so the
-            # imminent window destruction can't destroy a live QThread, and
-            # keep it referenced until it finishes on its own.
-            worker.setParent(None)
-            self._zombie_workers.append(worker)
-            worker.finished.connect(lambda: self._reap_worker(worker))
+            # imminent window destruction can't destroy a live QThread, and keep
+            # it referenced until it finishes on its own. It goes in the shared
+            # registry, not a list of our own: a scan worker still reading is
+            # precisely what must hold the process handle open in
+            # _change_process and at app exit.
+            detach_worker(worker)
         else:
             worker.deleteLater()
-
-    def _reap_worker(self, worker: QThread) -> None:
-        """Drop our reference to a detached worker once it has finished."""
-        if worker in self._zombie_workers:
-            self._zombie_workers.remove(worker)
-        worker.deleteLater()
 
 
 def _safe_for_json(value) -> object:

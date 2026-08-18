@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ._widgets import TearsDownOnClose
+
 
 _LOGGER_NAME = "PyMemoryEditor"
 
@@ -71,7 +73,7 @@ class _QtLogHandler(logging.Handler):
         self.bridge.line_emitted.emit(line)
 
 
-class LogConsoleDialog(QDialog):
+class LogConsoleDialog(TearsDownOnClose, QDialog):
     """Live view of the PyMemoryEditor logger."""
 
     # The dialog can be opened/closed repeatedly; we attach the handler on
@@ -183,7 +185,7 @@ class LogConsoleDialog(QDialog):
     def _on_clear(self) -> None:
         self._console.clear()
 
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
+    def _teardown(self) -> None:
         # Detach the handler so the library doesn't keep emitting into a
         # dialog the user has dismissed. Don't lower the logger level past
         # what the caller had configured before us.
@@ -195,4 +197,3 @@ class LogConsoleDialog(QDialog):
             self._logger.removeHandler(self._handler)
             self._handler = None
         self._logger.setLevel(self._previous_level)
-        super().closeEvent(event)

@@ -8,7 +8,7 @@ previously appeared duplicated across several dialog modules.
 
 from typing import Any, Callable, Iterable, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import QElapsedTimer, Qt, QThread
 from PySide6.QtGui import QStandardItem
 
 
@@ -52,17 +52,169 @@ def shutdown_worker_thread(worker: Optional[QThread], wait_ms: int = 2000) -> No
         worker.wait(wait_ms)
 
     if worker.isRunning():
-        worker.setParent(None)
-        _DETACHED_WORKERS.append(worker)
-        worker.finished.connect(lambda: _reap_detached_worker(worker))
+        detach_worker(worker)
     else:
         worker.deleteLater()
+
+
+def detach_worker(worker: QThread) -> None:
+    """Park a worker that wouldn't stop, so its owner can be destroyed.
+
+    Reparents it away from the dying widget and holds it in the module-level
+    registry until it finishes on its own. Callers that stop workers their own
+    way (``MainWindow._shutdown_worker`` pumps the event loop for its blocking
+    connections) must park them *here* rather than in a list of their own:
+    ``wait_for_detached_workers`` and ``call_when_detached_workers_finish``
+    protect a process handle from exactly these threads, and a second registry
+    is a set of threads they cannot see.
+    """
+    worker.setParent(None)
+    _DETACHED_WORKERS.append(worker)
+    worker.finished.connect(lambda: _reap_detached_worker(worker))
 
 
 def _reap_detached_worker(worker: QThread) -> None:
     if worker in _DETACHED_WORKERS:
         _DETACHED_WORKERS.remove(worker)
     worker.deleteLater()
+
+
+def wait_for_detached_workers(timeout_ms: int = 2000) -> bool:
+    """Block until no detached worker is running. Returns whether that happened.
+
+    The blocking sibling of :func:`call_when_detached_workers_finish`, for
+    teardown that has no event loop left to deliver ``finished`` — application
+    exit, once ``app.exec()`` has returned. ``QThread.wait`` needs no loop, so
+    this is the only shape that works there.
+
+    ``False`` means a worker is still wedged in a backend read after
+    ``timeout_ms``; the caller must then leave whatever that worker reads
+    through alone (at exit, the OS reclaims it moments later anyway).
+    """
+    deadline_left = timeout_ms
+    for worker in list(_DETACHED_WORKERS):
+        try:
+            if not worker.isRunning():
+                continue
+            elapsed = QElapsedTimer()
+            elapsed.start()
+            worker.wait(max(deadline_left, 0))
+            deadline_left -= int(elapsed.elapsed())
+            if worker.isRunning():
+                return False
+        except RuntimeError:
+            # Already reaped and deleted between the snapshot and here.
+            continue
+    return True
+
+
+def call_when_detached_workers_finish(callback: Callable[[], None]) -> None:
+    """Run ``callback`` once no currently-detached worker can still be running.
+
+    Detaching (see :func:`shutdown_worker_thread`) keeps a wedged thread alive
+    *past* the dialog that owned it — which is the whole point, but it means the
+    thread may still be inside a backend read after its dialog is gone. Anything
+    that pulls the ground out from under such a read (closing the process handle
+    the worker reads through) has to wait for it, and this is how it waits
+    without blocking the UI thread.
+
+    Runs ``callback`` synchronously when nothing is detached, which is the
+    normal case — detaching only happens when a worker blows its join timeout.
+
+    The gate is the whole registry, not "the workers reading through *this*
+    handle" — the registry doesn't track what each worker reads, and being
+    over-conservative here costs a delayed close, while being wrong costs a
+    read-after-close. The price is that one permanently wedged worker strands
+    every later callback too: each subsequent process switch then leaks its old
+    handle for the life of the app.
+
+    That is the deliberate trade — a leaked handle over a read-after-close — so
+    the callback must be something a leak can survive (releasing a handle, not
+    freeing memory the app needs back). Callers that cannot wait for an event
+    loop want :func:`wait_for_detached_workers`, which is bounded instead.
+    """
+    pending = [worker for worker in _DETACHED_WORKERS if worker.isRunning()]
+    if not pending:
+        callback()
+        return
+
+    remaining = {"count": len(pending), "called": False}
+
+    def _one_finished() -> None:
+        remaining["count"] -= 1
+        if remaining["count"] <= 0 and not remaining["called"]:
+            remaining["called"] = True
+            callback()
+
+    for worker in pending:
+        fired = {"yet": False}
+
+        def _slot(*_args, fired=fired) -> None:
+            # Idempotent: `finished` and the isFinished() poll below can both
+            # reach this, and only the first arrival may count.
+            if fired["yet"]:
+                return
+            fired["yet"] = True
+            _one_finished()
+
+        try:
+            worker.finished.connect(_slot)
+            # The worker may have finished between the isRunning() filter and
+            # the connect above, in which case `finished` already fired and
+            # nothing would ever call the slot. Poll once to cover that window.
+            done = worker.isFinished()
+        except RuntimeError:
+            # Reaped and deleted from under us: it cannot be reading any more,
+            # and leaving it uncounted would strand the callback forever.
+            done = True
+        if done:
+            _slot()
+
+
+class TearsDownOnClose:
+    """Mixin that runs a dialog's teardown on *every* way out, not just close.
+
+    ``QDialog`` delivers a ``QCloseEvent`` only for a real close — the window
+    manager's button, or an explicit ``close()``. This app's own "Close" buttons
+    call ``accept()`` and Esc reaches ``reject()``; both land in ``done()``,
+    which hides the dialog and emits ``finished`` **without** any close event.
+
+    A dialog that stops its timers and joins its worker in ``closeEvent`` is
+    therefore still polling after the user closed it — hidden, unreachable
+    (the main window drops its reference on ``finished``), leaking a thread per
+    open/close cycle, and able to pop a modal from behind nothing. Worse for
+    this app: its worker never reaches :func:`shutdown_worker_thread`, so it is
+    absent from the detached registry that keeps a process handle alive while
+    something is still reading through it.
+
+    Subclasses implement :meth:`_teardown`; the mixin runs it exactly once,
+    whichever way the dialog is dismissed. It must precede ``QDialog`` in the
+    bases so its overrides win.
+
+    Running *once* makes instances single-use, which is what every caller here
+    already assumes: the main window drops its reference on ``finished`` and
+    builds a fresh dialog next time. A dialog meant to be reshown after being
+    dismissed would have to re-arm what ``_teardown`` released rather than lean
+    on the latch.
+    """
+
+    def _teardown(self) -> None:
+        """Release timers and background threads. Runs exactly once."""
+        raise NotImplementedError
+
+    def _run_teardown_once(self) -> None:
+        if getattr(self, "_teardown_done", False):
+            return
+        self._teardown_done = True
+        self._teardown()
+
+    def done(self, result: int) -> None:  # noqa: N802 — Qt naming
+        self._run_teardown_once()
+        super().done(result)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — Qt naming
+        self._run_teardown_once()
+        super().closeEvent(event)
 
 
 class NumericItem(QStandardItem):

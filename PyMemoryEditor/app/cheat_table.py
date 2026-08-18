@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess
 
-from ._widgets import parse_hex_address
+from ._widgets import parse_hex_address, shutdown_worker_thread
 from .cheat_entry import CheatEntry
 from .cheat_poll_worker import TICK_INTERVAL_MS, _CheatPollWorker
 from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec, parse_value
@@ -73,6 +73,9 @@ class CheatTable(QWidget):
         self._process = process
         self._entries: List[CheatEntry] = []
         self._suspend_signals = False
+        # Set before _build_ui(), which connects cellChanged: the guards that
+        # read this flag sit on paths that signal can reach.
+        self._poller_stopped = False
 
         self._build_ui()
 
@@ -101,12 +104,26 @@ class CheatTable(QWidget):
         ``closeEvent``, so ``_change_process`` and the top-level window's
         ``closeEvent`` need to drive the teardown explicitly to avoid leaving
         the poller running against a now-closed process handle.
+
+        The join is *bounded*, and a tick only checks the stop flag between
+        iterations: draining queued writes and reading every cheat entry can
+        outlast the wait on a big table or a hung target. That case goes through
+        ``shutdown_worker_thread`` rather than being ignored, so the poller is
+        detached — kept alive away from this widget (which is about to be
+        deleted) and parked where ``call_when_detached_workers_finish`` can hold
+        the process handle open until it really is done reading.
         """
         # Stop the publish timer first so no fresh snapshot races our shutdown.
         if self._publish_timer.isActive():
             self._publish_timer.stop()
+        # Idempotent: shutdown() is driven from several places, and handing the
+        # same worker to shutdown_worker_thread twice would touch an object the
+        # detach machinery may already have deleted.
+        if self._poller_stopped:
+            return
+        self._poller_stopped = True
         self._poller.stop()
-        self._poller.wait(1000)
+        shutdown_worker_thread(self._poller, wait_ms=1000)
 
     def closeEvent(self, event):  # noqa: N802 — Qt naming
         self.shutdown()
@@ -317,6 +334,12 @@ class CheatTable(QWidget):
             # next poll tick reads the value back and corrects the cell if the
             # write didn't take, and an outright failure returns via
             # write_failed → _on_write_failed.
+            #
+            # Nothing to route it to once shutdown() has handed the worker over:
+            # it is either deleted or detached and finishing, and this table is
+            # on its way out with the process handle it was writing through.
+            if self._poller_stopped:
+                return
             self._poller.request_write(
                 entry.address, entry.spec.pytype, entry.length, value
             )
@@ -327,6 +350,10 @@ class CheatTable(QWidget):
 
     def _publish_snapshot_to_worker(self) -> None:
         """Hand the worker a fresh immutable snapshot of every entry."""
+        # shutdown() stops the timer that drives this, but a tick already queued
+        # when it ran would otherwise reach a worker that is being torn down.
+        if self._poller_stopped:
+            return
         snapshot = [
             (
                 entry.address,

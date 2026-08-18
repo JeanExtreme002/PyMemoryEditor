@@ -39,7 +39,7 @@ from PyMemoryEditor import (
 )
 
 from ._icon import app_icon
-from ._widgets import NumericItem
+from ._widgets import NumericItem, TearsDownOnClose, shutdown_worker_thread
 
 
 if sys.platform == "win32":
@@ -161,7 +161,7 @@ class _ProcessSortProxy(QSortFilterProxyModel):
         return left_item < right_item
 
 
-class OpenProcessDialog(QDialog):
+class OpenProcessDialog(TearsDownOnClose, QDialog):
     """Process picker. Returns the opened ``AbstractProcess`` via ``.process``."""
 
     COL_PID = 0
@@ -327,16 +327,14 @@ class OpenProcessDialog(QDialog):
         if worker is not None:
             worker.deleteLater()
 
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
+    def _teardown(self) -> None:
         self._refresh_timer.stop()
-        if self._scan_worker is not None and self._scan_worker.isRunning():
-            try:
-                self._scan_worker.rows_ready.disconnect()
-                self._scan_worker.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            self._scan_worker.wait(1000)
-        super().closeEvent(event)
+        # Hand the enumeration worker to the shared shutdown: it disconnects,
+        # joins, and — when psutil is wedged on a huge process list — detaches
+        # instead of leaving a live QThread parented to a dialog that is about
+        # to be dropped (destroying one aborts the process).
+        shutdown_worker_thread(self._scan_worker, wait_ms=1000)
+        self._scan_worker = None
 
     def _on_filter_changed(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)
