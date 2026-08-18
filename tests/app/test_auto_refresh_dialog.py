@@ -388,3 +388,44 @@ def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(
     finally:
         dialog.close()
         _spin(qapp, 50)
+
+
+def test_hex_viewer_stops_polling_and_logs_once_on_a_dead_target(
+    qapp, dialog_parent, caplog, monkeypatch
+):
+    """The Hex Viewer is the other polling window, and it never gave up.
+
+    Its reads fail every tick against a dead target, and each one logged a
+    warning — up to 20 a second at the 50 ms floor, straight into the Log
+    Console. Same defect as issue #74, reported through the logger instead of a
+    modal.
+    """
+    import logging
+
+    from PyMemoryEditor.app import memory_viewer_dialog as mv
+
+    monkeypatch.setattr(mv, "_FAILURE_GRACE_MS", 150)
+
+    class _Process:
+        pid = 4242
+
+        def read_process_memory(self, address, pytype, length):
+            raise OSError("the process is gone")
+
+    viewer = mv.MemoryViewerDialog(
+        _Process(), address=0x1000, length=64, parent=dialog_parent
+    )
+    try:
+        viewer._interval_spin.setValue(50)
+        with caplog.at_level(logging.WARNING, logger="PyMemoryEditor"):
+            viewer._auto_btn.setChecked(True)  # the user opts into polling
+            _spin(qapp, 600)
+
+        warnings = [r for r in caplog.records if "Hex viewer read failed" in r.message]
+        assert len(warnings) == 1  # once per streak, not once per tick
+        assert not viewer._timer.isActive()
+        assert not viewer._auto_btn.isChecked()  # and the button says so
+        assert "auto-refresh stopped" in viewer._status.text()
+    finally:
+        viewer.close()
+        _spin(qapp, 50)

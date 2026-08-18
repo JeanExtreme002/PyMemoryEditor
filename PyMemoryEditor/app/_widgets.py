@@ -133,7 +133,18 @@ def call_when_detached_workers_finish(callback: Callable[[], None]) -> None:
     freeing memory the app needs back). Callers that cannot wait for an event
     loop want :func:`wait_for_detached_workers`, which is bounded instead.
     """
-    pending = [worker for worker in _DETACHED_WORKERS if worker.isRunning()]
+    pending = []
+    for worker in list(_DETACHED_WORKERS):
+        try:
+            if worker.isRunning():
+                pending.append(worker)
+        except RuntimeError:
+            # Reaped and deleted between the snapshot and here — it can't be
+            # reading anything any more. Same tolerance as the loop below and
+            # as wait_for_detached_workers; letting it escape would abort a
+            # process switch mid-teardown.
+            continue
+
     if not pending:
         callback()
         return

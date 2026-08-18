@@ -8,7 +8,7 @@ Polls the chosen address range at a configurable interval (Cheat Engine-style
 import logging
 from typing import Optional
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QElapsedTimer, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess
 
-from ._auto_refresh_dialog import _DataWorker
+from ._auto_refresh_dialog import _FAILURE_GRACE_MS, _DataWorker
 from ._widgets import TearsDownOnClose, parse_hex_address, shutdown_worker_thread
 
 
@@ -146,6 +146,15 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
 
+        # Failure bookkeeping, same shape as the auto-refresh dialogs: report a
+        # given error once rather than once per tick, and stop polling a target
+        # that keeps failing. Without it a dead target logged a warning on every
+        # tick forever — up to 20 a second at the 50 ms floor — which is the
+        # spam of issue #74 wearing a different hat (the Log Console instead of
+        # a modal).
+        self._last_error: Optional[str] = None
+        self._failing_since: Optional[QElapsedTimer] = None
+
     def _parse_address(self) -> Optional[int]:
         text = self._addr_edit.text().strip()
         if not text:
@@ -204,16 +213,40 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         addr, size, data, exc = result
         if exc is not None:
             self._dump.setPlainText("")
-            self._status.setText(f"Read failed: {type(exc).__name__}: {exc}")
-            _LOG.warning(
-                "Hex viewer read failed at 0x%X (%d bytes): %s: %s",
-                addr,
-                size,
-                type(exc).__name__,
-                exc,
+            message = f"{type(exc).__name__}: {exc}"
+
+            # Log the first tick of a streak, not every one of them.
+            if message != self._last_error:
+                self._last_error = message
+                _LOG.warning(
+                    "Hex viewer read failed at 0x%X (%d bytes): %s",
+                    addr,
+                    size,
+                    message,
+                )
+
+            gave_up = False
+            if self._failing_since is None:
+                self._failing_since = QElapsedTimer()
+                self._failing_since.start()
+            elif (
+                self._failing_since.elapsed() >= _FAILURE_GRACE_MS
+                and self._auto_btn.isChecked()
+            ):
+                # Turning the button off stops the timer through the normal
+                # slot, so the UI can't claim to be refreshing while it isn't —
+                # and the user re-enables it with the same button.
+                gave_up = True
+                self._auto_btn.setChecked(False)
+
+            self._status.setText(
+                f"Read failed: {message}"
+                + (" — auto-refresh stopped." if gave_up else "")
             )
             return
 
+        self._last_error = None
+        self._failing_since = None
         self._dump.setPlainText(_format_hex_dump(addr, data))
         self._status.setText(f"Read {len(data):,} bytes from 0x{addr:X}")
 
@@ -233,6 +266,9 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
     def _toggle_auto(self, on: bool) -> None:
         self._auto_btn.setText("Auto-refresh: On" if on else "Auto-refresh: Off")
         if on:
+            # Turning it back on is the user saying "try again": give the target
+            # a fresh grace window instead of one already spent.
+            self._failing_since = None
             self._sync_timer()
         else:
             self._timer.stop()
