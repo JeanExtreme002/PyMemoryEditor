@@ -43,9 +43,7 @@ class ThreadsDialog(AutoRefreshTableDialog):
         # self-throttles if an enumeration takes longer than the interval.
         super().__init__(process, refresh_interval_ms=300, parent=parent)
         self._threads: List[ThreadInfo] = []
-        # Consecutive empty enumerations (see _fetch_data). Touched only from
-        # the worker thread, one fetch at a time.
-        self._empty_streak = 0
+        self._empty_streak = 0  # see _fetch_data; worker thread only
 
         self.setWindowTitle(f"Threads — PID {process.pid}")
         self.resize(640, 520)
@@ -110,17 +108,12 @@ class ThreadsDialog(AutoRefreshTableDialog):
 
     def _fetch_data(self):
         threads = list(self._process.get_threads())
-        # A live process always has at least one thread, and `get_threads` does
-        # not report an exited one uniformly: Linux walks /proc/<pid>/task and
-        # Windows filters a system-wide snapshot, so both simply come up empty
-        # where macOS raises. Without this the window would sit at "0 thread(s)"
-        # against a dead target, never reporting and never giving up, while the
-        # Memory Map and Modules windows next to it say the process is gone.
-        #
-        # Two in a row before saying so: an empty snapshot is legal-but-rare on
-        # Windows (Thread32First can come up dry on a live process), and the
-        # *first* fetch is reported the moment it fails — so a single blip would
-        # otherwise announce the death of a process that is very much alive.
+        # A live process always has a thread, but `get_threads` reports an
+        # exited one as an empty list on Linux/Windows (only macOS raises) —
+        # so the window would sit at "0 thread(s)" forever while Memory Map and
+        # Modules say the process is gone. Two in a row before saying so: an
+        # empty snapshot is legal-but-rare on a live process, and the first
+        # fetch is reported the moment it fails.
         if not threads:
             self._empty_streak += 1
             if self._empty_streak >= 2:

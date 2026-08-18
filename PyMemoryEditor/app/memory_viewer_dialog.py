@@ -146,15 +146,10 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
 
-        # Failure bookkeeping, same shape as the auto-refresh dialogs: report a
-        # given error once rather than once per tick, and stop polling a target
-        # that keeps failing. Without it a dead target logged a warning on every
-        # tick forever — up to 20 a second at the 50 ms floor — which is the
-        # spam of issue #74 wearing a different hat (the Log Console instead of
-        # a modal).
-        # Keyed by (address, size, message): the point is to stop repeating the
-        # same line every tick, not to go quiet about a *different* range that
-        # started failing after the user moved the viewer.
+        # Failure bookkeeping, same shape as the auto-refresh dialogs: a dead
+        # target used to log a warning every tick forever (~20/s at the 50 ms
+        # floor). Keyed by (address, size, message) so moving the viewer to
+        # another failing range still gets logged.
         self._last_failure: Optional[tuple] = None
         self._failing_since: Optional[QElapsedTimer] = None
 
@@ -218,7 +213,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
             self._dump.setPlainText("")
             message = f"{type(exc).__name__}: {exc}"
 
-            # Log the first tick of a streak, not every one of them.
+            # First tick of a streak only.
             if (addr, size, message) != self._last_failure:
                 self._last_failure = (addr, size, message)
                 _LOG.warning(
@@ -236,9 +231,8 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
                 self._failing_since.elapsed() >= _FAILURE_GRACE_MS
                 and self._auto_btn.isChecked()
             ):
-                # Turning the button off stops the timer through the normal
-                # slot, so the UI can't claim to be refreshing while it isn't —
-                # and the user re-enables it with the same button.
+                # Off through the button's own slot, so the UI can't claim to
+                # be refreshing while it isn't.
                 gave_up = True
                 self._auto_btn.setChecked(False)
 
@@ -256,11 +250,10 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
     def _on_worker_finished(self, worker) -> None:
         """Retire the worker that just finished — and only that one.
 
-        ``finished`` is queued and can land after the next auto-refresh tick
-        started a replacement (the interval goes down to 50 ms here, so the two
-        overlap easily). Clearing ``self._worker`` blindly would drop the
-        reference to the running replacement and ``deleteLater()`` it —
-        destroying a live QThread aborts the process.
+        ``finished`` is queued and can land after the next tick started a
+        replacement (50 ms interval floor here, so they overlap easily).
+        Clearing ``self._worker`` blindly would ``deleteLater()`` that running
+        worker — destroying a live QThread aborts the process.
         """
         if worker is self._worker:
             self._worker = None
@@ -269,8 +262,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
     def _toggle_auto(self, on: bool) -> None:
         self._auto_btn.setText("Auto-refresh: On" if on else "Auto-refresh: Off")
         if on:
-            # Turning it back on is the user saying "try again": give the target
-            # a fresh grace window instead of one already spent.
+            # Turning it back on is a retry: fresh grace window.
             self._failing_since = None
             self._sync_timer()
         else:

@@ -3,18 +3,13 @@
 """
 Tests for ``PyMemoryEditor/app/_auto_refresh_dialog.py``.
 
-Regression cover for issue #74: the Memory Map / Modules / Threads dialogs poll
-the target every 300–1000 ms and report a failed fetch with a *modal* dialog.
-Once the target exits (or its handle is closed by File → Change Process) every
-tick fails, and because a modal runs a nested event loop the timer keeps firing
-while it's up — the app ended up with hundreds of stacked, focus-stealing error
-boxes and had to be killed from another terminal.
+Regression cover for issue #74: these dialogs poll every 300–1000 ms and used to
+report every failed fetch with a modal. A modal runs a nested event loop, so the
+timer kept firing underneath and the dialogs stacked — hundreds of them.
 
 The contract now: a failure is reported only when it changes what the user sees
-— the first fetch (empty window) or the one that makes the poll give up after
-``_FAILURE_GRACE_MS`` of continuous failure (frozen table) — and never twice for
-the same error. Failures in between heal quietly, which is what keeps a target
-failing on alternating ticks from stacking a modal per failure.
+— the first fetch (empty window) or the one that makes the poll give up (frozen
+table) — and never twice for the same error.
 
 Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
 the ``app`` extra).
@@ -64,15 +59,10 @@ def short_grace(monkeypatch):
 def dialog_parent(qapp):
     """A hidden parent, so Qt owns the dialogs instead of Python's GC.
 
-    A parentless QDialog is owned by its Python wrapper: it is destroyed the
-    instant the test's reference goes away, taking its worker children with it
-    while the event queue may still hold events for them. That left the process
-    crashing later — a segfault inside a *different* test's ``qtbot.wait``.
-    Parenting them here keeps every object alive until the module is done, so
-    nothing is freed underneath a queued event.
-
-    Deliberately never deleted: the process is about to exit anyway, and a
-    teardown here would recreate the very window this avoids.
+    A parentless QDialog dies with the test's reference, taking its worker
+    children with it while the event queue may still hold events for them —
+    which segfaulted a *later* test's ``qtbot.wait``. Never deleted on purpose:
+    a teardown here would recreate that window.
     """
     from PySide6.QtWidgets import QWidget
 
@@ -83,9 +73,8 @@ def dialog_parent(qapp):
 def make_dialog(qapp, dialog_parent):
     """Factory for an ``AutoRefreshTableDialog`` whose fetch can be made to fail.
 
-    Dialogs are closed at the end of each test — that is what exercises the
-    teardown — but stay owned by ``dialog_parent`` (see there) rather than being
-    destroyed mid-session.
+    Closed at the end of each test (that exercises the teardown) but owned by
+    ``dialog_parent``, not destroyed mid-session.
     """
     from PyMemoryEditor.app._auto_refresh_dialog import AutoRefreshTableDialog
 
@@ -171,10 +160,9 @@ def test_polling_stops_when_failures_persist(qapp, short_grace, make_dialog):
 def test_a_flapping_target_never_stacks_dialogs(qapp, make_dialog):
     """Fail / succeed / fail / succeed must stay silent, not pop a modal a tick.
 
-    The regression this guards: reporting every failure looked safe because the
-    same error is never reported twice in a row — but each success cleared that
-    latch, so an alternating target popped a modal per failure, each one nesting
-    an event loop inside the previous modal until the stack blew up.
+    Reporting every failure looked safe because the same error is never reported
+    twice — but each success cleared that latch, so an alternating target popped
+    a modal per failure, nesting event loops until the stack blew up.
     """
     dialog = make_dialog()
     dialog.flapping = True
@@ -198,8 +186,7 @@ def test_the_first_fetch_failure_is_reported_immediately(qapp, make_dialog):
 def test_failures_inside_the_grace_window_are_not_reported(make_dialog):
     """A blip (a snapshot that fails while the target loads images) stays quiet.
 
-    Driven through the handlers rather than the timer: what matters is the
-    failure *sequence*, and racing a 50 ms poll to land an exact number of
+    Driven through the handlers: racing a 50 ms poll to land an exact number of
     failures would only make the test flaky.
     """
     dialog = make_dialog()
@@ -241,10 +228,8 @@ def test_the_close_button_tears_the_dialog_down(qapp, make_dialog):
     """The Close button calls accept(), which delivers no QCloseEvent.
 
     The teardown used to live in ``closeEvent`` alone, so dismissing a polling
-    dialog the normal way left it hidden and *still polling* — unreachable
-    (the main window drops its reference on ``finished``), leaking a thread per
-    open/close cycle, and with its worker absent from the detached registry that
-    keeps the process handle alive while something is still reading.
+    dialog the normal way left it hidden and *still polling*, leaking a thread
+    per open/close cycle.
     """
     dialog = make_dialog()
     assert dialog._auto_timer.isActive()
@@ -262,9 +247,9 @@ def test_the_close_button_tears_the_dialog_down(qapp, make_dialog):
 def test_escape_tears_the_dialog_down_too(qapp, make_dialog):
     """Esc reaches reject(), the other half of done().
 
-    Driven as a real key event rather than a ``reject()`` call: Esc is handled
-    inside ``QDialog`` on the C++ side, so this is what proves the override is
-    reached through Qt's virtual dispatch and not just from Python.
+    A real key event, not a ``reject()`` call: Esc is handled inside ``QDialog``
+    on the C++ side, so this proves the override is reached through Qt's virtual
+    dispatch.
     """
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
@@ -298,11 +283,10 @@ def test_teardown_runs_once_however_the_dialog_is_dismissed(qapp, make_dialog):
 
 
 def test_a_late_finished_does_not_retire_the_worker_that_replaced_it(make_dialog):
-    """``finished`` is queued and can land after the next tick started a new fetch.
+    """``finished`` is queued and can land after the next tick started a fetch.
 
-    Retiring ``self._worker`` blindly there dropped the reference to the
-    *running* replacement and scheduled it for deletion — destroying a live
-    QThread aborts the process, and the teardown could no longer join it.
+    Retiring ``self._worker`` blindly dropped the reference to the *running*
+    replacement and scheduled it for deletion — that aborts the process.
     """
     dialog = make_dialog()
     dialog._start_fetch()
@@ -341,12 +325,8 @@ def test_nothing_fetches_after_the_dialog_was_torn_down(qapp, make_dialog):
 def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(
     qapp, short_grace, dialog_parent
 ):
-    """Linux and Windows report an exited process as *no threads*, not an error.
-
-    Without this the window would sit at "0 thread(s)" against a dead target —
-    never reporting, never giving up — while the Memory Map and Modules windows
-    beside it say the process is gone.
-    """
+    """Linux and Windows report an exited process as *no threads*, not an error,
+    so the window would sit at "0 thread(s)" forever."""
     from PyMemoryEditor.app.threads_dialog import ThreadsDialog
     from PyMemoryEditor.process.thread_info import ThreadInfo
 
@@ -380,12 +360,8 @@ def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(
 
 
 def test_threads_dialog_tolerates_a_single_empty_enumeration(qapp, dialog_parent):
-    """One empty snapshot is not proof of death.
-
-    ``Thread32First`` can legally come up dry on a live process, and the first
-    fetch is reported the moment it fails — so announcing the target's death on
-    a single blip would be a lie the user sees immediately.
-    """
+    """One empty snapshot is not proof of death: ``Thread32First`` can come up
+    dry on a live process, and the first fetch is reported immediately."""
     from PyMemoryEditor.app.threads_dialog import ThreadsDialog
     from PyMemoryEditor.process.thread_info import ThreadInfo
 
@@ -420,10 +396,8 @@ def test_hex_viewer_stops_polling_and_logs_once_on_a_dead_target(
 ):
     """The Hex Viewer is the other polling window, and it never gave up.
 
-    Its reads fail every tick against a dead target, and each one logged a
-    warning — up to 20 a second at the 50 ms floor, straight into the Log
-    Console. Same defect as issue #74, reported through the logger instead of a
-    modal.
+    Against a dead target every tick logged a warning — up to 20 a second at the
+    50 ms floor, straight into the Log Console.
     """
     import logging
 
@@ -459,10 +433,9 @@ def test_hex_viewer_stops_polling_and_logs_once_on_a_dead_target(
 def test_shutdown_really_disconnects_the_worker(qapp, dialog_parent, make_dialog):
     """`worker.disconnect()` is a no-op in PySide6 — it raises TypeError.
 
-    `shutdown_worker_thread` swallowed that, so every "a late emit can't touch a
-    dismissed dialog" claim in this app rested on a call that disconnected
-    nothing. The four-argument static form is the one that works for slots that
-    are bound methods of the owning dialog.
+    `shutdown_worker_thread` swallowed that, so nothing was ever disconnected.
+    The four-argument static form is the one that works for slots that are bound
+    methods of the owning dialog.
     """
     from PyMemoryEditor.app._auto_refresh_dialog import _DataWorker
     from PyMemoryEditor.app._widgets import shutdown_worker_thread
@@ -489,12 +462,8 @@ def test_shutdown_really_disconnects_the_worker(qapp, dialog_parent, make_dialog
 
 
 def test_a_dismissed_dialog_reports_nothing(qapp, make_dialog):
-    """Belt and braces for the same hazard, from the receiving end.
-
-    A delivery already queued when the teardown ran must not pop a modal over a
-    window that is gone — during ``MainWindow.closeEvent`` that would be a
-    nested event loop in the middle of teardown.
-    """
+    """The same hazard from the receiving end: a delivery already queued when
+    the teardown ran must not pop a modal over a window that is gone."""
     dialog = make_dialog()
     dialog.accept()
     _spin(qapp, 50)

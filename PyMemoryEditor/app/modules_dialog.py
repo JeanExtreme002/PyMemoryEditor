@@ -193,8 +193,7 @@ class ModulesDialog(AutoRefreshTableDialog):
             count_text = f"{shown:,} of {total:,} module(s) shown"
         else:
             count_text = f"{total:,} module(s)"
-        # A filter keystroke rebuilds this line long after the poll gave up —
-        # without the suffix the stale table would look live again.
+        # A filter keystroke rebuilds this line long after the poll gave up.
         if self._polling_gave_up:
             count_text += " · auto-refresh stopped"
         self._count_label.setText(count_text)

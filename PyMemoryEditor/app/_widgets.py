@@ -44,12 +44,10 @@ def shutdown_worker_thread(worker: Optional[QThread], wait_ms: int = 2000) -> No
     if callable(cancel):
         cancel()
     try:
-        # The four-argument static form, not `worker.disconnect()`: the bare
-        # call raises TypeError in PySide6 ("not enough arguments"), and with
-        # the except below swallowing it nothing was ever disconnected — every
-        # slot still fired after this returned. `worker.disconnect(worker)` is
-        # no good either: it only drops connections whose *receiver* is the
-        # worker, and every slot here belongs to the owning dialog.
+        # The four-argument static form on purpose: bare `worker.disconnect()`
+        # raises TypeError in PySide6 (so this except swallowed it and nothing
+        # was disconnected), and `worker.disconnect(worker)` only drops
+        # connections whose *receiver* is the worker — ours belong to the dialog.
         QObject.disconnect(worker, None, None, None)
     except (RuntimeError, TypeError):
         pass
@@ -68,16 +66,14 @@ def detach_worker(worker: QThread) -> None:
 
     Reparents it away from the dying widget and holds it in the module-level
     registry until it finishes on its own. Callers that stop workers their own
-    way (``MainWindow._shutdown_worker`` pumps the event loop for its blocking
-    connections) park them here too, so there is one place to look for threads
-    that outlived their owner rather than one list per caller.
+    way park them here too, so threads that outlived their owner are all in one
+    place.
     """
     worker.setParent(None)
     _DETACHED_WORKERS.append(worker)
     worker.finished.connect(lambda: _reap_detached_worker(worker))
     # It can finish between the caller's isRunning() check and the connect
-    # above, in which case `finished` already fired and the reaper would never
-    # run — leaving a dead worker parked in the registry for good.
+    # above; `finished` already fired, so the reaper would never run.
     if worker.isFinished():
         _reap_detached_worker(worker)
 
@@ -91,25 +87,16 @@ def _reap_detached_worker(worker: QThread) -> None:
 class TearsDownOnClose:
     """Mixin that runs a dialog's teardown on *every* way out, not just close.
 
-    ``QDialog`` delivers a ``QCloseEvent`` only for a real close — the window
-    manager's button, or an explicit ``close()``. This app's own "Close" buttons
-    call ``accept()`` and Esc reaches ``reject()``; both land in ``done()``,
-    which hides the dialog and emits ``finished`` **without** any close event.
-
-    A dialog that stops its timers and joins its worker in ``closeEvent`` is
-    therefore still polling after the user closed it — hidden, unreachable
-    (the main window drops its reference on ``finished``), leaking a thread per
-    open/close cycle, and able to pop a modal from behind nothing.
+    ``QDialog`` delivers a ``QCloseEvent`` only for a real close. The app's own
+    "Close" buttons call ``accept()`` and Esc reaches ``reject()``; both land in
+    ``done()``, which hides the dialog and emits ``finished`` *without* any
+    close event — so a teardown living in ``closeEvent`` never ran, and the
+    dialog kept polling, hidden and unreachable.
 
     Subclasses implement :meth:`_teardown`; the mixin runs it exactly once,
-    whichever way the dialog is dismissed. It must precede ``QDialog`` in the
-    bases so its overrides win.
-
-    Running *once* makes instances single-use, which is what every caller here
-    already assumes: the main window drops its reference on ``finished`` and
-    builds a fresh dialog next time. A dialog meant to be reshown after being
-    dismissed would have to re-arm what ``_teardown`` released rather than lean
-    on the latch.
+    whichever way the dialog is dismissed, and must precede ``QDialog`` in the
+    bases so its overrides win. Running once makes instances single-use, which
+    is what every caller here assumes.
     """
 
     def _teardown(self) -> None:
@@ -117,13 +104,8 @@ class TearsDownOnClose:
         raise NotImplementedError
 
     def _is_dismissed(self) -> bool:
-        """Whether the teardown has already run — i.e. the dialog is done.
-
-        Callers guard their own entry points with this rather than repeating
-        the attribute lookup: a typo in one copy would silently disable that
-        guard, and the guards are what keep a dismissed dialog from fetching
-        or reporting.
-        """
+        """Whether the teardown has run. Guards live on this, not on a repeated
+        attribute lookup a typo could silently disable."""
         return getattr(self, "_teardown_done", False)
 
     def _run_teardown_once(self) -> None:

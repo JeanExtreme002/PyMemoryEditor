@@ -324,12 +324,9 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
     def _on_scan_finished(self, worker) -> None:
         """Retire the enumeration that just finished — and only that one.
 
-        ``finished`` is queued, so it can land after a refresh already started a
-        replacement (the worker leaves ``run()`` before its signal is
-        delivered, and the in-flight guard in ``_populate_processes`` lets the
-        next scan through in that window). Clearing ``_scan_worker`` blindly
-        would drop the reference to the running replacement and
-        ``deleteLater()`` it, which aborts the process.
+        ``finished`` is queued and can land after a refresh started a
+        replacement; clearing ``_scan_worker`` blindly would ``deleteLater()``
+        that running worker, which aborts the process.
         """
         if worker is self._scan_worker:
             self._scan_worker = None
@@ -337,15 +334,9 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
 
     def _teardown(self) -> None:
         self._refresh_timer.stop()
-        # Hand the enumeration worker to the shared shutdown: it disconnects,
-        # joins, and — when psutil is slow on a huge process list — detaches
-        # instead of leaving a live QThread parented to a dialog that is about
-        # to be dropped (destroying one aborts the process).
-        #
-        # The join is deliberately short. This runs on the click that dismisses
-        # the picker, and its result is already irrelevant: whoever waits is
-        # waiting for a process list nobody will read. Long enough to absorb a
-        # scan that is nearly done, short enough to be imperceptible.
+        # Short join on purpose: this runs on the click that dismisses the
+        # picker, waiting for a process list nobody will read. A scan that
+        # outlasts it is detached rather than left parented to a dying dialog.
         shutdown_worker_thread(self._scan_worker, wait_ms=250)
         self._scan_worker = None
 

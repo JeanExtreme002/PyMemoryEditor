@@ -761,13 +761,8 @@ class MainWindow(QMainWindow):
 
     @property
     def process(self) -> AbstractProcess:
-        """The handle this window is currently attached to.
-
-        Not necessarily the one it was constructed with: File → Change
-        Process… swaps it (and releases the old one), so anything outliving the
-        window — ``application.main``'s teardown — has to ask for it rather than
-        hold on to the handle it passed in.
-        """
+        """The handle this window is currently attached to — not necessarily
+        the one it was constructed with, since File → Change Process… swaps it."""
         return self._process
 
     def _window_title(self) -> str:
@@ -854,9 +849,8 @@ class MainWindow(QMainWindow):
 
         # Tear down auxiliary dialogs that hold a reference to the old
         # process — reopening them rebuilds against the new target. The Memory
-        # Map belongs here too: it auto-refreshes on a timer, so leaving it open
-        # left it polling the handle closed just below — one of the two paths
-        # into the error-dialog spam of issue #74.
+        # Map belongs here too: it polls on a timer, so leaving it open left it
+        # reading the handle closed just below (issue #74).
         for dialog_attr in (
             "_memory_map",
             "_threads_dialog",
@@ -869,18 +863,15 @@ class MainWindow(QMainWindow):
                 existing.close()
                 setattr(self, dialog_attr, None)
 
-        # Hex viewers keep their own auto-refresh timer against the old handle.
-        # Each is WA_DeleteOnClose and drops itself from this list on `destroyed`
-        # — which fires when the deleteLater is processed, i.e. after this method
-        # returns. So the copy is belt-and-braces and the clear() is what
-        # actually empties the list; neither is redundant.
+        # Hex viewers poll the old handle too. They drop themselves from this
+        # list on `destroyed`, which only fires after this method returns — so
+        # the clear() is what actually empties it, not redundant.
         for viewer in list(self._hex_viewers):
             viewer.close()
         self._hex_viewers.clear()
 
-        # Cleared *after* the teardown above: closing the Memory Map emits
-        # ``finished``, and its handler adopts that dialog's last snapshot as
-        # the cached one — which belongs to the process we just left.
+        # Cleared *after* the teardown: closing the Memory Map makes its
+        # `finished` handler adopt that dialog's snapshot — the old target's.
         self._region_snapshot = None
         # Replace the cheat table — old entries point at the previous process.
         # QSplitter has no QLayout, so we use its native replaceWidget(index).
@@ -893,15 +884,11 @@ class MainWindow(QMainWindow):
             old_cheat.shutdown()
         except Exception:
             pass
-        # The old poller has been stopped, so the handle can go. Caveat: nothing
-        # here can *force* a thread wedged in a backend read to return — the
-        # cheat poller and the dialog fetch workers fall back to being detached
-        # (see shutdown_worker_thread) when they blow their join, and one of
-        # those can still be *inside a read* when this closes. That window is
-        # accepted, not eliminated: the read itself is the exposure (a recycled
-        # HANDLE on Windows, a deallocated Mach port on macOS), and all that can
-        # be said for it is that the fetches are read-only and their results are
-        # disconnected, so nothing wrong reaches the UI.
+        # The old poller has been stopped, so the handle can go. Accepted
+        # window: a worker that blew its join is *detached*, not stopped, so it
+        # can still be inside a read here (a recycled HANDLE on Windows, a
+        # deallocated Mach port on macOS). The fetches are read-only and their
+        # results disconnected, so nothing wrong reaches the UI.
         try:
             old_process.close()
         except Exception:
@@ -949,12 +936,10 @@ class MainWindow(QMainWindow):
             if dialog is not None:
                 dialog.close()
 
-        # Hex viewers run the same kind of read worker and are children of this
-        # window, so destroying it would take a running QThread down with it.
-        # No clear() here (unlike _change_process, which keeps running against a
-        # new target afterwards): this window is on its way out with the list.
-        # (The Pointer Chain dialog is deliberately absent from both lists: it
-        # resolves synchronously and starts no thread.)
+        # Hex viewers run the same read worker and are children of this window,
+        # so destroying it would take a running QThread down with it. No clear()
+        # here: the list dies with the window. (Pointer Chain is absent from
+        # both lists on purpose — it resolves synchronously, no thread.)
         for viewer in list(self._hex_viewers):
             viewer.close()
 
@@ -1010,11 +995,8 @@ class MainWindow(QMainWindow):
             waited += step_ms
 
         if worker.isRunning():
-            # Still wedged in a backend call. Detach it from this window so the
-            # imminent window destruction can't destroy a live QThread, and keep
-            # it referenced until it finishes on its own — in the shared
-            # registry rather than a list of our own, so every thread that
-            # outlived its owner is in one place.
+            # Still wedged in a backend call: park it in the shared registry so
+            # the imminent window destruction can't take a live QThread down.
             detach_worker(worker)
         else:
             worker.deleteLater()

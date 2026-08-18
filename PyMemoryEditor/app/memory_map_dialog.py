@@ -423,8 +423,7 @@ class MemoryMapDialog(AutoRefreshTableDialog):
                 f"{total:,} regions · "
                 f"{_format_size(total_bytes)} of virtual address space mapped"
             )
-        # A filter keystroke rebuilds this line long after the poll gave up —
-        # without the suffix the stale table would look live again.
+        # A filter keystroke rebuilds this line long after the poll gave up.
         if self._polling_gave_up:
             count_text += " · auto-refresh stopped"
         self._count_label.setText(count_text)
