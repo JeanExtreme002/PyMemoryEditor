@@ -60,20 +60,40 @@ def short_grace(monkeypatch):
     return 150
 
 
+@pytest.fixture(scope="module")
+def dialog_parent(qapp):
+    """A hidden parent, so Qt owns the dialogs instead of Python's GC.
+
+    A parentless QDialog is owned by its Python wrapper: it is destroyed the
+    instant the test's reference goes away, taking its worker children with it
+    while the event queue may still hold events for them. That left the process
+    crashing later — a segfault inside a *different* test's ``qtbot.wait``.
+    Parenting them here keeps every object alive until the module is done, so
+    nothing is freed underneath a queued event.
+
+    Deliberately never deleted: the process is about to exit anyway, and a
+    teardown here would recreate the very window this avoids.
+    """
+    from PySide6.QtWidgets import QWidget
+
+    return QWidget()
+
+
 @pytest.fixture
-def make_dialog(qapp):
+def make_dialog(qapp, dialog_parent):
     """Factory for an ``AutoRefreshTableDialog`` whose fetch can be made to fail.
 
-    The dialogs are parentless here, so PySide6 destroys the C++ object as soon
-    as the Python reference goes away. The fixture closes them (joining the
-    fetch worker) and pumps the loop once more, so no live QThread is left
-    hanging off an object about to be deleted.
+    Dialogs are closed at the end of each test — that is what exercises the
+    teardown — but stay owned by ``dialog_parent`` (see there) rather than being
+    destroyed mid-session.
     """
     from PyMemoryEditor.app._auto_refresh_dialog import AutoRefreshTableDialog
 
     class _Dialog(AutoRefreshTableDialog):
         def __init__(self, interval_ms, failing):
-            super().__init__(object(), refresh_interval_ms=interval_ms)
+            super().__init__(
+                object(), refresh_interval_ms=interval_ms, parent=dialog_parent
+            )
             self.failing = failing
             self.flapping = False
             self.fetches = 0
@@ -331,7 +351,9 @@ def test_nothing_fetches_after_the_dialog_was_torn_down(qapp, make_dialog):
     assert not dialog._auto_timer.isActive()
 
 
-def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(qapp, short_grace):
+def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(
+    qapp, short_grace, dialog_parent
+):
     """Linux and Windows report an exited process as *no threads*, not an error.
 
     Without this the window would sit at "0 thread(s)" against a dead target —
@@ -351,7 +373,7 @@ def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(qapp, short
             return iter(state["threads"])
 
     reported = []
-    dialog = ThreadsDialog(_Process())
+    dialog = ThreadsDialog(_Process(), parent=dialog_parent)
     dialog._on_data_failed = lambda message: reported.append(message)
     try:
         _spin(qapp, 400)

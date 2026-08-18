@@ -57,11 +57,17 @@ def slow_worker(qapp):
         def __init__(self):
             super().__init__()
             self.busy_ms = 400
+            # Python-side completion flag. Assertions must not call isRunning()
+            # after the worker finishes: the detach machinery reaps it (a
+            # deleteLater on the C++ object), and touching the wrapper then
+            # raises "Internal C++ object already deleted".
+            self.ran_to_completion = False
 
         def run(self):
             # Stands in for a backend read that can't be interrupted — the only
             # reason `shutdown_worker_thread` ever detaches anything.
             QThread.msleep(self.busy_ms)
+            self.ran_to_completion = True
 
     workers = []
 
@@ -85,11 +91,15 @@ def slow_worker(qapp):
 def test_closes_inline_when_nothing_is_detached(qapp):
     """The normal path: no wedged worker, so the handle is released right away."""
     from PyMemoryEditor.app._widgets import (
-        _DETACHED_WORKERS,
         call_when_detached_workers_finish,
+        wait_for_detached_workers,
     )
 
-    assert not [w for w in _DETACHED_WORKERS if w.isRunning()]
+    # Precondition: nothing wedged from an earlier test. A finished worker may
+    # still sit in the registry waiting for its reaper, which doesn't count —
+    # and touching such a wrapper directly can hit an already-deleted C++
+    # object, so ask through the guarded helper.
+    assert wait_for_detached_workers(0) is True
 
     closed = []
     call_when_detached_workers_finish(lambda: closed.append(True))
@@ -120,7 +130,7 @@ def test_the_close_waits_for_a_detached_worker(qapp, slow_worker):
 
     assert _spin_until(qapp, lambda: bool(closed))
     assert closed == [True]
-    assert not worker.isRunning()
+    assert worker.ran_to_completion
 
 
 def test_the_blocking_wait_reports_whether_the_workers_finished(qapp, slow_worker):
@@ -149,7 +159,7 @@ def test_the_blocking_wait_reports_whether_the_workers_finished(qapp, slow_worke
 
     # Long enough: the worker is done, so the handle is safe to release.
     assert wait_for_detached_workers(3000) is True
-    assert not worker.isRunning()
+    assert worker.ran_to_completion
 
 
 def test_the_close_fires_once_for_several_detached_workers(qapp, slow_worker):
@@ -171,7 +181,7 @@ def test_the_close_fires_once_for_several_detached_workers(qapp, slow_worker):
     closed = []
     call_when_detached_workers_finish(lambda: closed.append(True))
 
-    assert _spin_until(qapp, lambda: not quick.isRunning(), 3000)
+    assert _spin_until(qapp, lambda: quick.ran_to_completion, 3000)
     qapp.processEvents()
     assert closed == []  # the other one is still reading
 
