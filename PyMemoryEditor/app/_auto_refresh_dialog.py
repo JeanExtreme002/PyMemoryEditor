@@ -32,9 +32,10 @@ from ._widgets import TearsDownOnClose, shutdown_worker_thread
 # would freeze a window that would have recovered on the next tick.
 #
 # Measured in wall-clock rather than ticks on purpose: "how long does the target
-# get to recover" is the same question for every dialog, but the intervals are
-# not (300 ms for Threads, 1000 ms for Memory Map / Modules), so a tick count
-# would hand them budgets that differ by 3x. What gets *reported* is decided
+# get to recover" is the same question for every window, but the intervals are
+# not (300 ms for Threads, 1000 ms for Memory Map / Modules, and anything from
+# 50 ms up in the Hex Viewer, which shares this budget), so a tick count would
+# hand them budgets differing by more than an order of magnitude. What gets *reported* is decided
 # separately, in ``_handle_failed`` — this constant only bounds how long a
 # failing target keeps a worker running.
 _FAILURE_GRACE_MS = 3000

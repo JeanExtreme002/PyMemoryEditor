@@ -101,6 +101,10 @@ reports the failure once, stops refreshing, and says so in its status line
 still copy an address out of it. Close and reopen the window to point it at a
 live target again.
 
+The Hex Viewer's optional auto-refresh follows the same rule: it reports the
+failed read once, switches itself off, and says so — rather than retrying (and
+logging) several times a second against a target that is gone.
+
 Brief hiccups don't trigger any of that — a read that fails and recovers within
 a few seconds is left alone, so a busy target loading libraries won't interrupt
 you.

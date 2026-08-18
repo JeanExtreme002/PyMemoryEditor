@@ -152,7 +152,10 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         # tick forever — up to 20 a second at the 50 ms floor — which is the
         # spam of issue #74 wearing a different hat (the Log Console instead of
         # a modal).
-        self._last_error: Optional[str] = None
+        # Keyed by (address, size, message): the point is to stop repeating the
+        # same line every tick, not to go quiet about a *different* range that
+        # started failing after the user moved the viewer.
+        self._last_failure: Optional[tuple] = None
         self._failing_since: Optional[QElapsedTimer] = None
 
     def _parse_address(self) -> Optional[int]:
@@ -216,8 +219,8 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
             message = f"{type(exc).__name__}: {exc}"
 
             # Log the first tick of a streak, not every one of them.
-            if message != self._last_error:
-                self._last_error = message
+            if (addr, size, message) != self._last_failure:
+                self._last_failure = (addr, size, message)
                 _LOG.warning(
                     "Hex viewer read failed at 0x%X (%d bytes): %s",
                     addr,
@@ -245,7 +248,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
             )
             return
 
-        self._last_error = None
+        self._last_failure = None
         self._failing_since = None
         self._dump.setPlainText(_format_hex_dump(addr, data))
         self._status.setText(f"Read {len(data):,} bytes from 0x{addr:X}")
