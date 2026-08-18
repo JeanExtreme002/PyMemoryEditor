@@ -156,7 +156,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         re-arming here would leave a timer running on a dialog nothing can join
         again.
         """
-        if getattr(self, "_teardown_done", False):
+        if self._is_dismissed():
             return
         self._last_error = None
         self._failing_since = None
@@ -173,7 +173,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         # Nothing may start a fetch after the dialog was dismissed: the teardown
         # latch is one-way, so a worker started here could never be joined
         # again (and its dialog is on its way to being deleted).
-        if getattr(self, "_teardown_done", False):
+        if self._is_dismissed():
             return
 
         # Skip if a fetch is already in flight — the timer would otherwise stack
@@ -194,7 +194,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         worker.start()
 
     def _handle_ready(self, data) -> None:
-        if getattr(self, "_teardown_done", False):
+        if self._is_dismissed():
             return
         self._has_data = True
         self._last_error = None
@@ -231,7 +231,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         during ``MainWindow.closeEvent`` that modal would be a nested event
         loop in the middle of teardown).
         """
-        if getattr(self, "_teardown_done", False):
+        if self._is_dismissed():
             return
 
         if self._failing_since is None:

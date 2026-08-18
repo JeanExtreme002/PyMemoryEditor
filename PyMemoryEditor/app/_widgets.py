@@ -75,6 +75,11 @@ def detach_worker(worker: QThread) -> None:
     worker.setParent(None)
     _DETACHED_WORKERS.append(worker)
     worker.finished.connect(lambda: _reap_detached_worker(worker))
+    # It can finish between the caller's isRunning() check and the connect
+    # above, in which case `finished` already fired and the reaper would never
+    # run — leaving a dead worker parked in the registry for good.
+    if worker.isFinished():
+        _reap_detached_worker(worker)
 
 
 def _reap_detached_worker(worker: QThread) -> None:
@@ -111,8 +116,18 @@ class TearsDownOnClose:
         """Release timers and background threads. Runs exactly once."""
         raise NotImplementedError
 
+    def _is_dismissed(self) -> bool:
+        """Whether the teardown has already run — i.e. the dialog is done.
+
+        Callers guard their own entry points with this rather than repeating
+        the attribute lookup: a typo in one copy would silently disable that
+        guard, and the guards are what keep a dismissed dialog from fetching
+        or reporting.
+        """
+        return getattr(self, "_teardown_done", False)
+
     def _run_teardown_once(self) -> None:
-        if getattr(self, "_teardown_done", False):
+        if self._is_dismissed():
             return
         self._teardown_done = True
         self._teardown()
