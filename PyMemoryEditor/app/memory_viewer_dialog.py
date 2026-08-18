@@ -195,7 +195,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
 
         worker = _DataWorker(fetch, self)
         worker.ready.connect(self._on_read_result)
-        worker.finished.connect(self._on_worker_finished)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
         self._worker = worker
         worker.start()
 
@@ -217,11 +217,18 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         self._dump.setPlainText(_format_hex_dump(addr, data))
         self._status.setText(f"Read {len(data):,} bytes from 0x{addr:X}")
 
-    def _on_worker_finished(self) -> None:
-        worker = self._worker
-        self._worker = None
-        if worker is not None:
-            worker.deleteLater()
+    def _on_worker_finished(self, worker) -> None:
+        """Retire the worker that just finished — and only that one.
+
+        ``finished`` is queued and can land after the next auto-refresh tick
+        started a replacement (the interval goes down to 50 ms here, so the two
+        overlap easily). Clearing ``self._worker`` blindly would drop the
+        reference to the running replacement and ``deleteLater()`` it —
+        destroying a live QThread aborts the process.
+        """
+        if worker is self._worker:
+            self._worker = None
+        worker.deleteLater()
 
     def _toggle_auto(self, on: bool) -> None:
         self._auto_btn.setText("Auto-refresh: On" if on else "Auto-refresh: Off")

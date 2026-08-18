@@ -90,6 +90,8 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         # keystroke), so the "stopped" note survives instead of being replaced
         # by a count that looks live.
         self._polling_gave_up = False
+        # Set by refresh() only, so it can never fire on a timer tick.
+        self._report_next_failure = False
 
     def _start_auto_refresh(self) -> None:
         """Begin polling. Call once, after the first ``refresh()``.
@@ -147,10 +149,25 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         repeated failures stopped, so reopening the dialog against a live target
         picks the cadence back up. The timer itself goes through
         :meth:`_auto_refresh_tick` instead, which must *not* re-arm.
+
+        A dismissed dialog stays dismissed: the teardown latch is one-way, so
+        re-arming here would leave a timer running on a dialog nothing can join
+        again.
         """
+        if getattr(self, "_teardown_done", False):
+            return
         self._last_error = None
         self._failing_since = None
         self._polling_gave_up = False
+        # An explicit retry deserves an answer either way: without this, a
+        # refresh against a still-dead target would sit silent until the grace
+        # window expired, because `_has_data` is still True from before.
+        #
+        # ``_start_fetch`` binds it to the fetch it starts, so it answers the
+        # request and nothing later. A fetch already in flight when this runs
+        # was started before the user asked for anything, so the flag waits for
+        # the next one rather than being consumed by that stranger's result.
+        self._report_next_failure = True
         if self._auto_timer is not None and not self._auto_timer.isActive():
             self._auto_timer.start()
         self._start_fetch()
@@ -160,6 +177,12 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         self._start_fetch()
 
     def _start_fetch(self) -> None:
+        # Nothing may start a fetch after the dialog was dismissed: the teardown
+        # latch is one-way, so a worker started here could never be joined
+        # again (and its dialog is on its way to being deleted).
+        if getattr(self, "_teardown_done", False):
+            return
+
         # Skip if a fetch is already in flight — the timer would otherwise stack
         # workers on a slow target. This self-throttles to the real fetch time.
         if self._worker is not None and self._worker.isRunning():
@@ -170,10 +193,19 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         if not self._has_data:
             self._set_loading_hint()
 
+        # Consume the "the user asked for this" flag into *this* fetch: bound to
+        # the outcome that answers the request, and cleared here so it can't
+        # leak into an unrelated failure minutes later. A refresh that found a
+        # fetch already in flight left it set, and it applies to this one.
+        asked_for_it = self._report_next_failure
+        self._report_next_failure = False
+
         worker = _DataWorker(self._fetch_data, self)
         worker.ready.connect(self._handle_ready)
-        worker.failed.connect(self._handle_failed)
-        worker.finished.connect(self._on_worker_finished)
+        worker.failed.connect(
+            lambda message, asked=asked_for_it: self._handle_failed(message, asked)
+        )
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
         self._worker = worker
         worker.start()
 
@@ -183,7 +215,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         self._failing_since = None
         self._on_data_ready(data)
 
-    def _handle_failed(self, message: str) -> None:
+    def _handle_failed(self, message: str, asked_for_it: bool = False) -> None:
         """Handle a failed fetch: report it only when the user needs to know.
 
         Once the target is gone (or its handle was closed by File → Change
@@ -198,7 +230,10 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         * the **first** fetch fails — the window is empty, so there is nothing
           to look at but the error;
         * the poll **gives up** after ``_FAILURE_GRACE_MS`` of continuous
-          failure — the table is frozen on stale data from here on.
+          failure — the table is frozen on stale data from here on;
+        * the fetch was one the user explicitly asked for (``asked_for_it``,
+          set by :meth:`refresh`) — a retry that answers with silence is worse
+          than one that answers with the error.
 
         Everything in between heals quietly: the table keeps its last good rows
         and the next tick usually recovers. That "quietly" is load-bearing, not
@@ -226,7 +261,9 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         # same error quiet, and its None-ness marks a window that has never
         # reported anything (cleared by a successful fetch and by refresh()).
         never_reported_yet = not self._has_data and self._last_error is None
-        if (gave_up or never_reported_yet) and message != self._last_error:
+        if (
+            gave_up or never_reported_yet or asked_for_it
+        ) and message != self._last_error:
             self._last_error = message
             self._on_data_failed(message)
 
@@ -235,11 +272,19 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         if gave_up:
             self._on_polling_stopped()
 
-    def _on_worker_finished(self) -> None:
-        worker = self._worker
-        self._worker = None
-        if worker is not None:
-            worker.deleteLater()
+    def _on_worker_finished(self, worker) -> None:
+        """Retire the worker that just finished — and only that one.
+
+        ``finished`` is queued, so it can arrive *after* the next tick already
+        started a replacement: a worker exits ``run()`` (``isRunning()`` goes
+        False, the guard in :meth:`_start_fetch` lets the next fetch through)
+        and its signal is delivered a moment later. Clearing ``self._worker``
+        blindly there would drop the reference to the *running* replacement and
+        ``deleteLater()`` it — destroying a live QThread aborts the process.
+        """
+        if worker is self._worker:
+            self._worker = None
+        worker.deleteLater()
 
     def _teardown(self) -> None:
         if self._auto_timer is not None:

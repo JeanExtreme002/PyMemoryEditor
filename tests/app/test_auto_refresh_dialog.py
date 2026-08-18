@@ -275,3 +275,94 @@ def test_teardown_runs_once_however_the_dialog_is_dismissed(qapp, make_dialog):
     dialog.accept()  # a second dismissal must be a no-op
 
     assert calls == [True]
+
+
+def test_a_late_finished_does_not_retire_the_worker_that_replaced_it(make_dialog):
+    """``finished`` is queued and can land after the next tick started a new fetch.
+
+    Retiring ``self._worker`` blindly there dropped the reference to the
+    *running* replacement and scheduled it for deletion — destroying a live
+    QThread aborts the process, and the teardown could no longer join it.
+    """
+    dialog = make_dialog()
+    dialog._start_fetch()
+    current = dialog._worker
+    assert current is not None
+
+    class _Stale:
+        def __init__(self):
+            self.deleted = False
+
+        def deleteLater(self):
+            self.deleted = True
+
+    stale = _Stale()
+    dialog._on_worker_finished(stale)
+
+    assert dialog._worker is current  # still tracked, still joinable
+    assert stale.deleted  # and the one that really finished is retired
+
+
+def test_an_explicit_refresh_reports_its_failure_immediately(qapp, make_dialog):
+    """A retry the user asked for answers now, not after the grace window."""
+    dialog = make_dialog()  # production grace: 3 s
+    dialog.failing = True
+
+    dialog.refresh()
+    _spin(qapp, 200)
+
+    assert len(dialog.errors) == 1
+    assert dialog.gave_up == 0  # reported on its own merit, not by giving up
+    assert dialog._auto_timer.isActive()
+
+
+def test_nothing_fetches_after_the_dialog_was_torn_down(qapp, make_dialog):
+    """The teardown latch is one-way, so a fetch started later is unjoinable."""
+    dialog = make_dialog()
+    dialog.accept()
+    _spin(qapp, 100)
+    fetches = dialog.fetches
+
+    dialog.refresh()  # a stale caller poking a dismissed dialog
+    _spin(qapp, 200)
+
+    assert dialog.fetches == fetches
+    assert dialog._worker is None
+    assert not dialog._auto_timer.isActive()
+
+
+def test_threads_dialog_treats_an_empty_enumeration_as_a_dead_target(qapp, short_grace):
+    """Linux and Windows report an exited process as *no threads*, not an error.
+
+    Without this the window would sit at "0 thread(s)" against a dead target —
+    never reporting, never giving up — while the Memory Map and Modules windows
+    beside it say the process is gone.
+    """
+    from PyMemoryEditor.app.threads_dialog import ThreadsDialog
+    from PyMemoryEditor.process.thread_info import ThreadInfo
+
+    alive = [ThreadInfo(tid=1, start_address=None, state="S", priority=20, raw="1")]
+    state = {"threads": alive}
+
+    class _Process:
+        pid = 4242
+
+        def get_threads(self):
+            return iter(state["threads"])
+
+    reported = []
+    dialog = ThreadsDialog(_Process())
+    dialog._on_data_failed = lambda message: reported.append(message)
+    try:
+        _spin(qapp, 400)
+        assert dialog._model.rowCount() == 1
+        assert reported == []
+
+        state["threads"] = []  # the target exits
+        _spin(qapp, 600)
+
+        assert len(reported) == 1
+        assert "exited" in reported[0]
+    finally:
+        dialog.close()
+        _spin(qapp, 50)

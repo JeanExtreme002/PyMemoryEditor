@@ -330,10 +330,15 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
     def _teardown(self) -> None:
         self._refresh_timer.stop()
         # Hand the enumeration worker to the shared shutdown: it disconnects,
-        # joins, and — when psutil is wedged on a huge process list — detaches
+        # joins, and — when psutil is slow on a huge process list — detaches
         # instead of leaving a live QThread parented to a dialog that is about
         # to be dropped (destroying one aborts the process).
-        shutdown_worker_thread(self._scan_worker, wait_ms=1000)
+        #
+        # The join is deliberately short. This runs on the click that dismisses
+        # the picker, and its result is already irrelevant: whoever waits is
+        # waiting for a process list nobody will read. Long enough to absorb a
+        # scan that is nearly done, short enough to be imperceptible.
+        shutdown_worker_thread(self._scan_worker, wait_ms=250)
         self._scan_worker = None
 
     def _on_filter_changed(self, text: str) -> None:

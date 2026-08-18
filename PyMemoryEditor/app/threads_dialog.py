@@ -106,7 +106,18 @@ class ThreadsDialog(AutoRefreshTableDialog):
         self._count_label.setText("Enumerating threads…")
 
     def _fetch_data(self):
-        return list(self._process.get_threads())
+        threads = list(self._process.get_threads())
+        # A live process always has at least one thread, and `get_threads` does
+        # not report an exited one uniformly: Linux walks /proc/<pid>/task and
+        # Windows filters a system-wide snapshot, so both simply come up empty
+        # where macOS raises. Without this the window would sit at "0 thread(s)"
+        # against a dead target, never reporting and never giving up, while the
+        # Memory Map and Modules windows next to it say the process is gone.
+        if not threads:
+            raise RuntimeError(
+                "The process reported no threads — it has most likely exited."
+            )
+        return threads
 
     def _on_data_ready(self, threads) -> None:
         self._threads = list(threads)
