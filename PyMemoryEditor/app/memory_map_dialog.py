@@ -414,15 +414,19 @@ class MemoryMapDialog(AutoRefreshTableDialog):
         self._table.setSortingEnabled(True)
 
         if needle:
-            self._count_label.setText(
+            count_text = (
                 f"{shown:,} of {total:,} regions shown · "
                 f"{_format_size(total_bytes)} mapped"
             )
         else:
-            self._count_label.setText(
+            count_text = (
                 f"{total:,} regions · "
                 f"{_format_size(total_bytes)} of virtual address space mapped"
             )
+        # A filter keystroke rebuilds this line long after the poll gave up.
+        if self._polling_gave_up:
+            count_text += " · auto-refresh stopped"
+        self._count_label.setText(count_text)
 
         # Restore the view. A just-allocated region wins and is scrolled into
         # view; otherwise re-select whatever was selected before and keep the
@@ -449,6 +453,12 @@ class MemoryMapDialog(AutoRefreshTableDialog):
         self._count_label.setText("Failed to read memory regions.")
         QMessageBox.critical(
             self, "Memory Map", f"Failed to read memory regions:\n\n{message}"
+        )
+
+    def _on_polling_stopped(self) -> None:
+        self._count_label.setText(
+            "Failed to read memory regions — auto-refresh stopped. "
+            "Close and reopen this window to retry."
         )
 
     def _selected_region(self) -> Optional[MemoryRegion]:

@@ -539,7 +539,9 @@ def main(argv=None):
         app.exec()
     finally:
         try:
-            process.close()
+            # `process` is only the handle the picker opened; File → Change
+            # Process… released that one and attached the window to another.
+            window.process.close()
         except Exception:
             pass
 

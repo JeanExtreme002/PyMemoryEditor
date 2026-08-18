@@ -43,6 +43,7 @@ class ThreadsDialog(AutoRefreshTableDialog):
         # self-throttles if an enumeration takes longer than the interval.
         super().__init__(process, refresh_interval_ms=300, parent=parent)
         self._threads: List[ThreadInfo] = []
+        self._empty_streak = 0  # see _fetch_data; worker thread only
 
         self.setWindowTitle(f"Threads — PID {process.pid}")
         self.resize(640, 520)
@@ -106,7 +107,22 @@ class ThreadsDialog(AutoRefreshTableDialog):
         self._count_label.setText("Enumerating threads…")
 
     def _fetch_data(self):
-        return list(self._process.get_threads())
+        threads = list(self._process.get_threads())
+        # A live process always has a thread, but `get_threads` reports an
+        # exited one as an empty list on Linux/Windows (only macOS raises) —
+        # so the window would sit at "0 thread(s)" forever while Memory Map and
+        # Modules say the process is gone. Two in a row before saying so: an
+        # empty snapshot is legal-but-rare on a live process, and the first
+        # fetch is reported the moment it fails.
+        if not threads:
+            self._empty_streak += 1
+            if self._empty_streak >= 2:
+                raise RuntimeError(
+                    "The process reported no threads — it has most likely exited."
+                )
+            return threads
+        self._empty_streak = 0
+        return threads
 
     def _on_data_ready(self, threads) -> None:
         self._threads = list(threads)
@@ -168,4 +184,10 @@ class ThreadsDialog(AutoRefreshTableDialog):
         self._count_label.setText("Failed to enumerate threads.")
         QMessageBox.critical(
             self, "Threads", f"Failed to enumerate threads:\n\n{message}"
+        )
+
+    def _on_polling_stopped(self) -> None:
+        self._count_label.setText(
+            "Failed to enumerate threads — auto-refresh stopped. "
+            "Close and reopen this window to retry."
         )

@@ -55,6 +55,7 @@ from PyMemoryEditor.process.pointer_scan import intersect_pointer_paths
 from ._widgets import (
     MONOSPACE_FAMILY,
     NumericItem,
+    TearsDownOnClose,
     parse_hex_address,
     shutdown_worker_thread,
 )
@@ -319,7 +320,7 @@ _COL_RESOLVED = 4
 _COL_VALUE = 5
 
 
-class PointerScanDialog(QDialog):
+class PointerScanDialog(TearsDownOnClose, QDialog):
     """Reverse pointer scan with a Cheat-Engine-style result table."""
 
     # qulonglong: 64-bit addresses overflow Qt's signed-32-bit default.
@@ -720,6 +721,9 @@ class PointerScanDialog(QDialog):
             )
 
     def _on_error(self, message: str) -> None:
+        # A metacall queued before _teardown disconnected still arrives.
+        if self._is_dismissed():
+            return
         QMessageBox.critical(self, "Pointer Scan", message)
         self._count_label.setText("Scan failed.")
 
@@ -997,10 +1001,9 @@ class PointerScanDialog(QDialog):
         )
         self._export_btn.setEnabled(True)
 
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
+    def _teardown(self) -> None:
         # Unhook every signal (the previous code missed `error`/`finished`, so
         # a late emit could land on a destroyed dialog) and join the worker; if
         # it can't stop in time it's detached rather than destroyed under us.
         shutdown_worker_thread(self._worker, wait_ms=2000)
         self._worker = None
-        super().closeEvent(event)

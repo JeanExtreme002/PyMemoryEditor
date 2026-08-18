@@ -227,6 +227,16 @@ class AbstractProcess(ABC):
         The ``tid`` field's *meaning* is platform-specific (POSIX TID on
         Linux, DWORD TID on Windows, Mach port name on macOS).
 
+        A process that has exited is *not* reported uniformly: Linux and
+        Windows enumerate nothing and yield an empty sequence (their sources —
+        ``/proc/<pid>/task`` and a system-wide thread snapshot filtered by pid —
+        simply come up empty), while macOS raises ``OSError`` because
+        ``task_threads`` fails on a dead task. Don't read "no threads" as "still
+        running": check liveness separately if that distinction matters.
+        Contrast :meth:`get_memory_regions` and :meth:`get_modules`, which do
+        raise :class:`~PyMemoryEditor.ProcessIDNotExistsError` on every
+        platform.
+
         Use :attr:`main_thread` for the conventional "main thread" shortcut.
         """
         raise NotImplementedError()

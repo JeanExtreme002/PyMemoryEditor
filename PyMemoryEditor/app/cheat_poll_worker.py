@@ -106,6 +106,11 @@ class _CheatPollWorker(QThread):
         with QMutexLocker(self._mutex):
             self._pending_writes.append((address, pytype, length, value))
 
+    def _stopping(self) -> bool:
+        """Whether ``stop`` was asked for. Cheap enough to check per entry."""
+        with QMutexLocker(self._mutex):
+            return self._stop
+
     def stop(self) -> None:
         with QMutexLocker(self._mutex):
             self._stop = True
@@ -126,6 +131,8 @@ class _CheatPollWorker(QThread):
 
         failures: List[Tuple[int, type, int, str]] = []
         for address, pytype, length, value in pending:
+            if self._stopping():
+                break  # the handle is about to go — see _poll_once
             try:
                 self._process.write_process_memory(address, pytype, length, value)
             except Exception as exc:  # noqa: BLE001
@@ -206,6 +213,11 @@ class _CheatPollWorker(QThread):
                     values_by_address = None
 
             for address in addresses:
+                # Per entry, not per tick: shutdown() closes the handle right
+                # after stop(), and a write on a recycled one hits another
+                # process.
+                if self._stopping():
+                    return results
                 frozen_value, is_frozen = freeze_by_addr[(pytype, length, address)]
                 if values_by_address is not None:
                     current = values_by_address.get(address)

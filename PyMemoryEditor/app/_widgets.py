@@ -8,7 +8,7 @@ previously appeared duplicated across several dialog modules.
 
 from typing import Any, Callable, Iterable, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import QObject, Qt, QThread
 from PySide6.QtGui import QStandardItem
 
 
@@ -44,7 +44,11 @@ def shutdown_worker_thread(worker: Optional[QThread], wait_ms: int = 2000) -> No
     if callable(cancel):
         cancel()
     try:
-        worker.disconnect()  # drop every outgoing connection at once
+        # The four-argument static form on purpose: bare `worker.disconnect()`
+        # raises TypeError in PySide6 (so this except swallowed it and nothing
+        # was disconnected), and `worker.disconnect(worker)` only drops
+        # connections whose *receiver* is the worker — ours belong to the dialog.
+        QObject.disconnect(worker, None, None, None)
     except (RuntimeError, TypeError):
         pass
 
@@ -52,17 +56,71 @@ def shutdown_worker_thread(worker: Optional[QThread], wait_ms: int = 2000) -> No
         worker.wait(wait_ms)
 
     if worker.isRunning():
-        worker.setParent(None)
-        _DETACHED_WORKERS.append(worker)
-        worker.finished.connect(lambda: _reap_detached_worker(worker))
+        detach_worker(worker)
     else:
         worker.deleteLater()
+
+
+def detach_worker(worker: QThread) -> None:
+    """Park a worker that wouldn't stop, so its owner can be destroyed.
+
+    Reparents it away from the dying widget and holds it in the module-level
+    registry until it finishes on its own. Callers that stop workers their own
+    way park them here too, so threads that outlived their owner are all in one
+    place.
+    """
+    worker.setParent(None)
+    _DETACHED_WORKERS.append(worker)
+    worker.finished.connect(lambda: _reap_detached_worker(worker))
+    # A worker that finished before this connect already emitted, so the reaper
+    # would never run and it would sit here for good.
+    if worker.isFinished():
+        _reap_detached_worker(worker)
 
 
 def _reap_detached_worker(worker: QThread) -> None:
     if worker in _DETACHED_WORKERS:
         _DETACHED_WORKERS.remove(worker)
     worker.deleteLater()
+
+
+class TearsDownOnClose:
+    """Mixin that runs a dialog's teardown on *every* way out, not just close.
+
+    ``QDialog`` delivers a ``QCloseEvent`` only for a real close. The app's own
+    "Close" buttons call ``accept()`` and Esc reaches ``reject()``; both land in
+    ``done()``, which hides the dialog and emits ``finished`` *without* any
+    close event — so a teardown living in ``closeEvent`` never ran, and the
+    dialog kept polling, hidden and unreachable.
+
+    Subclasses implement :meth:`_teardown`; the mixin runs it exactly once,
+    whichever way the dialog is dismissed, and must precede ``QDialog`` in the
+    bases so its overrides win. Running once makes instances single-use, which
+    is what every caller here assumes.
+    """
+
+    def _teardown(self) -> None:
+        """Release timers and background threads. Runs exactly once."""
+        raise NotImplementedError
+
+    def _is_dismissed(self) -> bool:
+        """Whether the teardown has run. Guards live on this, not on a repeated
+        attribute lookup a typo could silently disable."""
+        return getattr(self, "_teardown_done", False)
+
+    def _run_teardown_once(self) -> None:
+        if self._is_dismissed():
+            return
+        self._teardown_done = True
+        self._teardown()
+
+    def done(self, result: int) -> None:  # noqa: N802 — Qt naming
+        self._run_teardown_once()
+        super().done(result)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — Qt naming
+        self._run_teardown_once()
+        super().closeEvent(event)
 
 
 class NumericItem(QStandardItem):

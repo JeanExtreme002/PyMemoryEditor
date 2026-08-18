@@ -8,7 +8,7 @@ Polls the chosen address range at a configurable interval (Cheat Engine-style
 import logging
 from typing import Optional
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QElapsedTimer, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
@@ -24,8 +24,8 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess
 
-from ._auto_refresh_dialog import _DataWorker
-from ._widgets import parse_hex_address, shutdown_worker_thread
+from ._auto_refresh_dialog import _FAILURE_GRACE_MS, _DataWorker
+from ._widgets import TearsDownOnClose, parse_hex_address, shutdown_worker_thread
 
 
 # Child of the "PyMemoryEditor" logger, so the Log Console (which attaches a
@@ -47,7 +47,7 @@ def _format_hex_dump(base: int, data: bytes) -> str:
     return "\n".join(lines)
 
 
-class MemoryViewerDialog(QDialog):
+class MemoryViewerDialog(TearsDownOnClose, QDialog):
     """Hex viewer + auto-refresh, with a "write bytes back" button."""
 
     def __init__(
@@ -146,6 +146,13 @@ class MemoryViewerDialog(QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
 
+        # Failure bookkeeping, same shape as the auto-refresh dialogs: a dead
+        # target used to log a warning every tick forever (~20/s at the 50 ms
+        # floor). Keyed by (address, size, message) so moving the viewer to
+        # another failing range still gets logged.
+        self._last_failure: Optional[tuple] = None
+        self._failing_since: Optional[QElapsedTimer] = None
+
     def _parse_address(self) -> Optional[int]:
         text = self._addr_edit.text().strip()
         if not text:
@@ -195,37 +202,71 @@ class MemoryViewerDialog(QDialog):
 
         worker = _DataWorker(fetch, self)
         worker.ready.connect(self._on_read_result)
-        worker.finished.connect(self._on_worker_finished)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
         self._worker = worker
         worker.start()
 
     def _on_read_result(self, result) -> None:
         """Render a finished read (UI thread). ``result`` is the fetch tuple."""
+        # A metacall queued before _teardown disconnected still gets delivered.
+        if self._is_dismissed():
+            return
         addr, size, data, exc = result
         if exc is not None:
             self._dump.setPlainText("")
-            self._status.setText(f"Read failed: {type(exc).__name__}: {exc}")
-            _LOG.warning(
-                "Hex viewer read failed at 0x%X (%d bytes): %s: %s",
-                addr,
-                size,
-                type(exc).__name__,
-                exc,
+            message = f"{type(exc).__name__}: {exc}"
+
+            # First tick of a streak only.
+            if (addr, size, message) != self._last_failure:
+                self._last_failure = (addr, size, message)
+                _LOG.warning(
+                    "Hex viewer read failed at 0x%X (%d bytes): %s",
+                    addr,
+                    size,
+                    message,
+                )
+
+            gave_up = False
+            if self._failing_since is None:
+                self._failing_since = QElapsedTimer()
+                self._failing_since.start()
+            elif (
+                self._failing_since.elapsed() >= _FAILURE_GRACE_MS
+                and self._auto_btn.isChecked()
+            ):
+                # Off through the button's own slot, so the UI can't claim to
+                # be refreshing while it isn't.
+                gave_up = True
+                self._auto_btn.setChecked(False)
+
+            self._status.setText(
+                f"Read failed: {message}"
+                + (" — auto-refresh stopped." if gave_up else "")
             )
             return
 
+        self._last_failure = None
+        self._failing_since = None
         self._dump.setPlainText(_format_hex_dump(addr, data))
         self._status.setText(f"Read {len(data):,} bytes from 0x{addr:X}")
 
-    def _on_worker_finished(self) -> None:
-        worker = self._worker
-        self._worker = None
-        if worker is not None:
-            worker.deleteLater()
+    def _on_worker_finished(self, worker) -> None:
+        """Retire the worker that just finished — and only that one.
+
+        ``finished`` is queued and can land after the next tick started a
+        replacement (50 ms interval floor here, so they overlap easily).
+        Clearing ``self._worker`` blindly would ``deleteLater()`` that running
+        worker — destroying a live QThread aborts the process.
+        """
+        if worker is self._worker:
+            self._worker = None
+        worker.deleteLater()
 
     def _toggle_auto(self, on: bool) -> None:
         self._auto_btn.setText("Auto-refresh: On" if on else "Auto-refresh: Off")
         if on:
+            # Turning it back on is a retry: fresh grace window.
+            self._failing_since = None
             self._sync_timer()
         else:
             self._timer.stop()
@@ -276,11 +317,10 @@ class MemoryViewerDialog(QDialog):
         self._status.setText(f"Wrote {len(data)} bytes to 0x{addr:X}.")
         self.refresh()
 
-    def closeEvent(self, event) -> None:
+    def _teardown(self) -> None:
         self._timer.stop()
         # Unhook + join the read worker; if it's still wedged in a backend call
         # it's detached rather than destroyed under us (same safety the
         # auto-refresh dialogs use).
         shutdown_worker_thread(self._worker, wait_ms=1000)
         self._worker = None
-        super().closeEvent(event)

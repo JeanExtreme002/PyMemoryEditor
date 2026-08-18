@@ -39,7 +39,7 @@ from PyMemoryEditor import (
 )
 
 from ._icon import app_icon
-from ._widgets import NumericItem
+from ._widgets import NumericItem, TearsDownOnClose, shutdown_worker_thread
 
 
 if sys.platform == "win32":
@@ -161,7 +161,7 @@ class _ProcessSortProxy(QSortFilterProxyModel):
         return left_item < right_item
 
 
-class OpenProcessDialog(QDialog):
+class OpenProcessDialog(TearsDownOnClose, QDialog):
     """Process picker. Returns the opened ``AbstractProcess`` via ``.process``."""
 
     COL_PID = 0
@@ -289,7 +289,7 @@ class OpenProcessDialog(QDialog):
 
         worker = _ProcessListWorker(self)
         worker.rows_ready.connect(self._on_rows_ready)
-        worker.finished.connect(self._on_scan_finished)
+        worker.finished.connect(lambda w=worker: self._on_scan_finished(w))
         self._scan_worker = worker
         worker.start()
 
@@ -321,22 +321,24 @@ class OpenProcessDialog(QDialog):
                     self._table.selectRow(row)
                     break
 
-    def _on_scan_finished(self) -> None:
-        worker = self._scan_worker
-        self._scan_worker = None
-        if worker is not None:
-            worker.deleteLater()
+    def _on_scan_finished(self, worker) -> None:
+        """Retire the enumeration that just finished — and only that one.
 
-    def closeEvent(self, event):  # noqa: N802 — Qt naming
+        ``finished`` is queued and can land after a refresh started a
+        replacement; clearing ``_scan_worker`` blindly would ``deleteLater()``
+        that running worker, which aborts the process.
+        """
+        if worker is self._scan_worker:
+            self._scan_worker = None
+        worker.deleteLater()
+
+    def _teardown(self) -> None:
         self._refresh_timer.stop()
-        if self._scan_worker is not None and self._scan_worker.isRunning():
-            try:
-                self._scan_worker.rows_ready.disconnect()
-                self._scan_worker.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            self._scan_worker.wait(1000)
-        super().closeEvent(event)
+        # Short join on purpose: this runs on the click that dismisses the
+        # picker, waiting for a process list nobody will read. A scan that
+        # outlasts it is detached rather than left parented to a dying dialog.
+        shutdown_worker_thread(self._scan_worker, wait_ms=250)
+        self._scan_worker = None
 
     def _on_filter_changed(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)

@@ -190,9 +190,13 @@ class ModulesDialog(AutoRefreshTableDialog):
 
         total = len(self._modules)
         if needle:
-            self._count_label.setText(f"{shown:,} of {total:,} module(s) shown")
+            count_text = f"{shown:,} of {total:,} module(s) shown"
         else:
-            self._count_label.setText(f"{total:,} module(s)")
+            count_text = f"{total:,} module(s)"
+        # A filter keystroke rebuilds this line long after the poll gave up.
+        if self._polling_gave_up:
+            count_text += " · auto-refresh stopped"
+        self._count_label.setText(count_text)
 
         # Restore the user's selection + scroll, so the periodic refresh doesn't
         # clear what they had highlighted or jump the table around.
@@ -212,6 +216,12 @@ class ModulesDialog(AutoRefreshTableDialog):
         self._count_label.setText("Failed to enumerate modules.")
         QMessageBox.critical(
             self, "Modules", f"Failed to enumerate modules:\n\n{message}"
+        )
+
+    def _on_polling_stopped(self) -> None:
+        self._count_label.setText(
+            "Failed to enumerate modules — auto-refresh stopped. "
+            "Close and reopen this window to retry."
         )
 
     def _selected_module(self) -> Optional[dict]:
