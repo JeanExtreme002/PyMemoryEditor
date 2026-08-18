@@ -69,19 +69,11 @@ def detach_worker(worker: QThread) -> None:
     way park them here too, so threads that outlived their owner are all in one
     place.
     """
-    # Sweep: Qt emits `finished` before isFinished() flips, so a worker that
-    # finished while being detached can miss both its reaper and the check
-    # below, and would sit here for good.
-    for parked in list(_DETACHED_WORKERS):
-        try:
-            if parked.isFinished():
-                _reap_detached_worker(parked)
-        except RuntimeError:  # already deleted
-            _DETACHED_WORKERS.remove(parked)
-
     worker.setParent(None)
     _DETACHED_WORKERS.append(worker)
     worker.finished.connect(lambda: _reap_detached_worker(worker))
+    # A worker that finished before this connect already emitted, so the reaper
+    # would never run and it would sit here for good.
     if worker.isFinished():
         _reap_detached_worker(worker)
 
