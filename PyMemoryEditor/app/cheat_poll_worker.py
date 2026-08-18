@@ -132,7 +132,7 @@ class _CheatPollWorker(QThread):
         failures: List[Tuple[int, type, int, str]] = []
         for address, pytype, length, value in pending:
             if self._stopping():
-                break  # same reason as _poll_once: the handle is about to go
+                break  # the handle is about to go — see _poll_once
             try:
                 self._process.write_process_memory(address, pytype, length, value)
             except Exception as exc:  # noqa: BLE001
@@ -213,9 +213,9 @@ class _CheatPollWorker(QThread):
                     values_by_address = None
 
             for address in addresses:
-                # Checked per entry, not once per tick: every entry is a syscall
-                # and shutdown() closes the handle shortly after stop(), so a
-                # write landing on a recycled handle would hit another process.
+                # Per entry, not per tick: shutdown() closes the handle right
+                # after stop(), and a write on a recycled one hits another
+                # process.
                 if self._stopping():
                     return results
                 frozen_value, is_frozen = freeze_by_addr[(pytype, length, address)]

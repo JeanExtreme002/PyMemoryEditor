@@ -884,13 +884,9 @@ class MainWindow(QMainWindow):
             old_cheat.shutdown()
         except Exception:
             pass
-        # The old poller has been stopped, so the handle can go. Accepted
-        # window: a worker that blew its join is *detached*, not stopped, and
-        # can still be inside a syscall here (a recycled HANDLE on Windows, a
-        # deallocated Mach port on macOS). The cheat poller is the one that
-        # *writes*, which is why it now checks the stop flag per entry rather
-        # than per tick — blowing the join takes a single syscall hanging for a
-        # second, not a slow table.
+        # Accepted window: a worker that blew its join is detached, not
+        # stopped, so it can still be inside a syscall here. The cheat poller
+        # writes, which is why it checks the stop flag per entry.
         try:
             old_process.close()
         except Exception:
@@ -913,11 +909,9 @@ class MainWindow(QMainWindow):
         # dialog mid-teardown.
         self._heartbeat.stop()
 
-        # Dialogs next, and *before* _shutdown_worker: it pumps the event
-        # loop, and a dialog still polling during that pump can reach
-        # _handle_failed and pop a modal mid-teardown — the same reason the
-        # heartbeat is stopped first. Closing them also joins their threads,
-        # which this window's destruction would otherwise take down with it.
+        # Before _shutdown_worker for the same reason as the heartbeat: it
+        # pumps the loop, and a dialog still polling during that pump can pop a
+        # modal mid-teardown. Closing them also joins their threads.
         for attr in (
             "_memory_map",
             "_threads_dialog",

@@ -721,8 +721,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
             )
 
     def _on_error(self, message: str) -> None:
-        # A metacall queued before _teardown disconnected still gets delivered,
-        # and a modal over a dismissed dialog is the hazard this PR is about.
+        # A metacall queued before _teardown disconnected still arrives.
         if self._is_dismissed():
             return
         QMessageBox.critical(self, "Pointer Scan", message)

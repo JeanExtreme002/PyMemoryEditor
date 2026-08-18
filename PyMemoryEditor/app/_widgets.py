@@ -69,10 +69,9 @@ def detach_worker(worker: QThread) -> None:
     way park them here too, so threads that outlived their owner are all in one
     place.
     """
-    # Opportunistic sweep: a worker that finished between its caller's
-    # isRunning() check and the connect below never reaches its reaper, and Qt
-    # emits `finished` before isFinished() flips — so the check afterwards can
-    # miss it too. Pruning here keeps those from piling up.
+    # Sweep: Qt emits `finished` before isFinished() flips, so a worker that
+    # finished while being detached can miss both its reaper and the check
+    # below, and would sit here for good.
     for parked in list(_DETACHED_WORKERS):
         try:
             if parked.isFinished():
