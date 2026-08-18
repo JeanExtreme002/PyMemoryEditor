@@ -323,19 +323,6 @@ def test_a_late_finished_does_not_retire_the_worker_that_replaced_it(make_dialog
     assert stale.deleted  # and the one that really finished is retired
 
 
-def test_an_explicit_refresh_reports_its_failure_immediately(qapp, make_dialog):
-    """A retry the user asked for answers now, not after the grace window."""
-    dialog = make_dialog()  # production grace: 3 s
-    dialog.failing = True
-
-    dialog.refresh()
-    _spin(qapp, 200)
-
-    assert len(dialog.errors) == 1
-    assert dialog.gave_up == 0  # reported on its own merit, not by giving up
-    assert dialog._auto_timer.isActive()
-
-
 def test_nothing_fetches_after_the_dialog_was_torn_down(qapp, make_dialog):
     """The teardown latch is one-way, so a fetch started later is unjoinable."""
     dialog = make_dialog()

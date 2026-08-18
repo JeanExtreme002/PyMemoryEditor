@@ -513,7 +513,6 @@ def main(argv=None):
     from .open_process_dialog import OpenProcessDialog
 
     from ._icon import app_icon
-    from ._widgets import wait_for_detached_workers
 
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("PyMemoryEditor")
@@ -539,20 +538,12 @@ def main(argv=None):
     try:
         app.exec()
     finally:
-        # A dialog fetch worker or the cheat poller that wouldn't stop in time
-        # was *detached* (see shutdown_worker_thread) and may still be reading
-        # through this handle. Closing it underneath one is a read-after-close,
-        # so wait for them first — and if one is still wedged, leave the handle
-        # to the OS, which reclaims it as this process exits anyway. There is no
-        # event loop left here, so this has to be the blocking wait rather than
-        # the signal-driven `call_when_detached_workers_finish`.
-        if wait_for_detached_workers(2000):
-            try:
-                # `process` is only the handle the picker opened; File → Change
-                # Process… released that one and attached the window to another.
-                window.process.close()
-            except Exception:
-                pass
+        try:
+            # `process` is only the handle the picker opened; File → Change
+            # Process… released that one and attached the window to another.
+            window.process.close()
+        except Exception:
+            pass
 
 
 def main_cli(argv=None):

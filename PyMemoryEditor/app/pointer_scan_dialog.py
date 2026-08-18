@@ -626,7 +626,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         worker.rows_ready.connect(self._append_rows)
         worker.error.connect(self._on_error)
         worker.finished_ok.connect(self._on_finished_ok)
-        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        worker.finished.connect(self._on_worker_finished)
         self._worker = worker
         worker.start()
 
@@ -736,22 +736,12 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
             self._count_label.setText(f"{shown:,} pointer path(s).")
         self._export_btn.setEnabled(shown > 0)
 
-    def _on_worker_finished(self, worker) -> None:
-        """Retire the scan that just finished — and only that one.
-
-        No scan can currently be replaced while another is running (the Scan
-        button is disabled until this slot re-enables it), so the queued-signal
-        race that bites the polling dialogs can't happen here yet. Matching
-        their shape anyway: re-enabling the UI or dropping ``_worker`` on behalf
-        of a scan that was already superseded would be wrong the moment that
-        precondition changes.
-        """
-        if worker is not self._worker:
-            worker.deleteLater()
-            return
+    def _on_worker_finished(self) -> None:
+        worker = self._worker
         self._worker = None
         self._set_scanning(False)
-        worker.deleteLater()
+        if worker is not None:
+            worker.deleteLater()
 
     # ----------------------------------------------------------- actions --- #
 

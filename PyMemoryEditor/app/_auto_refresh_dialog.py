@@ -91,8 +91,6 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         # keystroke), so the "stopped" note survives instead of being replaced
         # by a count that looks live.
         self._polling_gave_up = False
-        # Set by refresh() only, so it can never fire on a timer tick.
-        self._report_next_failure = False
 
     def _start_auto_refresh(self) -> None:
         """Begin polling. Call once, after the first ``refresh()``.
@@ -124,6 +122,9 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         Called only for a failure the user needs to see — the first fetch, or
         the one that makes the poll give up — and never twice for the same
         error (see :meth:`_handle_failed`), so a modal dialog is safe here.
+        A retry the user asks for while the window already has data waits for
+        that give-up rather than reporting on the spot; the status line still
+        carries the previous failure in the meantime.
         """
         raise NotImplementedError
 
@@ -160,15 +161,6 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         self._last_error = None
         self._failing_since = None
         self._polling_gave_up = False
-        # An explicit retry deserves an answer either way: without this, a
-        # refresh against a still-dead target would sit silent until the grace
-        # window expired, because `_has_data` is still True from before.
-        #
-        # ``_start_fetch`` binds it to the fetch it starts, so it answers the
-        # request and nothing later. A fetch already in flight when this runs
-        # was started before the user asked for anything, so the flag waits for
-        # the next one rather than being consumed by that stranger's result.
-        self._report_next_failure = True
         if self._auto_timer is not None and not self._auto_timer.isActive():
             self._auto_timer.start()
         self._start_fetch()
@@ -194,18 +186,9 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         if not self._has_data:
             self._set_loading_hint()
 
-        # Consume the "the user asked for this" flag into *this* fetch: bound to
-        # the outcome that answers the request, and cleared here so it can't
-        # leak into an unrelated failure minutes later. A refresh that found a
-        # fetch already in flight left it set, and it applies to this one.
-        asked_for_it = self._report_next_failure
-        self._report_next_failure = False
-
         worker = _DataWorker(self._fetch_data, self)
         worker.ready.connect(self._handle_ready)
-        worker.failed.connect(
-            lambda message, asked=asked_for_it: self._handle_failed(message, asked)
-        )
+        worker.failed.connect(self._handle_failed)
         worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
         self._worker = worker
         worker.start()
@@ -216,7 +199,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         self._failing_since = None
         self._on_data_ready(data)
 
-    def _handle_failed(self, message: str, asked_for_it: bool = False) -> None:
+    def _handle_failed(self, message: str) -> None:
         """Handle a failed fetch: report it only when the user needs to know.
 
         Once the target is gone (or its handle was closed by File → Change
@@ -231,10 +214,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         * the **first** fetch fails — the window is empty, so there is nothing
           to look at but the error;
         * the poll **gives up** after ``_FAILURE_GRACE_MS`` of continuous
-          failure — the table is frozen on stale data from here on;
-        * the fetch was one the user explicitly asked for (``asked_for_it``,
-          set by :meth:`refresh`) — a retry that answers with silence is worse
-          than one that answers with the error.
+          failure — the table is frozen on stale data from here on.
 
         Everything in between heals quietly: the table keeps its last good rows
         and the next tick usually recovers. That "quietly" is load-bearing, not
@@ -262,9 +242,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         # same error quiet, and its None-ness marks a window that has never
         # reported anything (cleared by a successful fetch and by refresh()).
         never_reported_yet = not self._has_data and self._last_error is None
-        if (
-            gave_up or never_reported_yet or asked_for_it
-        ) and message != self._last_error:
+        if (gave_up or never_reported_yet) and message != self._last_error:
             self._last_error = message
             self._on_data_failed(message)
 

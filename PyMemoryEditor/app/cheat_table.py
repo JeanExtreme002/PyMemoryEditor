@@ -109,9 +109,8 @@ class CheatTable(QWidget):
         iterations: draining queued writes and reading every cheat entry can
         outlast the wait on a big table or a hung target. That case goes through
         ``shutdown_worker_thread`` rather than being ignored, so the poller is
-        detached — kept alive away from this widget (which is about to be
-        deleted) and parked where ``call_when_detached_workers_finish`` can hold
-        the process handle open until it really is done reading.
+        *detached* — kept alive away from this widget instead of being deleted
+        with it, which would destroy a running QThread and abort the process.
         """
         # Stop the publish timer first so no fresh snapshot races our shutdown.
         if self._publish_timer.isActive():

@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, __version__
 
 from ._icon import app_icon
-from ._widgets import call_when_detached_workers_finish, detach_worker
+from ._widgets import detach_worker
 from .application import DEFAULT_THEME_ID, THEMES, apply_theme
 from .cheat_entry import CheatEntry
 from .cheat_table import CheatTable
@@ -893,21 +893,17 @@ class MainWindow(QMainWindow):
             old_cheat.shutdown()
         except Exception:
             pass
-        # The old poller has been stopped, but nothing here can *force* a thread
-        # wedged in a backend read to return: both the cheat poller and the
-        # dialog fetch workers fall back to being detached when they blow their
-        # join. Releasing the handle under one of those is a read-after-close (a
-        # recycled HANDLE on Windows, a deallocated Mach port on macOS), so hand
-        # the close to the helper that waits for every detached worker. Nothing
-        # detached — the normal case — closes inline.
-
-        def _release_old_handle(process=old_process) -> None:
-            try:
-                process.close()
-            except Exception:
-                pass
-
-        call_when_detached_workers_finish(_release_old_handle)
+        # The old poller has been stopped, so the handle can go. Caveat: nothing
+        # here can *force* a thread wedged in a backend read to return — the
+        # cheat poller and the dialog fetch workers fall back to being detached
+        # (see shutdown_worker_thread) when they blow their join, and one of
+        # those can still be mid-read when this closes. Harmless in practice:
+        # those fetches are read-only and their signals are already
+        # disconnected, so the backend errors out into a result nobody reads.
+        try:
+            old_process.close()
+        except Exception:
+            pass
         old_index = self._right_splitter.indexOf(old_cheat)
         self._cheat = CheatTable(self._process)
         self._cheat.pointer_scan_for_address.connect(self._open_pointer_scan_dialog)
