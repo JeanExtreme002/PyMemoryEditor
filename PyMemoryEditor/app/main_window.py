@@ -885,10 +885,12 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         # The old poller has been stopped, so the handle can go. Accepted
-        # window: a worker that blew its join is *detached*, not stopped, so it
-        # can still be inside a read here (a recycled HANDLE on Windows, a
-        # deallocated Mach port on macOS). The fetches are read-only and their
-        # results disconnected, so nothing wrong reaches the UI.
+        # window: a worker that blew its join is *detached*, not stopped, and
+        # can still be inside a syscall here (a recycled HANDLE on Windows, a
+        # deallocated Mach port on macOS). The cheat poller is the one that
+        # *writes*, which is why it now checks the stop flag per entry rather
+        # than per tick — blowing the join takes a single syscall hanging for a
+        # second, not a slow table.
         try:
             old_process.close()
         except Exception:
@@ -911,21 +913,11 @@ class MainWindow(QMainWindow):
         # dialog mid-teardown.
         self._heartbeat.stop()
 
-        # The cheat poller is a child widget but its closeEvent is *not*
-        # guaranteed to fire on a top-level window close — only on an explicit
-        # close of the child. Drive it directly so the QThread is stopped
-        # before the process handle goes away in `application.main`'s finally.
-        try:
-            self._cheat.shutdown()
-        except Exception:
-            pass
-
-        self._shutdown_worker()
-
-        # Close worker-bearing auxiliary dialogs so their own closeEvent stops
-        # and joins the background thread. Otherwise the imminent destruction of
-        # this window would destroy those still-running QThreads and abort the
-        # process ("QThread: Destroyed while thread is still running").
+        # Dialogs next, and *before* _shutdown_worker: it pumps the event
+        # loop, and a dialog still polling during that pump can reach
+        # _handle_failed and pop a modal mid-teardown — the same reason the
+        # heartbeat is stopped first. Closing them also joins their threads,
+        # which this window's destruction would otherwise take down with it.
         for attr in (
             "_memory_map",
             "_threads_dialog",
@@ -942,6 +934,17 @@ class MainWindow(QMainWindow):
         # both lists on purpose — it resolves synchronously, no thread.)
         for viewer in list(self._hex_viewers):
             viewer.close()
+
+        # The cheat poller is a child widget but its closeEvent is *not*
+        # guaranteed to fire on a top-level window close — only on an explicit
+        # close of the child. Drive it directly so the QThread is stopped
+        # before the process handle goes away in `application.main`'s finally.
+        try:
+            self._cheat.shutdown()
+        except Exception:
+            pass
+
+        self._shutdown_worker()
 
         self.closing.emit()
         super().closeEvent(event)

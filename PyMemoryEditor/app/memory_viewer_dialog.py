@@ -208,6 +208,9 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
 
     def _on_read_result(self, result) -> None:
         """Render a finished read (UI thread). ``result`` is the fetch tuple."""
+        # A metacall queued before _teardown disconnected still gets delivered.
+        if self._is_dismissed():
+            return
         addr, size, data, exc = result
         if exc is not None:
             self._dump.setPlainText("")
