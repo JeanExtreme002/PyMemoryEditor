@@ -289,7 +289,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
 
         worker = _ProcessListWorker(self)
         worker.rows_ready.connect(self._on_rows_ready)
-        worker.finished.connect(self._on_scan_finished)
+        worker.finished.connect(lambda w=worker: self._on_scan_finished(w))
         self._scan_worker = worker
         worker.start()
 
@@ -321,11 +321,19 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
                     self._table.selectRow(row)
                     break
 
-    def _on_scan_finished(self) -> None:
-        worker = self._scan_worker
-        self._scan_worker = None
-        if worker is not None:
-            worker.deleteLater()
+    def _on_scan_finished(self, worker) -> None:
+        """Retire the enumeration that just finished — and only that one.
+
+        ``finished`` is queued, so it can land after a refresh already started a
+        replacement (the worker leaves ``run()`` before its signal is
+        delivered, and the in-flight guard in ``_populate_processes`` lets the
+        next scan through in that window). Clearing ``_scan_worker`` blindly
+        would drop the reference to the running replacement and
+        ``deleteLater()`` it, which aborts the process.
+        """
+        if worker is self._scan_worker:
+            self._scan_worker = None
+        worker.deleteLater()
 
     def _teardown(self) -> None:
         self._refresh_timer.stop()
