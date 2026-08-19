@@ -3,22 +3,14 @@
 """
 Tests for ``PyMemoryEditor/app/open_process_dialog.py``.
 
-Regression cover for issue #75: the picker re-enumerates processes every few
-seconds, and each tick re-selected the previously picked row. Re-selecting moves
-the viewport — Qt ``scrollTo``s the current index — so as soon as the user had
-clicked any row, scrolling through the list snapped back to that row on every
-tick.
+Regression cover for issue #75 and its neighbours: the picker's re-enumeration
+tick used to move the viewport, overwrite the "Process:" field, and — via the
+Filter box — retarget the selection at a process the user never chose.
 
-The same tick also echoed the restored selection's PID into the "Process:" field,
-overwriting whatever the user had typed there. Typing in the Filter box did the
-same thing by a different route: hiding the selected row makes Qt remap the
-selection onto whatever row took that index, so the picker silently pointed at a
-process the user never chose.
-
-The contract now: only a real pick — clicking a row, arrowing onto one, or
+The contract: only a real pick — clicking a row, arrowing onto one, or
 double-clicking one — may write to the "Process:" field or change what the picker
-targets. A refresh tick or a filter keystroke must leave the user's scroll
-position, selection and typed input alone.
+targets. A refresh tick and a filter keystroke must leave both alone, along with
+the scroll position.
 
 Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
 the ``app`` extra).
@@ -54,9 +46,8 @@ def dialog(qapp, monkeypatch):
     """A shown picker whose own enumeration is inert.
 
     The real worker walks the live process table on a thread, so its results
-    could land mid-test and overwrite the rows we feed in. The tests call
-    ``_on_rows_ready`` directly instead, which is exactly what a refresh tick
-    does once the scan returns.
+    could land mid-test; the tests call ``_on_rows_ready`` directly instead,
+    which is what a refresh tick does once the scan returns.
     """
     from PyMemoryEditor.app import open_process_dialog
 
@@ -79,14 +70,14 @@ def dialog(qapp, monkeypatch):
 
 
 def test_refresh_keeps_the_scroll_position_after_a_row_was_clicked(qapp, dialog):
-    """The #75 repro: click a row near the top, scroll away, wait for a tick."""
+    """The #75 repro: click a row, scroll away, wait for a tick."""
     rows = _rows(300)
     dialog._on_rows_ready(rows)
-    dialog._table.selectRow(2)  # the single click from the report
+    dialog._table.selectRow(2)
     qapp.processEvents()
 
     scrollbar = dialog._table.verticalScrollBar()
-    scrollbar.setValue(150)  # the user scrolls down, away from the selection
+    scrollbar.setValue(150)
     qapp.processEvents()
     assert scrollbar.value() == 150, "the list must be scrollable for this to mean anything"
 
@@ -94,8 +85,7 @@ def test_refresh_keeps_the_scroll_position_after_a_row_was_clicked(qapp, dialog)
     qapp.processEvents()
     assert scrollbar.value() == 150
 
-    # The user-facing property behind that number: the restored selection must
-    # not have been dragged into view.
+    # The property behind that number: the restored selection stayed off-screen.
     selected = dialog._table.selectionModel().selectedRows()
     assert selected, "the tick is supposed to restore the selection"
     row_rect = dialog._table.visualRect(selected[0])
@@ -118,11 +108,7 @@ def test_refresh_still_restores_the_selection(qapp, dialog):
 
 
 def test_refresh_does_not_overwrite_a_typed_process_name(qapp, dialog):
-    """Clicking a row fills the entry; a refresh tick must not refill it.
-
-    Otherwise a user who clicks a row, then types a name and presses Enter more
-    than one tick later opens the PID they clicked instead of what they typed.
-    """
+    """A tick must not refill the entry the user typed into."""
     rows = _rows(300)
     dialog._on_rows_ready(rows)
     dialog._table.selectRow(2)
@@ -130,7 +116,7 @@ def test_refresh_does_not_overwrite_a_typed_process_name(qapp, dialog):
     assert dialog._entry.text(), "clicking a row is supposed to fill the entry"
 
     dialog._entry.setText("notepad.exe")
-    dialog._on_rows_ready(rows)  # the auto-refresh tick
+    dialog._on_rows_ready(rows)
     qapp.processEvents()
     assert dialog._entry.text() == "notepad.exe"
 
@@ -146,13 +132,7 @@ def test_clicking_a_row_still_fills_the_entry(qapp, dialog):
 
 
 def test_double_clicking_a_row_opens_that_row(qapp, dialog, monkeypatch):
-    """The click is authoritative, even when the entry says something else.
-
-    Clicking a row that is already selected emits no ``selectionChanged``, so
-    the entry can still hold a name typed earlier — and ``_try_open`` only reads
-    the entry. Without this, double-clicking the highlighted row opened whatever
-    had been typed instead.
-    """
+    """The click wins over the entry, which ``_try_open`` is all that reads."""
     dialog._on_rows_ready(_rows(300))
     dialog._table.selectRow(2)
     qapp.processEvents()
@@ -229,11 +209,7 @@ def test_arrowing_onto_a_row_fills_the_entry(qapp, dialog):
 
 
 def test_refresh_under_an_active_filter_keeps_the_selection(qapp, dialog):
-    """The two fixes have to compose: the restore walks the *filtered* rows.
-
-    A tick that can't find the picked PID among the visible rows would silently
-    drop the selection.
-    """
+    """The two fixes compose: the restore walks the *filtered* rows."""
     rows = _rows(300)
     dialog._on_rows_ready(rows)
     dialog._table.selectRow(2)
@@ -241,8 +217,7 @@ def test_refresh_under_an_active_filter_keeps_the_selection(qapp, dialog):
     picked_pid = dialog._selected_pid()
     assert picked_pid is not None
 
-    # `_rows` names row i "proc{i:03d}" and gives it PID 1000 + i, so this
-    # filter leaves exactly the picked row visible.
+    # `_rows` pairs PID 1000 + i with the name "proc{i:03d}".
     dialog._filter_edit.setText(f"proc{picked_pid - 1000:03d}")
     qapp.processEvents()
     assert dialog._proxy.rowCount() == 1

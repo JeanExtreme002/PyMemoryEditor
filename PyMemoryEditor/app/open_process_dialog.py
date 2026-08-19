@@ -298,12 +298,9 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
     def _on_rows_ready(self, rows) -> None:
         selected_pid = self._selected_pid()
 
-        # Restoring the selection below re-triggers Qt's scrollTo(current),
-        # which yanked the list back to the selected row on every refresh tick:
-        # once any row had been clicked, scrolling through a long process list
-        # was impossible (#75). Remember where the user was and put them back
-        # afterwards. Rebuilding the model itself is not the problem — Qt defers
-        # the scrollbar range update, so the offset survives it.
+        # Restoring the selection below re-triggers Qt's scrollTo(current), which
+        # jumped the list back to the selected row on every tick (#75). The
+        # rebuild is harmless on its own: Qt defers the scrollbar range update.
         scrollbar = self._table.verticalScrollBar()
         scroll_offset = scrollbar.value()
 
@@ -357,23 +354,18 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
     def _on_filter_changed(self, text: str) -> None:
         selected_pid = self._selected_pid()
 
-        # Filtering the selected row out of view doesn't clear the selection: Qt
-        # remaps it onto whatever row took that index, so the picker would point
-        # at a process the user never chose. Neither that remap nor the cleanup
-        # after it is a pick, so neither may reach the entry.
+        # Hiding the selected row doesn't clear the selection: Qt remaps it onto
+        # whatever row took that index, retargeting the picker silently.
         with self._programmatic_selection():
             self._proxy.setFilterFixedString(text)
             if selected_pid is not None and self._selected_pid() != selected_pid:
                 self._table.selectionModel().clearSelection()
 
     def _on_row_activated(self, index) -> None:
-        """Open the row that was double-clicked, whatever the entry holds.
+        """Open the double-clicked row, whatever the entry holds.
 
-        Clicking a row that is already selected emits no ``selectionChanged``
-        (the table is single-selection), so the entry can still hold a name the
-        user typed earlier. The double-click is the more specific instruction of
-        the two, so it wins — and goes through the entry, which keeps one open
-        path and shows what is being opened.
+        Clicking an already-selected row emits no ``selectionChanged``, so the
+        entry can still hold a name typed earlier.
         """
         pid = self._proxy.data(self._proxy.index(index.row(), self.COL_PID), Qt.UserRole)
         if pid is not None:
@@ -382,14 +374,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
 
     @contextmanager
     def _programmatic_selection(self) -> Iterator[None]:
-        """Mark a selection change the user didn't make.
-
-        ``_on_selection_changed`` mirrors the selected PID into the "Process:"
-        field, which is what a click should do and what a refresh tick or a
-        filter keystroke must not: a user who clicked a row and then typed a
-        process name had their text replaced by a PID, so pressing Enter opened
-        the wrong target.
-        """
+        """Mark a selection change the user didn't make, so it can't reach the entry."""
         self._selection_is_programmatic = True
         try:
             yield
