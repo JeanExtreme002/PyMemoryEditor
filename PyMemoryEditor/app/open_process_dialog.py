@@ -8,7 +8,8 @@ case-insensitive toggle, surfacing the library's ``case_sensitive`` flag).
 """
 import ctypes
 import sys
-from typing import Callable, List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Callable, Iterator, List, Optional, Tuple
 
 import psutil
 
@@ -173,6 +174,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         super().__init__(parent)
         self.process: Optional[AbstractProcess] = None
         self._scan_worker: Optional[_ProcessListWorker] = None
+        self._selection_is_programmatic = False
 
         self.setWindowTitle("Select a Process")
         self.setWindowIcon(app_icon())
@@ -239,7 +241,8 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         self._table.horizontalHeader().setSectionResizeMode(
             self.COL_NAME, QHeaderView.Stretch
         )
-        self._table.doubleClicked.connect(lambda _i: self._try_open())
+        self._table.clicked.connect(self._point_entry_at)
+        self._table.doubleClicked.connect(self._on_row_activated)
         self._table.selectionModel().selectionChanged.connect(
             self._on_selection_changed
         )
@@ -296,6 +299,12 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
     def _on_rows_ready(self, rows) -> None:
         selected_pid = self._selected_pid()
 
+        # Restoring the selection below re-triggers Qt's scrollTo(current), which
+        # jumped the list back to the selected row on every tick (#75). The
+        # rebuild is harmless on its own: Qt defers the scrollbar range update.
+        scrollbar = self._table.verticalScrollBar()
+        scroll_offset = scrollbar.value()
+
         self._model.setRowCount(0)
         for pid, name, mem, user in rows:
             pid_item = NumericItem(str(pid))
@@ -318,8 +327,11 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
             for row in range(self._proxy.rowCount()):
                 idx = self._proxy.index(row, self.COL_PID)
                 if self._proxy.data(idx, Qt.UserRole) == selected_pid:
-                    self._table.selectRow(row)
+                    with self._programmatic_selection():
+                        self._table.selectRow(row)
                     break
+
+        scrollbar.setValue(scroll_offset)
 
     def _on_scan_finished(self, worker) -> None:
         """Retire the enumeration that just finished — and only that one.
@@ -341,9 +353,44 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         self._scan_worker = None
 
     def _on_filter_changed(self, text: str) -> None:
-        self._proxy.setFilterFixedString(text)
+        selected_pid = self._selected_pid()
+
+        # Hiding the selected row doesn't clear the selection: Qt remaps it onto
+        # whatever row took that index, retargeting the picker silently.
+        with self._programmatic_selection():
+            self._proxy.setFilterFixedString(text)
+            if selected_pid is not None and self._selected_pid() != selected_pid:
+                self._table.selectionModel().clearSelection()
+
+    def _point_entry_at(self, index) -> None:
+        """Aim the entry at a clicked row.
+
+        ``selectionChanged`` doesn't fire when the row was already selected, so
+        without this the entry keeps whatever it held — a name typed earlier, or
+        nothing — while the row sits highlighted as if it were the target.
+        """
+        pid = self._proxy.data(self._proxy.index(index.row(), self.COL_PID), Qt.UserRole)
+        if pid is not None:
+            self._entry.setText(str(pid))
+
+    def _on_row_activated(self, index) -> None:
+        """Open the double-clicked row, whatever the entry holds."""
+        self._point_entry_at(index)
+        self._try_open()
+
+    @contextmanager
+    def _programmatic_selection(self) -> Iterator[None]:
+        """Mark a selection change the user didn't make, so it can't reach the entry."""
+        self._selection_is_programmatic = True
+        try:
+            yield
+        finally:
+            self._selection_is_programmatic = False
 
     def _on_selection_changed(self, *_args) -> None:
+        if self._selection_is_programmatic:
+            return
+
         pid = self._selected_pid()
         if pid is not None:
             self._entry.setText(str(pid))
