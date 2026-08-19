@@ -122,7 +122,7 @@ def test_refresh_does_not_overwrite_a_typed_process_name(qapp, dialog):
 
 
 def test_clicking_a_row_still_fills_the_entry(qapp, dialog):
-    """The guard above must only cover the refresh, not a real selection."""
+    """A click is a pick: the refresh guard must not swallow it too."""
     dialog._on_rows_ready(_rows(300))
     qapp.processEvents()
 
@@ -132,7 +132,7 @@ def test_clicking_a_row_still_fills_the_entry(qapp, dialog):
 
 
 def test_double_clicking_a_row_opens_that_row(qapp, dialog, monkeypatch):
-    """The click wins over the entry, which ``_try_open`` is all that reads."""
+    """The double-click wins over the entry, which is all ``_try_open`` reads."""
     dialog._on_rows_ready(_rows(300))
     dialog._table.selectRow(2)
     qapp.processEvents()
@@ -191,7 +191,7 @@ def test_filtering_keeps_a_selection_that_survives_the_filter(qapp, dialog):
 
 
 def test_arrowing_onto_a_row_fills_the_entry(qapp, dialog):
-    """A keyboard pick is a pick too — the guard must not swallow it."""
+    """Arrowing onto a row is a pick too, so it must reach the entry."""
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
 
@@ -209,7 +209,7 @@ def test_arrowing_onto_a_row_fills_the_entry(qapp, dialog):
 
 
 def test_refresh_under_an_active_filter_keeps_the_selection(qapp, dialog):
-    """The two fixes compose: the restore walks the *filtered* rows."""
+    """A tick under a filter must find the picked PID among the *filtered* rows."""
     rows = _rows(300)
     dialog._on_rows_ready(rows)
     dialog._table.selectRow(2)
