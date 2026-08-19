@@ -1,0 +1,109 @@
+# -*- coding: utf-8 -*-
+
+"""
+Tests for ``PyMemoryEditor/app/open_process_dialog.py``.
+
+Regression cover for issue #75: the picker re-enumerates processes every few
+seconds, and each tick re-selected the previously picked row. Re-selecting moves
+the viewport — Qt ``scrollTo``s the current index — so as soon as the user had
+clicked any row, scrolling through the list snapped back to that row on every
+tick.
+
+The contract now: a refresh may replace the rows and restore the selection, but
+it must leave the user's scroll position where they put it.
+
+Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
+the ``app`` extra).
+"""
+
+import os
+from typing import List, Tuple
+
+import pytest
+
+
+pytest.importorskip("PySide6", reason="App tests require PySide6 (install with [app] extra).")
+
+# Offscreen platform plugin: no display server needed, runs on CI.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    """A single QApplication for the module (Qt allows only one per process)."""
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+def _rows(count: int) -> List[Tuple[int, str, int, str]]:
+    """Rows shaped like ``_ProcessListWorker.rows_ready`` emits them."""
+    return [(1000 + i, f"proc{i:03d}", 1024 * (i + 1), "user") for i in range(count)]
+
+
+@pytest.fixture
+def dialog(qapp, monkeypatch):
+    """A shown picker whose own enumeration is inert.
+
+    The real worker walks the live process table on a thread, so its results
+    could land mid-test and overwrite the rows we feed in. The tests call
+    ``_on_rows_ready`` directly instead, which is exactly what a refresh tick
+    does once the scan returns.
+    """
+    from PyMemoryEditor.app import open_process_dialog
+
+    class _InertWorker(open_process_dialog._ProcessListWorker):
+        def run(self) -> None:
+            return
+
+    monkeypatch.setattr(open_process_dialog, "_ProcessListWorker", _InertWorker)
+
+    dlg = open_process_dialog.OpenProcessDialog()
+    dlg._refresh_timer.stop()  # refreshes are driven by hand below
+    dlg.show()
+    qapp.processEvents()
+    try:
+        yield dlg
+    finally:
+        dlg.close()
+        dlg.deleteLater()
+        qapp.processEvents()
+
+
+def test_refresh_keeps_the_scroll_position_after_a_row_was_clicked(qapp, dialog):
+    """The #75 repro: click a row near the top, scroll away, wait for a tick."""
+    rows = _rows(300)
+    dialog._on_rows_ready(rows)
+    dialog._table.selectRow(2)  # the single click from the report
+    qapp.processEvents()
+
+    scrollbar = dialog._table.verticalScrollBar()
+    scrollbar.setValue(150)  # the user scrolls down, away from the selection
+    qapp.processEvents()
+    assert scrollbar.value() == 150, "the list must be scrollable for this to mean anything"
+
+    dialog._on_rows_ready(rows)  # the auto-refresh tick
+    qapp.processEvents()
+    assert scrollbar.value() == 150
+
+    # The user-facing property behind that number: the restored selection must
+    # not have been dragged into view.
+    selected = dialog._table.selectionModel().selectedRows()
+    assert selected, "the tick is supposed to restore the selection"
+    row_rect = dialog._table.visualRect(selected[0])
+    assert not row_rect.intersects(dialog._table.viewport().rect())
+
+
+def test_refresh_still_restores_the_selection(qapp, dialog):
+    """Preserving the viewport must not cost the selection the picker keeps."""
+    rows = _rows(300)
+    dialog._on_rows_ready(rows)
+    dialog._table.selectRow(2)
+    qapp.processEvents()
+
+    selected_pid = dialog._selected_pid()
+    assert selected_pid is not None
+
+    dialog._on_rows_ready(rows)
+    qapp.processEvents()
+    assert dialog._selected_pid() == selected_pid

@@ -296,6 +296,15 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
     def _on_rows_ready(self, rows) -> None:
         selected_pid = self._selected_pid()
 
+        # Restoring the selection below re-triggers Qt's scrollTo(current),
+        # which yanked the list back to the selected row on every refresh tick:
+        # once any row had been clicked, scrolling through a long process list
+        # was impossible (#75). Remember where the user was and put them back
+        # afterwards. Rebuilding the model itself is not the problem — Qt defers
+        # the scrollbar range update, so the offset survives it.
+        scrollbar = self._table.verticalScrollBar()
+        scroll_offset = scrollbar.value()
+
         self._model.setRowCount(0)
         for pid, name, mem, user in rows:
             pid_item = NumericItem(str(pid))
@@ -320,6 +329,8 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
                 if self._proxy.data(idx, Qt.UserRole) == selected_pid:
                     self._table.selectRow(row)
                     break
+
+        scrollbar.setValue(scroll_offset)
 
     def _on_scan_finished(self, worker) -> None:
         """Retire the enumeration that just finished — and only that one.
