@@ -9,7 +9,7 @@ case-insensitive toggle, surfacing the library's ``case_sensitive`` flag).
 import ctypes
 import sys
 from contextlib import contextmanager
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Iterator, List, Optional, Tuple
 
 import psutil
 
@@ -381,7 +381,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         self._try_open()
 
     @contextmanager
-    def _programmatic_selection(self):
+    def _programmatic_selection(self) -> Iterator[None]:
         """Mark a selection change the user didn't make.
 
         ``_on_selection_changed`` mirrors the selected PID into the "Process:"

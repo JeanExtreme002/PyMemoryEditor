@@ -15,9 +15,10 @@ same thing by a different route: hiding the selected row makes Qt remap the
 selection onto whatever row took that index, so the picker silently pointed at a
 process the user never chose.
 
-The contract now: only a real pick — a click, or a double-click — may write to the
-"Process:" field or change what the picker targets. A refresh or a filter
-keystroke must leave the user's scroll position, selection and typed input alone.
+The contract now: only a real pick — clicking a row, arrowing onto one, or
+double-clicking one — may write to the "Process:" field or change what the picker
+targets. A refresh tick or a filter keystroke must leave the user's scroll
+position, selection and typed input alone.
 
 Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
 the ``app`` extra).
@@ -33,9 +34,6 @@ pytest.importorskip("PySide6", reason="App tests require PySide6 (install with [
 
 # Offscreen platform plugin: no display server needed, runs on CI.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-
-from PySide6.QtCore import Qt  # noqa: E402 — import guarded by importorskip above
 
 
 @pytest.fixture(scope="module")
@@ -147,7 +145,7 @@ def test_clicking_a_row_still_fills_the_entry(qapp, dialog):
     assert dialog._entry.text() == str(dialog._selected_pid())
 
 
-def test_double_clicking_a_row_opens_that_row(qapp, dialog):
+def test_double_clicking_a_row_opens_that_row(qapp, dialog, monkeypatch):
     """The click is authoritative, even when the entry says something else.
 
     Clicking a row that is already selected emits no ``selectionChanged``, so
@@ -162,7 +160,7 @@ def test_double_clicking_a_row_opens_that_row(qapp, dialog):
 
     dialog._entry.setText("notepad.exe")
     opened = []
-    dialog._try_open = lambda: opened.append(dialog._entry.text())
+    monkeypatch.setattr(dialog, "_try_open", lambda: opened.append(dialog._entry.text()))
 
     dialog._table.doubleClicked.emit(dialog._proxy.index(2, dialog.COL_PID))
     qapp.processEvents()
@@ -192,6 +190,8 @@ def test_filtering_away_the_selection_drops_it_instead_of_retargeting(qapp, dial
 
 def test_filtering_keeps_a_selection_that_survives_the_filter(qapp, dialog):
     """Dropping the selection is only right when the filter actually hides it."""
+    from PySide6.QtCore import Qt
+
     rows = _rows(300)
     dialog._on_rows_ready(rows)
 
@@ -208,3 +208,46 @@ def test_filtering_keeps_a_selection_that_survives_the_filter(qapp, dialog):
     dialog._filter_edit.setText("proc12")
     qapp.processEvents()
     assert dialog._selected_pid() == target_pid
+
+
+def test_arrowing_onto_a_row_fills_the_entry(qapp, dialog):
+    """A keyboard pick is a pick too — the guard must not swallow it."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    dialog._on_rows_ready(_rows(300))
+    dialog._table.selectRow(2)
+    qapp.processEvents()
+    before = dialog._entry.text()
+
+    dialog._table.setFocus()
+    QTest.keyClick(dialog._table, Qt.Key_Down)
+    qapp.processEvents()
+
+    assert dialog._entry.text() == str(dialog._selected_pid())
+    assert dialog._entry.text() != before
+
+
+def test_refresh_under_an_active_filter_keeps_the_selection(qapp, dialog):
+    """The two fixes have to compose: the restore walks the *filtered* rows.
+
+    A tick that can't find the picked PID among the visible rows would silently
+    drop the selection.
+    """
+    rows = _rows(300)
+    dialog._on_rows_ready(rows)
+    dialog._table.selectRow(2)
+    qapp.processEvents()
+    picked_pid = dialog._selected_pid()
+    assert picked_pid is not None
+
+    # `_rows` names row i "proc{i:03d}" and gives it PID 1000 + i, so this
+    # filter leaves exactly the picked row visible.
+    dialog._filter_edit.setText(f"proc{picked_pid - 1000:03d}")
+    qapp.processEvents()
+    assert dialog._proxy.rowCount() == 1
+    assert dialog._selected_pid() == picked_pid
+
+    dialog._on_rows_ready(rows)  # the auto-refresh tick
+    qapp.processEvents()
+    assert dialog._selected_pid() == picked_pid
