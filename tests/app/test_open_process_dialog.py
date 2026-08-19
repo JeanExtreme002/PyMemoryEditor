@@ -9,8 +9,11 @@ the viewport — Qt ``scrollTo``s the current index — so as soon as the user h
 clicked any row, scrolling through the list snapped back to that row on every
 tick.
 
+The same tick also echoed the restored selection's PID into the "Process:" field,
+overwriting whatever the user had typed there.
+
 The contract now: a refresh may replace the rows and restore the selection, but
-it must leave the user's scroll position where they put it.
+it must leave the user's scroll position and typed input where they put them.
 
 Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
 the ``app`` extra).
@@ -107,3 +110,31 @@ def test_refresh_still_restores_the_selection(qapp, dialog):
     dialog._on_rows_ready(rows)
     qapp.processEvents()
     assert dialog._selected_pid() == selected_pid
+
+
+def test_refresh_does_not_overwrite_a_typed_process_name(qapp, dialog):
+    """Clicking a row fills the entry; a refresh tick must not refill it.
+
+    Otherwise a user who clicks a row, then types a name and presses Enter more
+    than one tick later opens the PID they clicked instead of what they typed.
+    """
+    rows = _rows(300)
+    dialog._on_rows_ready(rows)
+    dialog._table.selectRow(2)
+    qapp.processEvents()
+    assert dialog._entry.text(), "clicking a row is supposed to fill the entry"
+
+    dialog._entry.setText("notepad.exe")
+    dialog._on_rows_ready(rows)  # the auto-refresh tick
+    qapp.processEvents()
+    assert dialog._entry.text() == "notepad.exe"
+
+
+def test_clicking_a_row_still_fills_the_entry(qapp, dialog):
+    """The guard above must only cover the refresh, not a real selection."""
+    dialog._on_rows_ready(_rows(300))
+    qapp.processEvents()
+
+    dialog._table.selectRow(2)
+    qapp.processEvents()
+    assert dialog._entry.text() == str(dialog._selected_pid())

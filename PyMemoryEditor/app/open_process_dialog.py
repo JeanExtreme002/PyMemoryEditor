@@ -173,6 +173,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         super().__init__(parent)
         self.process: Optional[AbstractProcess] = None
         self._scan_worker: Optional[_ProcessListWorker] = None
+        self._restoring_selection = False
 
         self.setWindowTitle("Select a Process")
         self.setWindowIcon(app_icon())
@@ -327,7 +328,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
             for row in range(self._proxy.rowCount()):
                 idx = self._proxy.index(row, self.COL_PID)
                 if self._proxy.data(idx, Qt.UserRole) == selected_pid:
-                    self._table.selectRow(row)
+                    self._restore_selection(row)
                     break
 
         scrollbar.setValue(scroll_offset)
@@ -354,7 +355,25 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
     def _on_filter_changed(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)
 
+    def _restore_selection(self, row: int) -> None:
+        """Re-select a row on the user's behalf, without echoing it into the entry.
+
+        ``_on_selection_changed`` mirrors the selected PID into the "Process:"
+        field, which is what a click should do and what a refresh tick must not:
+        a user who clicked a row and then typed a process name had their text
+        replaced by the old PID within 3 s, so pressing Enter opened the wrong
+        target.
+        """
+        self._restoring_selection = True
+        try:
+            self._table.selectRow(row)
+        finally:
+            self._restoring_selection = False
+
     def _on_selection_changed(self, *_args) -> None:
+        if self._restoring_selection:
+            return
+
         pid = self._selected_pid()
         if pid is not None:
             self._entry.setText(str(pid))
