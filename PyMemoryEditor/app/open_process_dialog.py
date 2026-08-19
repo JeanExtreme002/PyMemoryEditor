@@ -241,6 +241,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         self._table.horizontalHeader().setSectionResizeMode(
             self.COL_NAME, QHeaderView.Stretch
         )
+        self._table.clicked.connect(self._point_entry_at)
         self._table.doubleClicked.connect(self._on_row_activated)
         self._table.selectionModel().selectionChanged.connect(
             self._on_selection_changed
@@ -361,15 +362,20 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
             if selected_pid is not None and self._selected_pid() != selected_pid:
                 self._table.selectionModel().clearSelection()
 
-    def _on_row_activated(self, index) -> None:
-        """Open the double-clicked row, whatever the entry holds.
+    def _point_entry_at(self, index) -> None:
+        """Aim the entry at a clicked row.
 
-        Clicking an already-selected row emits no ``selectionChanged``, so the
-        entry can still hold a name typed earlier.
+        ``selectionChanged`` doesn't fire when the row was already selected, so
+        without this the entry keeps whatever it held — a name typed earlier, or
+        nothing — while the row sits highlighted as if it were the target.
         """
         pid = self._proxy.data(self._proxy.index(index.row(), self.COL_PID), Qt.UserRole)
         if pid is not None:
             self._entry.setText(str(pid))
+
+    def _on_row_activated(self, index) -> None:
+        """Open the double-clicked row, whatever the entry holds."""
+        self._point_entry_at(index)
         self._try_open()
 
     @contextmanager

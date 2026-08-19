@@ -147,6 +147,24 @@ def test_double_clicking_a_row_opens_that_row(qapp, dialog, monkeypatch):
     assert opened == [str(clicked_pid)]
 
 
+def test_clicking_the_selected_row_re_aims_the_entry(qapp, dialog, monkeypatch):
+    """Clicking the highlighted row emits no ``selectionChanged`` — but still counts."""
+    dialog._on_rows_ready(_rows(300))
+    dialog._table.selectRow(2)
+    qapp.processEvents()
+    clicked_pid = dialog._selected_pid()
+
+    dialog._entry.setText("notepad.exe")
+    opened = []
+    monkeypatch.setattr(dialog, "_try_open", lambda: opened.append(dialog._entry.text()))
+
+    dialog._table.clicked.emit(dialog._proxy.index(2, dialog.COL_PID))
+    qapp.processEvents()
+
+    assert dialog._entry.text() == str(clicked_pid)
+    assert opened == [], "a single click must not open anything"
+
+
 def test_filtering_away_the_selection_drops_it_instead_of_retargeting(qapp, dialog):
     """Qt remaps a selection whose row the filter hid; the picker must not follow."""
     dialog._on_rows_ready(_rows(300))
