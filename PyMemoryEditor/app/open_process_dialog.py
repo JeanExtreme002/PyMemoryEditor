@@ -8,6 +8,7 @@ case-insensitive toggle, surfacing the library's ``case_sensitive`` flag).
 """
 import ctypes
 import sys
+from contextlib import contextmanager
 from typing import Callable, List, Optional, Tuple
 
 import psutil
@@ -173,7 +174,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         super().__init__(parent)
         self.process: Optional[AbstractProcess] = None
         self._scan_worker: Optional[_ProcessListWorker] = None
-        self._restoring_selection = False
+        self._selection_is_programmatic = False
 
         self.setWindowTitle("Select a Process")
         self.setWindowIcon(app_icon())
@@ -240,7 +241,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         self._table.horizontalHeader().setSectionResizeMode(
             self.COL_NAME, QHeaderView.Stretch
         )
-        self._table.doubleClicked.connect(lambda _i: self._try_open())
+        self._table.doubleClicked.connect(self._on_row_activated)
         self._table.selectionModel().selectionChanged.connect(
             self._on_selection_changed
         )
@@ -328,7 +329,8 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
             for row in range(self._proxy.rowCount()):
                 idx = self._proxy.index(row, self.COL_PID)
                 if self._proxy.data(idx, Qt.UserRole) == selected_pid:
-                    self._restore_selection(row)
+                    with self._programmatic_selection():
+                        self._table.selectRow(row)
                     break
 
         scrollbar.setValue(scroll_offset)
@@ -353,25 +355,49 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         self._scan_worker = None
 
     def _on_filter_changed(self, text: str) -> None:
-        self._proxy.setFilterFixedString(text)
+        selected_pid = self._selected_pid()
 
-    def _restore_selection(self, row: int) -> None:
-        """Re-select a row on the user's behalf, without echoing it into the entry.
+        # Filtering the selected row out of view doesn't clear the selection: Qt
+        # remaps it onto whatever row took that index, so the picker would point
+        # at a process the user never chose. Neither that remap nor the cleanup
+        # after it is a pick, so neither may reach the entry.
+        with self._programmatic_selection():
+            self._proxy.setFilterFixedString(text)
+            if selected_pid is not None and self._selected_pid() != selected_pid:
+                self._table.selectionModel().clearSelection()
+
+    def _on_row_activated(self, index) -> None:
+        """Open the row that was double-clicked, whatever the entry holds.
+
+        Clicking a row that is already selected emits no ``selectionChanged``
+        (the table is single-selection), so the entry can still hold a name the
+        user typed earlier. The double-click is the more specific instruction of
+        the two, so it wins — and goes through the entry, which keeps one open
+        path and shows what is being opened.
+        """
+        pid = self._proxy.data(self._proxy.index(index.row(), self.COL_PID), Qt.UserRole)
+        if pid is not None:
+            self._entry.setText(str(pid))
+        self._try_open()
+
+    @contextmanager
+    def _programmatic_selection(self):
+        """Mark a selection change the user didn't make.
 
         ``_on_selection_changed`` mirrors the selected PID into the "Process:"
-        field, which is what a click should do and what a refresh tick must not:
-        a user who clicked a row and then typed a process name had their text
-        replaced by the old PID within 3 s, so pressing Enter opened the wrong
-        target.
+        field, which is what a click should do and what a refresh tick or a
+        filter keystroke must not: a user who clicked a row and then typed a
+        process name had their text replaced by a PID, so pressing Enter opened
+        the wrong target.
         """
-        self._restoring_selection = True
+        self._selection_is_programmatic = True
         try:
-            self._table.selectRow(row)
+            yield
         finally:
-            self._restoring_selection = False
+            self._selection_is_programmatic = False
 
     def _on_selection_changed(self, *_args) -> None:
-        if self._restoring_selection:
+        if self._selection_is_programmatic:
             return
 
         pid = self._selected_pid()

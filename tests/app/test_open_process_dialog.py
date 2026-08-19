@@ -10,10 +10,14 @@ clicked any row, scrolling through the list snapped back to that row on every
 tick.
 
 The same tick also echoed the restored selection's PID into the "Process:" field,
-overwriting whatever the user had typed there.
+overwriting whatever the user had typed there. Typing in the Filter box did the
+same thing by a different route: hiding the selected row makes Qt remap the
+selection onto whatever row took that index, so the picker silently pointed at a
+process the user never chose.
 
-The contract now: a refresh may replace the rows and restore the selection, but
-it must leave the user's scroll position and typed input where they put them.
+The contract now: only a real pick — a click, or a double-click — may write to the
+"Process:" field or change what the picker targets. A refresh or a filter
+keystroke must leave the user's scroll position, selection and typed input alone.
 
 Skipped when ``PySide6`` isn't installed (the runtime dependency is opt-in via
 the ``app`` extra).
@@ -29,6 +33,9 @@ pytest.importorskip("PySide6", reason="App tests require PySide6 (install with [
 
 # Offscreen platform plugin: no display server needed, runs on CI.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+from PySide6.QtCore import Qt  # noqa: E402 — import guarded by importorskip above
 
 
 @pytest.fixture(scope="module")
@@ -138,3 +145,66 @@ def test_clicking_a_row_still_fills_the_entry(qapp, dialog):
     dialog._table.selectRow(2)
     qapp.processEvents()
     assert dialog._entry.text() == str(dialog._selected_pid())
+
+
+def test_double_clicking_a_row_opens_that_row(qapp, dialog):
+    """The click is authoritative, even when the entry says something else.
+
+    Clicking a row that is already selected emits no ``selectionChanged``, so
+    the entry can still hold a name typed earlier — and ``_try_open`` only reads
+    the entry. Without this, double-clicking the highlighted row opened whatever
+    had been typed instead.
+    """
+    dialog._on_rows_ready(_rows(300))
+    dialog._table.selectRow(2)
+    qapp.processEvents()
+    clicked_pid = dialog._selected_pid()
+
+    dialog._entry.setText("notepad.exe")
+    opened = []
+    dialog._try_open = lambda: opened.append(dialog._entry.text())
+
+    dialog._table.doubleClicked.emit(dialog._proxy.index(2, dialog.COL_PID))
+    qapp.processEvents()
+    assert opened == [str(clicked_pid)]
+
+
+def test_filtering_away_the_selection_drops_it_instead_of_retargeting(qapp, dialog):
+    """Qt remaps a selection whose row the filter hid; the picker must not follow."""
+    dialog._on_rows_ready(_rows(300))
+    dialog._table.selectRow(120)
+    qapp.processEvents()
+    picked_pid = dialog._selected_pid()
+    assert picked_pid is not None
+
+    dialog._entry.setText("notepad.exe")
+    dialog._filter_edit.setText("proc12")  # hides the picked row
+    qapp.processEvents()
+
+    assert dialog._selected_pid() is None, "a hidden pick must not survive as another row"
+    assert dialog._entry.text() == "notepad.exe"
+
+    # And the tick that follows must not resurrect it either.
+    dialog._on_rows_ready(_rows(300))
+    qapp.processEvents()
+    assert dialog._entry.text() == "notepad.exe"
+
+
+def test_filtering_keeps_a_selection_that_survives_the_filter(qapp, dialog):
+    """Dropping the selection is only right when the filter actually hides it."""
+    rows = _rows(300)
+    dialog._on_rows_ready(rows)
+
+    # proc129 stays visible under the "proc12" filter (proc120..proc129 match).
+    target_pid = 1129
+    for row in range(dialog._proxy.rowCount()):
+        index = dialog._proxy.index(row, dialog.COL_PID)
+        if dialog._proxy.data(index, Qt.UserRole) == target_pid:
+            dialog._table.selectRow(row)
+            break
+    qapp.processEvents()
+    assert dialog._selected_pid() == target_pid
+
+    dialog._filter_edit.setText("proc12")
+    qapp.processEvents()
+    assert dialog._selected_pid() == target_pid
