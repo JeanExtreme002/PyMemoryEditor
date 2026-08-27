@@ -155,18 +155,23 @@ def test_bytes_range_takes_the_wider_endpoint():
     assert req.length == 3
 
 
-def test_no_value_scan_keeps_the_byte_width_from_the_length_readout():
+@pytest.mark.parametrize("spec", (BYTES, STR))
+def test_no_value_scan_keeps_the_width_from_the_length_readout(spec):
     # Increased/Changed/... carry no value to measure, so the Length readout
-    # (which the panel leaves at the previous scan's width) is the only width
-    # available and must still be honoured.
+    # (which the panel leaves at the previous scan's width when the value field
+    # is cleared) is the only width available and must be honoured for both
+    # variable-width types. Falling back to the spec default would refine a
+    # 4-byte scan by re-reading 16 bytes per address, so the value read back
+    # ("olá\0\0…") never matches the one the first scan recorded and every
+    # address reports as Changed.
     req = build_scan_request(
-        BYTES,
+        spec,
         NextScanType.CHANGED_VALUE,
         value_text="",
-        length_spin_value=6,
+        length_spin_value=4,
     )
     assert req.value is None
-    assert req.length == 6
+    assert req.length == 4
 
 
 def test_no_value_scan_type_drops_value():

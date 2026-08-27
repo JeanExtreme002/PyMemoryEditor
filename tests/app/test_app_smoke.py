@@ -288,6 +288,50 @@ def test_variable_width_types_lock_length_to_value_text(qtbot):
     assert spec.label == "Byte Array (Hex)"
     assert length == 6
 
+    # Clearing the value (what picking a no-value scan type does) leaves the
+    # readout on the last width instead of collapsing to 1 — that width is what
+    # a "Changed Value" next-scan refines with.
+    panel._value_edit.clear()
+    assert panel._length_spin.value() == 6
+
+    panel.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_locked_length_readout_is_reseeded_when_the_value_type_changes(qtbot):
+    """
+    The Length readout is read-only for the value-sized types, so a value that
+    doesn't parse as the newly picked type must fall back to that type's default
+    width — leaving a stale width from the previous type would be both wrong and
+    uncorrectable by the user.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor.app.scanner_panel import ScannerPanel
+    from PyMemoryEditor.app.value_types import find_spec
+
+    QApplication.instance() or QApplication([])
+    panel = ScannerPanel()
+    qtbot.addWidget(panel)
+
+    bytes_default = find_spec("Byte Array (Hex)").length
+    str_default = find_spec("String (UTF-8)").length
+
+    # A string value is not valid hex, so switching to Byte Array can't size it.
+    panel._type_combo.setCurrentText("String (UTF-8)")
+    panel._value_edit.setText("some long string here")
+    assert panel._length_spin.value() == 21
+
+    panel._type_combo.setCurrentText("Byte Array (Hex)")
+    assert panel._length_spin.value() == bytes_default
+    assert panel.current_spec_and_length()[1] == bytes_default
+
+    # Same the other way round: an empty field falls back to the spec default
+    # rather than inheriting whatever the previous type left behind.
+    panel._value_edit.clear()
+    panel._type_combo.setCurrentText("String (UTF-8)")
+    assert panel._length_spin.value() == str_default
+
     panel.close()
 
 

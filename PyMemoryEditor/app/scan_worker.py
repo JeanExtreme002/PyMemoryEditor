@@ -118,15 +118,17 @@ def build_scan_request(
 
     # Increased/Decreased/Changed/Unchanged compare current vs previous and need
     # no target value — just the value shape (type + length). With no value to
-    # measure, the Length field is the only width the variable-width types have
-    # to go on, so it is honoured here (for str the panel drives it from the —
-    # now cleared — value text, so fall back to the spec default instead).
+    # measure, the Length readout is the only width the variable-width types
+    # have to go on, and it holds the width the previous scan settled on (the
+    # panel keeps it there when the value field is cleared), so honour it.
+    # Falling back to the spec default here would refine a 4-byte "olá" scan by
+    # re-reading 16 bytes per address: the value read back is "olá\0\0…", never
+    # equal to the "olá" recorded by the first scan, so every address would
+    # report as Changed.
     if scan_type in NO_VALUE_SCAN_TYPES:
         length = (
             length_spin_value
-            if spec.accepts_length_override
-            and spec.pytype is not str
-            and length_spin_value is not None
+            if spec.accepts_length_override and length_spin_value is not None
             else spec.length
         )
         return ScanRequest(

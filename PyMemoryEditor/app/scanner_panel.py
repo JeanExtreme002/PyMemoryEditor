@@ -300,8 +300,13 @@ class ScannerPanel(QWidget):
         elif is_sized_by_value:  # String (UTF-8) / Byte Array (Hex)
             # Length tracks the typed value — raise the ceiling so long strings
             # aren't visually clamped, then mirror the current value's byte size.
+            # Seed the spec default first: the readout is read-only now, so a
+            # value that doesn't parse as the newly picked type (or an empty
+            # field) must not keep showing a width left over from the previous
+            # type, which the user would have no way to correct.
             self._length_spin.setMaximum(2_147_483_647)
             self._length_spin.setSuffix("  bytes")
+            self._length_spin.setValue(spec.length)
             self._sync_value_length()
         else:
             self._length_spin.setMaximum(1024)
@@ -345,20 +350,26 @@ class ScannerPanel(QWidget):
         UTF-8 byte length for a string (byte length, not character count) and
         the number of parsed hex bytes for a byte array.
 
-        A half-typed byte array ("00 1") doesn't parse — the readout keeps its
-        last valid width rather than flickering while the user types, and the
-        scan itself re-parses and reports the error if it's still malformed.
+        A value that doesn't size to anything — a half-typed byte array
+        ("00 1"), or a field the user (or a no-value scan type) just cleared —
+        leaves the readout on its last valid width rather than flickering or
+        collapsing to 1. That width is what the "Next Scan" comparisons refine
+        with, since they carry no value of their own to measure.
         """
         spec = find_spec(self._type_combo.currentText())
+        if spec is None:
+            return
         if text is None:
             text = self._value_edit.text()
 
-        if spec is not None and spec.pytype is bytes:
+        if spec.pytype is bytes:
             try:
                 _, length = parse_value(spec, text)
             except ValueError:
                 return
         else:
+            if not text:
+                return
             length = max(1, len(text.encode("utf-8")))
 
         self._length_spin.setValue(length)
