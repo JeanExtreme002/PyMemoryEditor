@@ -197,6 +197,15 @@ class CheatTable(QWidget):
         delete_shortcut.activated.connect(self._on_remove_selected)
 
     def add_entry(self, entry: CheatEntry) -> None:
+        # Every entry enters here, whichever way it was created — promoted from
+        # a scan, from a pointer dialog, added by hand, or loaded from JSON. A
+        # zero-width buffer reads back empty on every poll tick and can't be
+        # spotted from the table, so the floor is enforced once, at the door,
+        # rather than at each of those call sites. (The AOB pattern spec is the
+        # one whose declared length is 0 — the scanner derives its real width
+        # from the pattern.)
+        entry.length = max(1, int(entry.length))
+
         # If the address already exists, just refresh its description/type.
         for existing in self._entries:
             if existing.address == entry.address:

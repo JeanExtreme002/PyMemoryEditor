@@ -216,6 +216,8 @@ class PointerChainDialog(QDialog):
 
         self._value_type_combo = QComboBox()
         for spec in VALUE_TYPES:
+            if spec.is_pattern:
+                continue  # reading a value "as a pattern" is meaningless here
             self._value_type_combo.addItem(spec.label)
         form.addRow("Read value as:", self._value_type_combo)
 

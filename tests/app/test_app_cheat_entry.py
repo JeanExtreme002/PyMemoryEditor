@@ -83,3 +83,32 @@ def test_legacy_spec_label_key_is_accepted():
         {"address": "0x10", "spec_label": VALUE_TYPES[0].label}
     )
     assert restored.spec_label == VALUE_TYPES[0].label
+
+
+def test_a_zero_width_entry_is_floored_at_the_table_door():
+    """
+    The AOB pattern spec declares length 0 (the scanner derives the real width
+    from the pattern), so every path that falls back to it — a legacy JSON row,
+    a bulk type change, a manual add — could mint a zero-byte entry that reads
+    back empty forever. add_entry is the single door they all go through.
+
+    Driven against the unbound method with a stub ``self`` so this stays in the
+    pure-logic file: constructing a real CheatTable needs a process and starts
+    the poll worker.
+    """
+    pytest.importorskip("PySide6")
+
+    from types import SimpleNamespace
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import CheatTable
+
+    # A row saved by a build that promoted AOB hits at the spec's 0.
+    entry = CheatEntry.from_dict(
+        {"address": "0x1000", "spec_label": "AOB Pattern (IDA)", "length": 0}
+    )
+    assert entry.length == 0  # the row really is zero-width on disk
+
+    table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
+    CheatTable.add_entry(table, entry)
+    assert table._entries[0].length == 1
