@@ -490,9 +490,19 @@ def test_a_scan_that_never_lands_does_not_move_the_baseline(qtbot):
     panel._scan_combo.setCurrentIndex(changed)
     assert panel._build_request().length == 2  # still the width on screen
 
+    # The scan cycle ending discards the width that never landed, so a later
+    # unrelated completion — "Update Values" reports results too — can't adopt
+    # it retroactively.
+    panel.set_busy(True)
+    panel.set_busy(False)
+    assert panel._pending_scan_length is None
+    panel._on_update_values()
+    panel.set_has_results(True)
+    assert panel._last_scan_length == 2
+
     # Once a scan does land, its width becomes the baseline.
-    panel._value_edit.setText("00 11 22 33")
     panel._scan_combo.setCurrentIndex(0)
+    panel._value_edit.setText("00 11 22 33")
     panel._on_next_scan()
     panel.set_has_results(True)
     assert panel._last_scan_length == 4

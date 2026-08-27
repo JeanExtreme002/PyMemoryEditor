@@ -268,7 +268,19 @@ class ScannerPanel(QWidget):
         self._refresh_buttons()
 
     def set_busy(self, busy: bool) -> None:
+        """Report whether a scan is running.
+
+        The falling edge ends the scan cycle, which is where a pending width
+        that was never adopted gets dropped. The owner emits it after the
+        completion signal (``finished`` follows ``finished_ok``), so a scan that
+        landed has already had its width promoted by ``set_has_results``; one
+        that errored out never will, and must not leave the width behind for
+        an unrelated later completion — an "Update Values" refresh reports
+        results too — to pick up.
+        """
         self._busy = busy
+        if not busy:
+            self._pending_scan_length = None
         self._refresh_buttons()
 
     def use_snapshot_cache(self) -> bool:

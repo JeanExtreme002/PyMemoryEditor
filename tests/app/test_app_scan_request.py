@@ -189,18 +189,22 @@ def test_no_value_scan_ignores_the_length_field(spec):
 
 
 @pytest.mark.parametrize("spec", (BYTES, STR))
-def test_delta_scan_refines_at_the_previous_scan_width(spec):
-    # "Increased/Decreased value BY" carry a delta but still compare against the
-    # previous scan's baseline, so the re-read width is that scan's, not the
-    # delta text's — sizing from the delta would re-read a 4-byte baseline one
-    # byte at a time and drop every address.
-    req = build_scan_request(
-        spec,
-        NextScanType.INCREASED_VALUE_BY,
-        value_text="01",
-        previous_scan_length=4,
-    )
-    assert req.length == 4
+@pytest.mark.parametrize(
+    "scan_type", (NextScanType.INCREASED_VALUE_BY, NextScanType.DECREASED_VALUE_BY)
+)
+def test_delta_scan_is_rejected_for_the_variable_width_types(spec, scan_type):
+    # "Increased/Decreased value BY" adds the delta to the baseline, which only
+    # means anything for a number: on str/bytes `prev + exp` concatenates (never
+    # equal to the fixed-width current value) and `prev - exp` raises TypeError,
+    # which the refine worker swallows into "doesn't match". Every address was
+    # silently dropped; the user gets a message now.
+    with pytest.raises(ValueError, match="doesn't apply"):
+        build_scan_request(
+            spec,
+            scan_type,
+            value_text="01",
+            previous_scan_length=4,
+        )
 
 
 def test_delta_scan_on_a_fixed_width_type_ignores_the_previous_length():

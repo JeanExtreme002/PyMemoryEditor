@@ -694,7 +694,11 @@ class CheatTable(QWidget):
             "Length (bytes):",
             value=self._entries[row].length,
             minValue=1,
-            maxValue=1024,
+            # A String / Byte Array entry is promoted at the width of the value
+            # that was scanned for, which the scanner doesn't cap at 1024 — a
+            # tighter ceiling here would silently shrink such an entry for a
+            # user who merely opened the dialog and pressed OK.
+            maxValue=max(1024, self._entries[row].length),
         )
         if not ok:
             return

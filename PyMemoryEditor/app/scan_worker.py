@@ -110,9 +110,24 @@ def build_scan_request(
     :param previous_scan_length: the width the scan that produced the current
         results used. Only the no-value comparisons read it, and only for the
         variable-width types, whose baseline is meaningless at another width.
+        (The ``*_BY`` deltas compare against the baseline too, but they are
+        rejected outright for those types — see below.)
     :raises ValueError: if a value/pattern fails to parse (message is
         user-facing — the caller picks the dialog title from ``spec.is_pattern``).
     """
+    # "Increased/Decreased value BY" adds the delta to the baseline, which only
+    # means anything for a number: on str/bytes ``prev + exp`` concatenates (so
+    # the comparison is never true) and ``prev - exp`` raises TypeError, which
+    # the refine worker swallows into "doesn't match". Either way every address
+    # is dropped and the user is told nothing, so reject the combination here
+    # with a message instead.
+    if scan_type in DELTA_SCAN_TYPES and spec.pytype in (str, bytes):
+        raise ValueError(
+            "Increased/Decreased Value By adds a numeric amount to the previous "
+            "value, which doesn't apply to %s. Use Changed Value or Unchanged "
+            "Value to compare against the previous scan." % spec.label
+        )
+
     # Pattern path — value is the pattern, scan_type is always EXACT. For an
     # IDA pattern the length is irrelevant (derived from the pattern); for a
     # regex it carries byte_length (the match width) from the Length field.
@@ -165,13 +180,6 @@ def build_scan_request(
         value = (lo, hi)
     else:
         value, length = parse_value(spec, value_text)
-
-    # "Increased/Decreased value BY" carry a value — the delta — but still
-    # compare against the previous scan's baseline, so like the no-value
-    # comparisons they must re-read at that scan's width. Sizing the read from
-    # the delta text instead would re-read a 4-byte baseline 1 byte at a time.
-    if scan_type in DELTA_SCAN_TYPES and spec.accepts_length_override:
-        length = previous_scan_length or length
 
     if not with_value:
         value = None  # Used by callers that only need spec/length/scan_type.
