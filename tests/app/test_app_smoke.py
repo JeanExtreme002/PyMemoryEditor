@@ -388,6 +388,119 @@ def test_promote_and_update_values_use_the_scanned_width(qtbot):
 
 
 @pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_update_values_needs_no_value_and_regex_keeps_its_length_field(qtbot):
+    """
+    "Update Values" applies no comparison, so it must refresh without a target
+    value — a Value box a no-value scan type cleared used to abort it with
+    "Invalid value". And the width override is for the value-sized types only:
+    Regex owns a genuinely editable Length field that must keep working.
+    """
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from PyMemoryEditor.app.scan_types import NextScanType
+    from PyMemoryEditor.app.scanner_panel import SCAN_TYPE_CHOICES, ScannerPanel
+
+    QApplication.instance() or QApplication([])
+
+    dialogs = []
+    original_warning = QMessageBox.warning
+    QMessageBox.warning = staticmethod(lambda *a, **k: dialogs.append(a[1:3]))
+    try:
+        panel = ScannerPanel()
+        qtbot.addWidget(panel)
+
+        panel._type_combo.setCurrentText("String (UTF-8)")
+        panel._value_edit.setText("olá")
+        panel._on_first_scan()
+        panel.set_has_results(True)
+
+        # A no-value scan type clears the Value box; switching back leaves it
+        # empty, which must not stop the refresh.
+        changed = next(
+            i
+            for i, (_, t) in enumerate(SCAN_TYPE_CHOICES)
+            if t is NextScanType.CHANGED_VALUE
+        )
+        panel._scan_combo.setCurrentIndex(changed)
+        panel._scan_combo.setCurrentIndex(0)
+
+        widths = []
+        panel.update_values_requested.connect(lambda r: widths.append(r.length))
+        panel._on_update_values()
+        assert widths == [4]
+        assert dialogs == []
+
+        panel.close()
+
+        # Regex: the Length field is the user's byte_length, not a readout.
+        regex_panel = ScannerPanel()
+        qtbot.addWidget(regex_panel)
+        regex_panel._type_combo.setCurrentText("Regex (String)")
+        regex_panel._value_edit.setText("Player[0-9]+")
+        regex_panel._on_first_scan()
+        regex_panel.set_has_results(True)
+        regex_panel._length_spin.setValue(128)
+
+        regex_widths = []
+        regex_panel.update_values_requested.connect(
+            lambda r: regex_widths.append(r.length)
+        )
+        regex_panel._on_update_values()
+        assert regex_widths == [128]
+        assert regex_panel.current_spec_and_length()[1] == 128
+
+        regex_panel.close()
+    finally:
+        QMessageBox.warning = original_warning
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_a_scan_that_never_lands_does_not_move_the_baseline(qtbot):
+    """
+    The baseline describes the values on screen, so it may only advance when a
+    scan actually finishes. A Next Scan whose worker errors out (the owner never
+    reports results) must leave the previous width in place, or the following
+    no-value refine re-reads at a width the table's values were never read at.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor.app.scan_types import NextScanType
+    from PyMemoryEditor.app.scanner_panel import SCAN_TYPE_CHOICES, ScannerPanel
+
+    QApplication.instance() or QApplication([])
+    panel = ScannerPanel()
+    qtbot.addWidget(panel)
+
+    panel._type_combo.setCurrentText("Byte Array (Hex)")
+    panel._value_edit.setText("00 11")  # 2 bytes
+    panel._on_first_scan()
+    panel.set_has_results(True)
+    assert panel._last_scan_length == 2
+
+    # Dispatch a 4-byte Next Scan that never completes (no set_has_results).
+    panel._value_edit.setText("00 11 22 33")
+    panel._on_next_scan()
+    assert panel._last_scan_length == 2
+
+    changed = next(
+        i
+        for i, (_, t) in enumerate(SCAN_TYPE_CHOICES)
+        if t is NextScanType.CHANGED_VALUE
+    )
+    panel._scan_combo.setCurrentIndex(changed)
+    assert panel._build_request().length == 2  # still the width on screen
+
+    # Once a scan does land, its width becomes the baseline.
+    panel._value_edit.setText("00 11 22 33")
+    panel._scan_combo.setCurrentIndex(0)
+    panel._on_next_scan()
+    panel.set_has_results(True)
+    assert panel._last_scan_length == 4
+
+    panel.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
 def test_range_readout_covers_both_bounds(qtbot):
     """A range sizes with max(lo, hi), so the upper bound moves the readout."""
     from PySide6.QtWidgets import QApplication

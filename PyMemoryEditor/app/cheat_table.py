@@ -531,7 +531,11 @@ class CheatTable(QWidget):
                 if plan.spec is not None:
                     entry.spec_label = plan.spec.label
                     if not plan.spec.accepts_length_override:
-                        entry.length = plan.spec.length
+                        # `or entry.length`: the IDA pattern spec has no width
+                        # of its own (the scanner derives it from the pattern),
+                        # so keep the entry's rather than collapsing it to a
+                        # zero-byte buffer. Same guard as _change_type.
+                        entry.length = plan.spec.length or entry.length
 
                 if plan.value_text is not None:
                     spec = entry.spec
@@ -766,13 +770,16 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
         return None
     spec = find_spec(spec_label) or VALUE_TYPES[0]
 
+    # An IDA pattern's spec length is 0 (the scanner derives the width from the
+    # pattern), and a manually added entry has no pattern to measure — so ask,
+    # seeded with a sensible default, rather than creating a zero-byte buffer.
     length = spec.length
-    if spec.accepts_length_override:
+    if spec.accepts_length_override or not spec.length:
         length, ok = QInputDialog.getInt(
             parent,
             "Add address",
             "Buffer length (bytes):",
-            value=spec.length,
+            value=spec.length or 4,
             minValue=1,
             maxValue=1024,
         )
