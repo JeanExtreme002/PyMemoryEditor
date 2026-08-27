@@ -276,10 +276,10 @@ def test_variable_width_types_lock_length_to_value_text(qtbot):
     assert request.value == b"\x00\x11\x22\xaa\xbb\xcc"
     assert request.length == 6
 
-    # A half-typed byte pair doesn't parse — the readout holds its last valid
-    # width instead of flickering while the user types.
+    # A half-typed byte pair doesn't size to anything, so the readout reports no
+    # width rather than a number no scan would use.
     panel._value_edit.setText("00 11 22 AA BB C")
-    assert panel._length_spin.value() == 6
+    assert panel._length_spin.value() == 0
 
     # Promoting these results to the cheat table must carry the same width, or
     # the entry would show a truncated value.
@@ -288,11 +288,76 @@ def test_variable_width_types_lock_length_to_value_text(qtbot):
     assert spec.label == "Byte Array (Hex)"
     assert length == 6
 
-    # Clearing the value (what picking a no-value scan type does) leaves the
-    # readout on the last width instead of collapsing to 1 — that width is what
-    # a "Changed Value" next-scan refines with.
-    panel._value_edit.clear()
-    assert panel._length_spin.value() == 6
+    panel.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_no_value_next_scan_refines_at_the_scanned_width(qtbot):
+    """
+    Increased / Changed / … compare against the baseline the previous scan
+    recorded, so they must re-read at *that* scan's width. The Length readout
+    can't stand in: it tracks the value currently in the field, which the user
+    is free to edit after the first scan.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor.app.scan_types import NextScanType
+    from PyMemoryEditor.app.scanner_panel import SCAN_TYPE_CHOICES, ScannerPanel
+
+    QApplication.instance() or QApplication([])
+    panel = ScannerPanel()
+    qtbot.addWidget(panel)
+
+    panel._type_combo.setCurrentText("Byte Array (Hex)")
+    panel._value_edit.setText("00 11")
+    panel._on_first_scan()  # records a 2-byte baseline
+    panel.set_has_results(True)
+
+    # The user edits the value without rescanning: the readout follows the new
+    # value, but the results on screen are still the 2-byte ones.
+    panel._value_edit.setText("00 11 22 33")
+    assert panel._length_spin.value() == 4
+
+    changed = next(
+        i
+        for i, (_, t) in enumerate(SCAN_TYPE_CHOICES)
+        if t is NextScanType.CHANGED_VALUE
+    )
+    panel._scan_combo.setCurrentIndex(changed)
+
+    request = panel._build_request()
+    assert request is not None
+    assert request.value is None
+    assert request.length == 2  # the scanned width, not the readout's 4
+
+    # Dropping the results drops the baseline with them.
+    panel.set_has_results(False)
+    assert panel._last_scan_length is None
+
+    panel.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_promoting_an_aob_hit_uses_the_pattern_width(qtbot):
+    """
+    An IDA pattern has no Length field and a spec length of 0, so a promoted hit
+    would land in the cheat table as a zero-byte entry that reads back empty on
+    every poll tick. The width is the pattern's own — one token, one byte.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor.app.scanner_panel import ScannerPanel
+
+    QApplication.instance() or QApplication([])
+    panel = ScannerPanel()
+    qtbot.addWidget(panel)
+
+    panel._type_combo.setCurrentText("AOB Pattern (IDA)")
+    panel._value_edit.setText("48 8B ? ? 00")
+
+    spec, length = panel.current_spec_and_length()
+    assert spec.label == "AOB Pattern (IDA)"
+    assert length == 5  # five tokens, wildcards included
 
     panel.close()
 

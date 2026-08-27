@@ -86,6 +86,19 @@ def _parse_bytes(text: str) -> bytes:
         raise ValueError(f"Invalid byte array: {exc}")
 
 
+def _parse_str(text: str) -> str:
+    """Return the value text verbatim, rejecting an empty one.
+
+    An empty string encodes to a 1-byte NUL buffer, so scanning for it matches
+    every zeroed byte in the target — a nonsense result the user almost
+    certainly didn't ask for. ``_parse_bytes`` already rejects its own empty
+    input; this keeps the two variable-width types consistent.
+    """
+    if not text:
+        raise ValueError("Empty value. Type the text to search for.")
+    return text
+
+
 def _parse_pattern(text: str) -> str:
     """Validate an IDA-style AOB pattern and return it verbatim.
 
@@ -231,7 +244,7 @@ VALUE_TYPES = (
         "String (UTF-8)",
         str,
         16,
-        lambda s: s,
+        _parse_str,
         lambda v: "" if v is None else str(v),
         accepts_length_override=True,
     ),

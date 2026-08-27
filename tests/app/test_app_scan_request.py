@@ -156,10 +156,9 @@ def test_bytes_range_takes_the_wider_endpoint():
 
 
 @pytest.mark.parametrize("spec", (BYTES, STR))
-def test_no_value_scan_keeps_the_width_from_the_length_readout(spec):
-    # Increased/Changed/... carry no value to measure, so the Length readout
-    # (which the panel leaves at the previous scan's width when the value field
-    # is cleared) is the only width available and must be honoured for both
+def test_no_value_scan_refines_at_the_previous_scan_width(spec):
+    # Increased/Changed/... compare against the baseline the previous scan
+    # recorded, so they must re-read at that scan's width for both
     # variable-width types. Falling back to the spec default would refine a
     # 4-byte scan by re-reading 16 bytes per address, so the value read back
     # ("olá\0\0…") never matches the one the first scan recorded and every
@@ -168,10 +167,30 @@ def test_no_value_scan_keeps_the_width_from_the_length_readout(spec):
         spec,
         NextScanType.CHANGED_VALUE,
         value_text="",
-        length_spin_value=4,
+        previous_scan_length=4,
     )
     assert req.value is None
     assert req.length == 4
+
+
+@pytest.mark.parametrize("spec", (BYTES, STR))
+def test_no_value_scan_ignores_the_length_field(spec):
+    # The Length field tracks whatever value is typed right now, which the user
+    # is free to edit between scans — only the previous scan's width describes
+    # the baseline being compared against.
+    req = build_scan_request(
+        spec,
+        NextScanType.CHANGED_VALUE,
+        value_text="",
+        length_spin_value=99,
+        previous_scan_length=4,
+    )
+    assert req.length == 4
+
+
+def test_no_value_scan_falls_back_to_the_spec_width_without_a_previous_scan():
+    req = build_scan_request(BYTES, NextScanType.CHANGED_VALUE, value_text="")
+    assert req.length == BYTES.length
 
 
 def test_no_value_scan_type_drops_value():
@@ -199,6 +218,15 @@ def test_value_between_packs_a_tuple_and_takes_the_wider_length():
 def test_invalid_value_raises_valueerror():
     with pytest.raises(ValueError):
         build_scan_request(INT4, ScanTypesEnum.EXACT_VALUE, value_text="not-an-int")
+
+
+@pytest.mark.parametrize("spec", (BYTES, STR))
+def test_empty_value_raises_valueerror(spec):
+    # An empty string used to parse as a 1-byte NUL buffer, so the scan matched
+    # every zeroed byte in the target. Byte Array already rejected its own empty
+    # input; both variable-width types now do.
+    with pytest.raises(ValueError):
+        build_scan_request(spec, ScanTypesEnum.EXACT_VALUE, value_text="")
 
 
 def test_invalid_pattern_raises_valueerror():

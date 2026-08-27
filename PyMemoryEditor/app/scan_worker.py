@@ -85,6 +85,7 @@ def build_scan_request(
     value_text: str,
     second_value_text: str = "",
     length_spin_value: Optional[int] = None,
+    previous_scan_length: Optional[int] = None,
     writeable_only: bool = False,
     with_value: bool = True,
 ) -> ScanRequest:
@@ -98,6 +99,12 @@ def build_scan_request(
     bits that are genuinely UI: reading the fields and showing a ``QMessageBox``
     on the ``ValueError`` raised here.
 
+    :param length_spin_value: the Length field. Only the regex type reads it
+        (as ``byte_length``) — every other type derives its width from the spec
+        or from the value itself.
+    :param previous_scan_length: the width the scan that produced the current
+        results used. Only the no-value comparisons read it, and only for the
+        variable-width types, whose baseline is meaningless at another width.
     :raises ValueError: if a value/pattern fails to parse (message is
         user-facing — the caller picks the dialog title from ``spec.is_pattern``).
     """
@@ -116,22 +123,17 @@ def build_scan_request(
             writeable_only=writeable_only,
         )
 
-    # Increased/Decreased/Changed/Unchanged compare current vs previous and need
-    # no target value — just the value shape (type + length). With no value to
-    # measure, the Length readout is the only width the variable-width types
-    # have to go on, and it holds the width the previous scan settled on (the
-    # panel keeps it there when the value field is cleared), so honour it.
-    # Falling back to the spec default here would refine a 4-byte "olá" scan by
-    # re-reading 16 bytes per address: the value read back is "olá\0\0…", never
-    # equal to the "olá" recorded by the first scan, so every address would
-    # report as Changed.
-    # A falsy length_spin_value means the panel has no width to offer (the field
-    # reads 0 for a value-sized type before any value was entered), so the spec
-    # default stands in.
+    # Increased/Decreased/Changed/Unchanged compare the value read now against
+    # the one the *previous* scan recorded, so they need no target value — but
+    # they must re-read at the width that baseline was recorded with. Reading
+    # 16 bytes where the first scan recorded 4 yields "olá\0\0…" against "olá",
+    # which never compares equal, so every address would report as Changed.
+    # ``previous_scan_length`` carries that width for the variable-width types;
+    # the fixed-width types own theirs and ignore it.
     if scan_type in NO_VALUE_SCAN_TYPES:
         length = (
-            length_spin_value
-            if spec.accepts_length_override and length_spin_value
+            previous_scan_length
+            if spec.accepts_length_override and previous_scan_length
             else spec.length
         )
         return ScanRequest(
