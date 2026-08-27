@@ -6,7 +6,7 @@ Inputs:
 * primary value (and a second value for "Value Between" / "Not Value Between")
 * value type
 * scan type
-* explicit byte length for str / bytes
+* byte length (fixed per numeric type; derived from the value for str / bytes)
 * "writable regions only" toggle (passed to PyMemoryEditor as ``writeable_only``)
 
 Outputs (signals):
@@ -44,7 +44,7 @@ from .scan_types import (
     is_next_scan_type,
 )
 from .scan_worker import build_scan_request, ScanRequest
-from .value_types import VALUE_TYPES, find_spec
+from .value_types import parse_value, VALUE_TYPES, find_spec
 
 
 SCAN_TYPE_CHOICES = (
@@ -119,8 +119,8 @@ class ScannerPanel(QWidget):
         self._value_edit = QLineEdit()
         self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
         self._value_edit.returnPressed.connect(self._on_value_submitted)
-        # For String (UTF-8) the length is dictated by the typed text, so keep
-        # the (disabled) length field in sync as the user types.
+        # For String (UTF-8) and Byte Array (Hex) the length is dictated by the
+        # typed value, so keep the (disabled) length field in sync as the user types.
         self._value_edit.textChanged.connect(self._on_value_text_changed)
         value_form.addRow("Value:", self._value_edit)
 
@@ -253,7 +253,7 @@ class ScannerPanel(QWidget):
 
         is_pattern = spec.is_pattern
         is_regex = spec.is_regex
-        is_string = spec.pytype is str and not is_pattern
+        is_sized_by_value = spec.pytype in (str, bytes) and not is_pattern
 
         # Pattern modes reuse the "Value" line for the pattern and force the
         # scan-type combo to EXACT (Bigger/Smaller/Between don't apply). The
@@ -261,13 +261,16 @@ class ScannerPanel(QWidget):
         # token count), but a *regex* has no inferable width, so its Length
         # field stays enabled and supplies search_by_pattern's byte_length.
         #
-        # String (UTF-8) also locks the length field: the buffer width is the
-        # UTF-8 byte length of the typed text (multi-byte aware), so letting the
-        # user override it would only allow truncating or over-allocating the
-        # value they entered. The field stays visible as a read-only readout
-        # kept in sync by _sync_string_length / _on_value_text_changed.
+        # String (UTF-8) and Byte Array (Hex) lock the length field: the buffer
+        # width is the size of the value the user entered (the text's UTF-8 byte
+        # length, multi-byte aware / the number of hex bytes), so letting them
+        # override it would only allow truncating the value — which the
+        # fixed-width ctypes buffer rejects outright — or over-allocating it,
+        # which NUL-pads the target and silently searches for "the value
+        # followed by zeros". The field stays visible as a read-only readout
+        # kept in sync by _sync_value_length / _on_value_text_changed.
         self._length_spin.setEnabled(
-            (spec.accepts_length_override and not is_pattern and not is_string)
+            (spec.accepts_length_override and not is_pattern and not is_sized_by_value)
             or is_regex
         )
 
@@ -294,16 +297,12 @@ class ScannerPanel(QWidget):
             self._length_spin.setMaximum(1024)
             self._length_spin.setValue(1)
             self._length_spin.setSuffix("  bytes")
-        elif is_string:
-            # Length tracks the typed text — raise the ceiling so long strings
-            # aren't visually clamped, then mirror the current text's byte size.
+        elif is_sized_by_value:  # String (UTF-8) / Byte Array (Hex)
+            # Length tracks the typed value — raise the ceiling so long strings
+            # aren't visually clamped, then mirror the current value's byte size.
             self._length_spin.setMaximum(2_147_483_647)
             self._length_spin.setSuffix("  bytes")
-            self._sync_string_length()
-        elif spec.accepts_length_override:  # Byte Array (Hex)
-            self._length_spin.setMaximum(1024)
-            self._length_spin.setValue(max(4, self._length_spin.value()))
-            self._length_spin.setSuffix("  bytes")
+            self._sync_value_length()
         else:
             self._length_spin.setMaximum(1024)
             self._length_spin.setValue(spec.length)
@@ -332,21 +331,37 @@ class ScannerPanel(QWidget):
         self._refresh_buttons()
 
     def _on_value_text_changed(self, text: str) -> None:
-        # Only String (UTF-8) derives its length from the value text; every
-        # other type owns its length field independently.
+        # Only the variable-width types (String / Byte Array) derive their
+        # length from the value text; every other type has a fixed width.
         spec = find_spec(self._type_combo.currentText())
-        if spec is not None and spec.pytype is str and not spec.is_pattern:
-            self._sync_string_length(text)
+        if spec is not None and spec.pytype in (str, bytes) and not spec.is_pattern:
+            self._sync_value_length(text)
 
-    def _sync_string_length(self, text: Optional[str] = None) -> None:
-        """Mirror the UTF-8 byte length of the value text into the length field.
+    def _sync_value_length(self, text: Optional[str] = None) -> None:
+        """Mirror the byte size of the value text into the length field.
 
-        Matches ``parse_value``'s str rule (byte length, not character count)
-        so the read-only readout shows exactly the buffer width the scan uses.
+        Matches ``parse_value``'s rules for the two variable-width types so the
+        read-only readout shows exactly the buffer width the scan will use: the
+        UTF-8 byte length for a string (byte length, not character count) and
+        the number of parsed hex bytes for a byte array.
+
+        A half-typed byte array ("00 1") doesn't parse — the readout keeps its
+        last valid width rather than flickering while the user types, and the
+        scan itself re-parses and reports the error if it's still malformed.
         """
+        spec = find_spec(self._type_combo.currentText())
         if text is None:
             text = self._value_edit.text()
-        self._length_spin.setValue(max(1, len(text.encode("utf-8"))))
+
+        if spec is not None and spec.pytype is bytes:
+            try:
+                _, length = parse_value(spec, text)
+            except ValueError:
+                return
+        else:
+            length = max(1, len(text.encode("utf-8")))
+
+        self._length_spin.setValue(length)
 
     def _on_scan_type_changed(self, index: int) -> None:
         _, scan_type = SCAN_TYPE_CHOICES[index]

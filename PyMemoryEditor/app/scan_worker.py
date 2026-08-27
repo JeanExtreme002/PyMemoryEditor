@@ -93,10 +93,10 @@ def build_scan_request(
 
     This is the pure core of ``ScannerPanel._build_request`` lifted out of the
     widget so the request-assembly rules (pattern short-circuit, the
-    str-ignores-length override, range parsing, the no-value scan types) can be
-    unit-tested without a ``QApplication``. The widget keeps only the bits that
-    are genuinely UI: reading the fields and showing a ``QMessageBox`` on the
-    ``ValueError`` raised here.
+    value-derived width for str / bytes, range parsing, the no-value scan types)
+    can be unit-tested without a ``QApplication``. The widget keeps only the
+    bits that are genuinely UI: reading the fields and showing a ``QMessageBox``
+    on the ``ValueError`` raised here.
 
     :raises ValueError: if a value/pattern fails to parse (message is
         user-facing — the caller picks the dialog title from ``spec.is_pattern``).
@@ -116,19 +116,19 @@ def build_scan_request(
             writeable_only=writeable_only,
         )
 
-    # String (UTF-8) ignores the length field: pass None so parse_value derives
-    # the buffer width from the typed text's UTF-8 byte length. Byte Array still
-    # honours the user-set override.
-    length_override = (
-        length_spin_value
-        if spec.accepts_length_override and spec.pytype is not str
-        else None
-    )
-
     # Increased/Decreased/Changed/Unchanged compare current vs previous and need
-    # no target value — just the value shape (type + length).
+    # no target value — just the value shape (type + length). With no value to
+    # measure, the Length field is the only width the variable-width types have
+    # to go on, so it is honoured here (for str the panel drives it from the —
+    # now cleared — value text, so fall back to the spec default instead).
     if scan_type in NO_VALUE_SCAN_TYPES:
-        length = length_override if length_override is not None else spec.length
+        length = (
+            length_spin_value
+            if spec.accepts_length_override
+            and spec.pytype is not str
+            and length_spin_value is not None
+            else spec.length
+        )
         return ScanRequest(
             spec=spec,
             length=int(length),
@@ -137,14 +137,22 @@ def build_scan_request(
             writeable_only=writeable_only,
         )
 
+    # Every scan that carries a value sizes its buffer from that value: the
+    # numeric types have a fixed width, and str / bytes derive theirs in
+    # parse_value (the text's UTF-8 byte length / the number of hex bytes
+    # entered). So no length override is passed here. Letting the Length field
+    # win could only break the scan — a width below the value's raises
+    # "byte string too long" from the fixed-width ctypes buffer, and a width
+    # above it NUL-pads the target, silently searching for "the value followed
+    # by zeros". Partial matching has its own value type (AOB Pattern).
     value: Any
     if scan_type in (ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN):
-        lo, lo_len = parse_value(spec, value_text, length_override)
-        hi, hi_len = parse_value(spec, second_value_text, length_override)
+        lo, lo_len = parse_value(spec, value_text)
+        hi, hi_len = parse_value(spec, second_value_text)
         length = max(lo_len, hi_len)
         value = (lo, hi)
     else:
-        value, length = parse_value(spec, value_text, length_override)
+        value, length = parse_value(spec, value_text)
 
     if not with_value:
         value = None  # Used by callers that only need spec/length/scan_type.

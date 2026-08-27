@@ -5,7 +5,7 @@ Unit tests for ``build_scan_request`` (PyMemoryEditor/app/scan_worker.py).
 
 This is the pure core of ``ScannerPanel._build_request`` — the rules that turn
 the scanner panel's fields into a ``ScanRequest``: the AOB-pattern short
-circuit, the "String ignores the length field / Byte Array honours it" split,
+circuit, the value-derived buffer width for String / Byte Array,
 range parsing, and the no-value (Increased/Decreased/...) scan types. It used
 to live inside a ``QWidget`` method and could only be exercised by driving the
 live widget; lifting it out means these rules are now testable without a
@@ -17,6 +17,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PyMemoryEditor import ScanTypesEnum  # noqa: E402
+from PyMemoryEditor.util.convert import value_to_bytes  # noqa: E402
 from PyMemoryEditor.app.scan_types import NextScanType  # noqa: E402
 from PyMemoryEditor.app.scan_worker import build_scan_request  # noqa: E402
 from PyMemoryEditor.app.value_types import VALUE_TYPES  # noqa: E402
@@ -111,7 +112,10 @@ def test_string_ignores_length_override_and_uses_utf8_byte_length():
     assert req.length == 4
 
 
-def test_bytes_honours_length_override():
+def test_bytes_ignores_length_override_and_uses_the_parsed_byte_count():
+    # The buffer must be exactly as wide as the value entered. A larger spin
+    # value would NUL-pad the target, turning the scan into "these bytes
+    # followed by zeros" without telling the user (issue #79).
     req = build_scan_request(
         BYTES,
         ScanTypesEnum.EXACT_VALUE,
@@ -119,7 +123,50 @@ def test_bytes_honours_length_override():
         length_spin_value=8,
     )
     assert req.value == b"\xaa\xbb"
-    assert req.length == 8
+    assert req.length == 2
+
+
+def test_bytes_longer_than_the_length_field_is_not_truncated():
+    # Regression for issue #79: a value wider than the (default 4) spin value
+    # used to be squeezed into a 4-byte ctypes buffer, and the scan died with
+    # "ValueError: byte string too long" instead of just working.
+    req = build_scan_request(
+        BYTES,
+        ScanTypesEnum.EXACT_VALUE,
+        value_text="00 11 22 AA BB CC",  # 6 bytes
+        length_spin_value=4,
+    )
+    assert req.value == b"\x00\x11\x22\xaa\xbb\xcc"
+    assert req.length == 6
+    # The width is what the backend will encode the target with, so it must
+    # survive the fixed-width conversion that used to raise.
+    assert value_to_bytes(bytes, req.length, req.value) == req.value
+
+
+def test_bytes_range_takes_the_wider_endpoint():
+    req = build_scan_request(
+        BYTES,
+        ScanTypesEnum.VALUE_BETWEEN,
+        value_text="AA",              # 1 byte
+        second_value_text="AA BB CC",  # 3 bytes
+        length_spin_value=4,
+    )
+    assert req.value == (b"\xaa", b"\xaa\xbb\xcc")
+    assert req.length == 3
+
+
+def test_no_value_scan_keeps_the_byte_width_from_the_length_readout():
+    # Increased/Changed/... carry no value to measure, so the Length readout
+    # (which the panel leaves at the previous scan's width) is the only width
+    # available and must still be honoured.
+    req = build_scan_request(
+        BYTES,
+        NextScanType.CHANGED_VALUE,
+        value_text="",
+        length_spin_value=6,
+    )
+    assert req.value is None
+    assert req.length == 6
 
 
 def test_no_value_scan_type_drops_value():

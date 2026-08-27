@@ -233,11 +233,13 @@ def test_qapplication_starts_under_offscreen(qtbot):
 
 
 @pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
-def test_string_type_locks_length_to_value_text(qtbot):
+def test_variable_width_types_lock_length_to_value_text(qtbot):
     """
-    Selecting "String (UTF-8)" disables the length field and drives it from the
-    UTF-8 byte length of the typed value, so the buffer width always matches the
-    text the user entered (multi-byte aware). Other types keep an editable length.
+    Selecting "String (UTF-8)" or "Byte Array (Hex)" disables the length field
+    and drives it from the size of the typed value, so the buffer width always
+    matches what the user entered (multi-byte aware for a string, the parsed
+    byte count for a byte array). Fixed-width types keep the field disabled at
+    their own size; only the regex type stays editable.
     """
     from PySide6.QtWidgets import QApplication
 
@@ -246,10 +248,6 @@ def test_string_type_locks_length_to_value_text(qtbot):
     QApplication.instance() or QApplication([])
     panel = ScannerPanel()
     qtbot.addWidget(panel)
-
-    # Byte Array exposes an editable length field (user-set buffer width).
-    panel._type_combo.setCurrentText("Byte Array (Hex)")
-    assert panel._length_spin.isEnabled()
 
     # Switching to String locks the length field...
     panel._type_combo.setCurrentText("String (UTF-8)")
@@ -265,9 +263,30 @@ def test_string_type_locks_length_to_value_text(qtbot):
     assert request.value == "olá"
     assert request.length == 4  # derived from the text, not the spin override
 
-    # Switching back to Byte Array re-enables the field.
+    # Byte Array behaves the same way (issue #79): the length is the number of
+    # hex bytes entered, not a separate field the user has to keep in sync.
     panel._type_combo.setCurrentText("Byte Array (Hex)")
-    assert panel._length_spin.isEnabled()
+    assert not panel._length_spin.isEnabled()
+
+    panel._value_edit.setText("00 11 22 AA BB CC")
+    assert panel._length_spin.value() == 6
+
+    request = panel._build_request()
+    assert request is not None
+    assert request.value == b"\x00\x11\x22\xaa\xbb\xcc"
+    assert request.length == 6
+
+    # A half-typed byte pair doesn't parse — the readout holds its last valid
+    # width instead of flickering while the user types.
+    panel._value_edit.setText("00 11 22 AA BB C")
+    assert panel._length_spin.value() == 6
+
+    # Promoting these results to the cheat table must carry the same width, or
+    # the entry would show a truncated value.
+    panel._value_edit.setText("00 11 22 AA BB CC")
+    spec, length = panel.current_spec_and_length()
+    assert spec.label == "Byte Array (Hex)"
+    assert length == 6
 
     panel.close()
 
