@@ -89,13 +89,17 @@ def _parse_bytes(text: str) -> bytes:
 def _parse_str(text: str) -> str:
     """Return the value text verbatim, rejecting an empty one.
 
-    An empty string encodes to a 1-byte NUL buffer, so scanning for it matches
-    every zeroed byte in the target — a nonsense result the user almost
-    certainly didn't ask for. ``_parse_bytes`` already rejects its own empty
-    input; this keeps the two variable-width types consistent.
+    An empty string sizes to a 1-byte NUL buffer, so *scanning* for it matches
+    every zeroed byte in the target, and *writing* it is a no-op (``prepare_write``
+    truncates to the value and never pads). Neither is what the user meant.
+    ``_parse_bytes`` already rejects its own empty input; this keeps the two
+    variable-width types consistent.
+
+    The wording stays neutral because this runs on the cheat table's write
+    paths too, not only on a scan.
     """
     if not text:
-        raise ValueError("Empty value. Type the text to search for.")
+        raise ValueError("Empty value.")
     return text
 
 

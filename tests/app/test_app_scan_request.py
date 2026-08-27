@@ -188,6 +188,32 @@ def test_no_value_scan_ignores_the_length_field(spec):
     assert req.length == 4
 
 
+@pytest.mark.parametrize("spec", (BYTES, STR))
+def test_delta_scan_refines_at_the_previous_scan_width(spec):
+    # "Increased/Decreased value BY" carry a delta but still compare against the
+    # previous scan's baseline, so the re-read width is that scan's, not the
+    # delta text's — sizing from the delta would re-read a 4-byte baseline one
+    # byte at a time and drop every address.
+    req = build_scan_request(
+        spec,
+        NextScanType.INCREASED_VALUE_BY,
+        value_text="01",
+        previous_scan_length=4,
+    )
+    assert req.length == 4
+
+
+def test_delta_scan_on_a_fixed_width_type_ignores_the_previous_length():
+    req = build_scan_request(
+        INT4,
+        NextScanType.INCREASED_VALUE_BY,
+        value_text="1",
+        previous_scan_length=99,
+    )
+    assert req.length == 4
+    assert req.value == 1
+
+
 def test_no_value_scan_falls_back_to_the_spec_width_without_a_previous_scan():
     req = build_scan_request(BYTES, NextScanType.CHANGED_VALUE, value_text="")
     assert req.length == BYTES.length

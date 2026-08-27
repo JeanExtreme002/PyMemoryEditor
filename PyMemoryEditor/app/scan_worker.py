@@ -22,7 +22,12 @@ from PySide6.QtCore import QThread, Signal
 
 from PyMemoryEditor import AbstractProcess, MemoryRegion, ScanTypesEnum
 
-from .scan_types import NextScanType, NO_VALUE_SCAN_TYPES, ScanType
+from .scan_types import (
+    DELTA_SCAN_TYPES,
+    NextScanType,
+    NO_VALUE_SCAN_TYPES,
+    ScanType,
+)
 from .value_types import parse_value, ValueTypeSpec
 
 
@@ -160,6 +165,13 @@ def build_scan_request(
         value = (lo, hi)
     else:
         value, length = parse_value(spec, value_text)
+
+    # "Increased/Decreased value BY" carry a value — the delta — but still
+    # compare against the previous scan's baseline, so like the no-value
+    # comparisons they must re-read at that scan's width. Sizing the read from
+    # the delta text instead would re-read a 4-byte baseline 1 byte at a time.
+    if scan_type in DELTA_SCAN_TYPES and spec.accepts_length_override:
+        length = previous_scan_length or length
 
     if not with_value:
         value = None  # Used by callers that only need spec/length/scan_type.

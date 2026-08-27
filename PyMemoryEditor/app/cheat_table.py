@@ -668,7 +668,10 @@ class CheatTable(QWidget):
         self._entries[row].spec_label = chosen
         spec = find_spec(chosen) or VALUE_TYPES[0]
         if not spec.accepts_length_override:
-            self._entries[row].length = spec.length
+            # The IDA pattern spec has no width of its own (the scanner derives
+            # it from the pattern), so keep whatever the entry was promoted
+            # with rather than collapsing it to a zero-byte buffer.
+            self._entries[row].length = spec.length or self._entries[row].length
         self._rebuild()
 
     def _change_length(self, row: int) -> None:

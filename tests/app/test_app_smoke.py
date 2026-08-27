@@ -338,6 +338,89 @@ def test_no_value_next_scan_refines_at_the_scanned_width(qtbot):
 
 
 @pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_promote_and_update_values_use_the_scanned_width(qtbot):
+    """
+    Both act on the results already on screen, so both must use the width those
+    results were read at — not the Length readout, which follows the Value box
+    and is cleared outright by a no-value scan type.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor.app.scan_types import NextScanType
+    from PyMemoryEditor.app.scanner_panel import SCAN_TYPE_CHOICES, ScannerPanel
+
+    QApplication.instance() or QApplication([])
+    panel = ScannerPanel()
+    qtbot.addWidget(panel)
+
+    panel._type_combo.setCurrentText("String (UTF-8)")
+    panel._value_edit.setText("olá")  # 4 UTF-8 bytes
+    panel._on_first_scan()
+    panel.set_has_results(True)
+
+    # A no-value scan type clears the Value box, so the readout drops to 0.
+    changed = next(
+        i
+        for i, (_, t) in enumerate(SCAN_TYPE_CHOICES)
+        if t is NextScanType.CHANGED_VALUE
+    )
+    panel._scan_combo.setCurrentIndex(changed)
+    assert panel._length_spin.value() == 0
+
+    # Promoting must still carry 4, not the spec's 16 — an entry read 16 bytes
+    # wide would pull 12 bytes of neighbouring memory into the cell.
+    spec, length = panel.current_spec_and_length()
+    assert spec.label == "String (UTF-8)"
+    assert length == 4
+
+    # Update Values is a read-only refresh: it re-reads at the scanned width
+    # even with a candidate for the next scan sitting in the box, and leaves
+    # the baseline alone.
+    widths = []
+    panel.update_values_requested.connect(lambda r: widths.append(r.length))
+    panel._scan_combo.setCurrentIndex(0)  # back to Exact Value
+    panel._value_edit.setText("hi")  # 2 bytes — a candidate, not a rescan
+    panel._on_update_values()
+    assert widths == [4]
+    assert panel._last_scan_length == 4
+
+    panel.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_range_readout_covers_both_bounds(qtbot):
+    """A range sizes with max(lo, hi), so the upper bound moves the readout."""
+    from PySide6.QtWidgets import QApplication
+
+    from PyMemoryEditor import ScanTypesEnum
+    from PyMemoryEditor.app.scanner_panel import SCAN_TYPE_CHOICES, ScannerPanel
+
+    QApplication.instance() or QApplication([])
+    panel = ScannerPanel()
+    qtbot.addWidget(panel)
+
+    panel._type_combo.setCurrentText("Byte Array (Hex)")
+    between = next(
+        i
+        for i, (_, t) in enumerate(SCAN_TYPE_CHOICES)
+        if t is ScanTypesEnum.VALUE_BETWEEN
+    )
+    panel._scan_combo.setCurrentIndex(between)
+
+    panel._value_edit.setText("AA")
+    panel._second_value_edit.setText("AA BB CC")
+    assert panel._length_spin.value() == 3
+    assert panel._build_request().length == 3
+
+    # Leaving the range drops the upper bound from the width again.
+    panel._scan_combo.setCurrentIndex(0)
+    assert panel._length_spin.value() == 1
+    assert panel._build_request().length == 1
+
+    panel.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
 def test_promoting_an_aob_hit_uses_the_pattern_width(qtbot):
     """
     An IDA pattern has no Length field and a spec length of 0, so a promoted hit
