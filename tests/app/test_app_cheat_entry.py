@@ -112,3 +112,57 @@ def test_a_zero_width_entry_is_floored_at_the_table_door():
     table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
     CheatTable.add_entry(table, entry)
     assert table._entries[0].length == 1
+
+
+@pytest.mark.parametrize(
+    "entry_kwargs",
+    (
+        # Promoted from an AOB scan, added by hand, or loaded from a JSON table
+        # written before the substitution existed — all three land in add_entry.
+        {"spec_label": "AOB Pattern (IDA)", "length": 5},
+        {"spec_label": "AOB Pattern (IDA)", "length": 0},
+    ),
+)
+def test_a_pattern_entry_is_retyped_so_its_cell_round_trips(entry_kwargs):
+    """
+    An IDA pattern finds an address; it can't hold a value. Its ``parse``
+    returns the pattern *text*, so a cell that displays hex would write ASCII
+    "00" (0x30 0x30) into the target instead of the byte 0x00 — reported as a
+    successful write. add_entry is the one door every entry enters through, so
+    the substitution happens there rather than at each producer.
+    """
+    pytest.importorskip("PySide6")
+
+    from types import SimpleNamespace
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import CheatTable
+    from PyMemoryEditor.app.value_types import parse_value
+    from PyMemoryEditor.util.convert import prepare_write
+
+    entry = CheatEntry(description="", address=0x1000, **entry_kwargs)
+    assert entry.spec.is_pattern  # what a producer handed over
+
+    table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
+    CheatTable.add_entry(table, entry)
+
+    stored = table._entries[0]
+    assert stored.spec_label == "Byte Array (Hex)"
+    assert stored.length >= 1
+
+    # Editing the cell now writes the byte it displays, not its ASCII spelling.
+    value, _ = parse_value(stored.spec, "00", stored.length)
+    assert value == b"\x00"
+    assert prepare_write(stored.spec.pytype, stored.length, value)[2] == b"\x00"
+
+
+def test_the_cheat_table_never_offers_a_pattern_as_an_entry_type():
+    """The type pickers must not let a user re-introduce what add_entry strips."""
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.cheat_table import HOLDABLE_TYPE_LABELS
+    from PyMemoryEditor.app.value_types import VALUE_TYPES, find_spec
+
+    assert HOLDABLE_TYPE_LABELS
+    assert not any(find_spec(label).is_pattern for label in HOLDABLE_TYPE_LABELS)
+    assert len(HOLDABLE_TYPE_LABELS) == len([s for s in VALUE_TYPES if not s.is_pattern])

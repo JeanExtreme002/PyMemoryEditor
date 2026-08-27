@@ -115,19 +115,6 @@ def build_scan_request(
     :raises ValueError: if a value/pattern fails to parse (message is
         user-facing — the caller picks the dialog title from ``spec.is_pattern``).
     """
-    # "Increased/Decreased value BY" adds the delta to the baseline, which only
-    # means anything for a number: on str/bytes ``prev + exp`` concatenates (so
-    # the comparison is never true) and ``prev - exp`` raises TypeError, which
-    # the refine worker swallows into "doesn't match". Either way every address
-    # is dropped and the user is told nothing, so reject the combination here
-    # with a message instead.
-    if scan_type in DELTA_SCAN_TYPES and spec.pytype in (str, bytes):
-        raise ValueError(
-            "Increased/Decreased Value By adds a numeric amount to the previous "
-            "value, which doesn't apply to %s. Use Changed Value or Unchanged "
-            "Value to compare against the previous scan." % spec.label
-        )
-
     # Pattern path — value is the pattern, scan_type is always EXACT. For an
     # IDA pattern the length is irrelevant (derived from the pattern); for a
     # regex it carries byte_length (the match width) from the Length field.
@@ -141,6 +128,22 @@ def build_scan_request(
             scan_type=ScanTypesEnum.EXACT_VALUE,
             value=None if not with_value else value,
             writeable_only=writeable_only,
+        )
+
+    # "Increased/Decreased value BY" adds the delta to the baseline, which only
+    # means anything for a number: on str/bytes ``prev + exp`` concatenates (so
+    # the comparison is never true) and ``prev - exp`` raises TypeError, which
+    # the refine worker swallows into "doesn't match". Either way every address
+    # is dropped and the user is told nothing, so reject the combination with a
+    # message instead. Checked *after* the pattern short-circuit above: the
+    # pattern specs are bytes-typed too, but they force EXACT regardless of the
+    # scan type passed, and the comparisons this message points at are disabled
+    # in pattern mode anyway.
+    if scan_type in DELTA_SCAN_TYPES and spec.pytype in (str, bytes):
+        raise ValueError(
+            "Increased/Decreased Value By adds a numeric amount to the previous "
+            "value, which doesn't apply to %s. Use Changed Value or Unchanged "
+            "Value to compare against the previous scan." % spec.label
         )
 
     # Increased/Decreased/Changed/Unchanged compare the value read now against

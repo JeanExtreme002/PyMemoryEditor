@@ -321,18 +321,14 @@ class ScannerPanel(QWidget):
         # token count), but a *regex* has no inferable width, so its Length
         # field stays enabled and supplies search_by_pattern's byte_length.
         #
-        # String (UTF-8) and Byte Array (Hex) lock the length field: the buffer
-        # width is the size of the value the user entered (the text's UTF-8 byte
-        # length, multi-byte aware / the number of hex bytes), so letting them
-        # override it would only allow truncating the value — which the
-        # fixed-width ctypes buffer rejects outright — or over-allocating it,
-        # which NUL-pads the target and silently searches for "the value
-        # followed by zeros". The field stays visible as a read-only readout
-        # kept in sync by _sync_value_length / _on_value_text_changed.
-        # Only the regex type keeps an editable field: it is the one spec whose
-        # width (byte_length, the max match width) is genuinely the user's to
-        # set. String / Byte Array mirror their value, and everything else is
-        # fixed by the spec.
+        # Regex is the one spec whose width is genuinely the user's to set (its
+        # byte_length is the max match width, which nothing can infer). String /
+        # Byte Array mirror the value they were given — overriding that could
+        # only truncate it, which the fixed-width ctypes buffer rejects, or
+        # over-allocate it, which NUL-pads the target into a silent search for
+        # "the value followed by zeros". Everything else is fixed by its spec.
+        # The field stays visible as a read-only readout throughout, kept in
+        # sync by _sync_value_length / _on_value_text_changed.
         self._length_spin.setEnabled(is_regex)
 
         if is_regex:
@@ -551,14 +547,13 @@ class ScannerPanel(QWidget):
         # applies no comparison when filter_only is False, so this needs no
         # target value — and must not parse one: the Value box may be empty
         # (a no-value scan type clears it outright), which would abort the
-        # refresh with "Invalid value" instead of refreshing. It re-reads at
-        # the width the rows were scanned at and leaves the baseline alone.
+        # refresh with "Invalid value" instead of refreshing.
         spec, length = self.current_spec_and_length()
         # The refresh re-reads and patches every row at this width, so it is the
-        # width the table will hold once it lands. Recording it also overwrites
-        # anything left behind by a request the owner rejected before the busy
-        # cycle began (an early return in its handler), which would otherwise be
-        # adopted here in place of a width that was never scanned at.
+        # width the table holds once it lands — the same one it was scanned at,
+        # recorded here so that a width left behind by a request the owner
+        # rejected before the busy cycle began (an early return in its handler)
+        # is overwritten rather than adopted in its place.
         self._pending_scan_length = length
         self.update_values_requested.emit(
             ScanRequest(
@@ -571,21 +566,21 @@ class ScannerPanel(QWidget):
         )
 
     def current_spec_and_length(self):
-        """Return the active (spec, length) pair for the Promote-to-Cheat-Table path."""
+        """Return the (spec, width) the rows currently on screen were read at.
+
+        Used by the Promote-to-Cheat-Table path and by the "Update Values"
+        refresh — both act on those rows, so both need the width their scan
+        ran at rather than anything the Value box says now. (An IDA hit is
+        promoted as this spec and re-typed to Byte Array by
+        ``CheatTable.add_entry``, which is where every entry enters.)
+        """
         spec = find_spec(self._type_combo.currentText())
         if spec is None:
             spec = VALUE_TYPES[0]
-        # An IDA pattern is a way to *find* an address, not a way to hold a
-        # value: the cheat table would format the bytes it reads back as hex but
-        # parse an edit as a pattern, so typing "00" into the cell writes ASCII
-        # 0x30 0x30 rather than the byte 0x00. Promote the hit as the Byte Array
-        # type instead — same width (one pattern token is one byte), and the
-        # cell then reads and writes the same thing.
+        # An IDA pattern has no Length field and a spec length of 0 — the width
+        # of one match is the pattern's own, one token per byte.
         if spec.is_pattern and not spec.is_regex:
-            return (
-                find_spec("Byte Array (Hex)") or spec,
-                self._pattern_byte_length(),
-            )
+            return spec, self._pattern_byte_length()
 
         # The rows being promoted were read at the width their scan ran at, so
         # that is the width the cheat entry has to keep. The Length readout
