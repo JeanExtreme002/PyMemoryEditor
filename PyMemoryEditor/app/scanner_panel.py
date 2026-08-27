@@ -47,6 +47,12 @@ from .scan_worker import build_scan_request, ScanRequest
 from .value_types import parse_value, VALUE_TYPES, find_spec
 
 
+# Shown in the (read-only) Length field of String / Byte Array before a value
+# has been entered: those types take their width from the value itself, so
+# there is genuinely no number to report yet.
+EMPTY_LENGTH_TEXT = "—  (set by the value)"
+
+
 SCAN_TYPE_CHOICES = (
     ("Exact Value", ScanTypesEnum.EXACT_VALUE),
     ("Not Exact Value", ScanTypesEnum.NOT_EXACT_VALUE),
@@ -285,6 +291,13 @@ class ScannerPanel(QWidget):
         else:
             self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
 
+        # Every type but the value-sized pair owns a real number here, so clear
+        # the "no width yet" slot the previous type may have opened (0 would
+        # otherwise render as EMPTY_LENGTH_TEXT for e.g. "1 Byte (Int8)").
+        if not is_sized_by_value:
+            self._length_spin.setSpecialValueText("")
+            self._length_spin.setMinimum(1)
+
         if is_regex:
             # Length = the regex's max match width in bytes (byte_length); it
             # drives the chunk overlap so a match straddling a chunk boundary is
@@ -300,13 +313,18 @@ class ScannerPanel(QWidget):
         elif is_sized_by_value:  # String (UTF-8) / Byte Array (Hex)
             # Length tracks the typed value — raise the ceiling so long strings
             # aren't visually clamped, then mirror the current value's byte size.
-            # Seed the spec default first: the readout is read-only now, so a
-            # value that doesn't parse as the newly picked type (or an empty
-            # field) must not keep showing a width left over from the previous
-            # type, which the user would have no way to correct.
+            #
+            # Until a value has been entered there is no width to report, and
+            # the readout is read-only, so the user can't correct a number we
+            # invent. Open a 0 slot rendered as EMPTY_LENGTH_TEXT for that
+            # state rather than seeding the spec default (which would show
+            # "4 bytes" for an empty byte array and then jump to "1 byte" on
+            # the first hex digit) or keeping a width the previous type wrote.
+            self._length_spin.setMinimum(0)
+            self._length_spin.setSpecialValueText(EMPTY_LENGTH_TEXT)
             self._length_spin.setMaximum(2_147_483_647)
             self._length_spin.setSuffix("  bytes")
-            self._length_spin.setValue(spec.length)
+            self._length_spin.setValue(0)
             self._sync_value_length()
         else:
             self._length_spin.setMaximum(1024)
@@ -461,4 +479,8 @@ class ScannerPanel(QWidget):
         length = (
             self._length_spin.value() if spec.accepts_length_override else spec.length
         )
-        return spec, int(length)
+        # A value-sized type with no value entered yet reads 0 (the
+        # EMPTY_LENGTH_TEXT slot); a cheat entry can't have a zero-width buffer,
+        # so fall back to the spec default. In practice promoting requires scan
+        # results, which can only exist once a value set a real width.
+        return spec, int(length) or spec.length

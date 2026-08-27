@@ -125,10 +125,13 @@ def build_scan_request(
     # re-reading 16 bytes per address: the value read back is "olá\0\0…", never
     # equal to the "olá" recorded by the first scan, so every address would
     # report as Changed.
+    # A falsy length_spin_value means the panel has no width to offer (the field
+    # reads 0 for a value-sized type before any value was entered), so the spec
+    # default stands in.
     if scan_type in NO_VALUE_SCAN_TYPES:
         length = (
             length_spin_value
-            if spec.accepts_length_override and length_spin_value is not None
+            if spec.accepts_length_override and length_spin_value
             else spec.length
         )
         return ScanRequest(

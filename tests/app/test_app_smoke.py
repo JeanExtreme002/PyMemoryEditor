@@ -298,39 +298,49 @@ def test_variable_width_types_lock_length_to_value_text(qtbot):
 
 
 @pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
-def test_locked_length_readout_is_reseeded_when_the_value_type_changes(qtbot):
+def test_length_readout_reports_no_width_until_a_value_is_entered(qtbot):
     """
-    The Length readout is read-only for the value-sized types, so a value that
-    doesn't parse as the newly picked type must fall back to that type's default
-    width — leaving a stale width from the previous type would be both wrong and
-    uncorrectable by the user.
+    A value-sized type has no width to report before a value exists, and the
+    readout is read-only, so it must say so rather than show a number the scan
+    would never use — picking Byte Array on a fresh panel used to inherit the
+    Int32 "4 bytes" and then drop to "1 byte" on the first hex digit.
     """
     from PySide6.QtWidgets import QApplication
 
-    from PyMemoryEditor.app.scanner_panel import ScannerPanel
+    from PyMemoryEditor.app.scanner_panel import EMPTY_LENGTH_TEXT, ScannerPanel
     from PyMemoryEditor.app.value_types import find_spec
 
     QApplication.instance() or QApplication([])
     panel = ScannerPanel()
     qtbot.addWidget(panel)
 
-    bytes_default = find_spec("Byte Array (Hex)").length
-    str_default = find_spec("String (UTF-8)").length
+    # Fresh panel: Int32 shows its own fixed width.
+    assert panel._length_spin.value() == 4
 
-    # A string value is not valid hex, so switching to Byte Array can't size it.
+    # Byte Array with nothing typed reports no width at all — not the 4 it
+    # inherited, and not a default that would jump to 1 on the first digit.
+    panel._type_combo.setCurrentText("Byte Array (Hex)")
+    assert panel._length_spin.value() == 0
+    assert panel._length_spin.text() == EMPTY_LENGTH_TEXT
+    panel._value_edit.setText("AA")
+    assert panel._length_spin.value() == 1
+
+    # A string value is not valid hex, so switching back to Byte Array can't
+    # size it: no stale width carries over from String.
     panel._type_combo.setCurrentText("String (UTF-8)")
     panel._value_edit.setText("some long string here")
     assert panel._length_spin.value() == 21
 
     panel._type_combo.setCurrentText("Byte Array (Hex)")
-    assert panel._length_spin.value() == bytes_default
-    assert panel.current_spec_and_length()[1] == bytes_default
+    assert panel._length_spin.value() == 0
+    # Promoting can't produce a zero-width cheat entry even in that state.
+    assert panel.current_spec_and_length()[1] == find_spec("Byte Array (Hex)").length
 
-    # Same the other way round: an empty field falls back to the spec default
-    # rather than inheriting whatever the previous type left behind.
-    panel._value_edit.clear()
-    panel._type_combo.setCurrentText("String (UTF-8)")
-    assert panel._length_spin.value() == str_default
+    # A fixed-width type picked afterwards must show its number, never the
+    # empty-slot text (a 1-byte Int8 sits at what was the special value).
+    panel._type_combo.setCurrentText("1 Byte  (Int8)")
+    assert panel._length_spin.value() == 1
+    assert panel._length_spin.text() != EMPTY_LENGTH_TEXT
 
     panel.close()
 
