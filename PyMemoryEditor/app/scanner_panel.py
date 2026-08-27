@@ -242,7 +242,7 @@ class ScannerPanel(QWidget):
 
         self._cancel_btn = QPushButton("Cancel scan")
         self._cancel_btn.setObjectName("danger")
-        self._cancel_btn.clicked.connect(self.cancel_requested.emit)
+        self._cancel_btn.clicked.connect(self._on_cancel)
         buttons.addWidget(self._cancel_btn)
 
         layout.addWidget(buttons_box)
@@ -329,10 +329,11 @@ class ScannerPanel(QWidget):
         # which NUL-pads the target and silently searches for "the value
         # followed by zeros". The field stays visible as a read-only readout
         # kept in sync by _sync_value_length / _on_value_text_changed.
-        self._length_spin.setEnabled(
-            (spec.accepts_length_override and not is_pattern and not sized_by_value)
-            or is_regex
-        )
+        # Only the regex type keeps an editable field: it is the one spec whose
+        # width (byte_length, the max match width) is genuinely the user's to
+        # set. String / Byte Array mirror their value, and everything else is
+        # fixed by the spec.
+        self._length_spin.setEnabled(is_regex)
 
         if is_regex:
             self._value_edit.setPlaceholderText(
@@ -536,6 +537,15 @@ class ScannerPanel(QWidget):
             self._pending_scan_length = request.length
             self.next_scan_requested.emit(request)
 
+    def _on_cancel(self) -> None:
+        # A cancelled refine still reports results (the worker breaks out of its
+        # loop and emits finished_ok with what it kept), but only the rows it
+        # reached were re-read at the new width — the rest still hold values
+        # recorded at the old one. Neither width describes the table, so keep
+        # the one the majority of rows were actually read at.
+        self._pending_scan_length = None
+        self.cancel_requested.emit()
+
     def _on_update_values(self) -> None:
         # A read-only refresh of the rows already on screen. RefineScanWorker
         # applies no comparison when filter_only is False, so this needs no
@@ -544,6 +554,12 @@ class ScannerPanel(QWidget):
         # refresh with "Invalid value" instead of refreshing. It re-reads at
         # the width the rows were scanned at and leaves the baseline alone.
         spec, length = self.current_spec_and_length()
+        # The refresh re-reads and patches every row at this width, so it is the
+        # width the table will hold once it lands. Recording it also overwrites
+        # anything left behind by a request the owner rejected before the busy
+        # cycle began (an early return in its handler), which would otherwise be
+        # adopted here in place of a width that was never scanned at.
+        self._pending_scan_length = length
         self.update_values_requested.emit(
             ScanRequest(
                 spec=spec,
@@ -559,12 +575,17 @@ class ScannerPanel(QWidget):
         spec = find_spec(self._type_combo.currentText())
         if spec is None:
             spec = VALUE_TYPES[0]
-        # An IDA pattern has no Length field and a spec length of 0 (the scanner
-        # derives the width from the pattern), so a promoted AOB hit would get a
-        # zero-byte buffer that the cheat table then re-reads as empty on every
-        # poll tick. Measure the pattern instead — one token is one byte.
+        # An IDA pattern is a way to *find* an address, not a way to hold a
+        # value: the cheat table would format the bytes it reads back as hex but
+        # parse an edit as a pattern, so typing "00" into the cell writes ASCII
+        # 0x30 0x30 rather than the byte 0x00. Promote the hit as the Byte Array
+        # type instead — same width (one pattern token is one byte), and the
+        # cell then reads and writes the same thing.
         if spec.is_pattern and not spec.is_regex:
-            return spec, self._pattern_byte_length()
+            return (
+                find_spec("Byte Array (Hex)") or spec,
+                self._pattern_byte_length(),
+            )
 
         # The rows being promoted were read at the width their scan ran at, so
         # that is the width the cheat entry has to keep. The Length readout

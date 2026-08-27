@@ -500,8 +500,16 @@ def test_a_scan_that_never_lands_does_not_move_the_baseline(qtbot):
     panel.set_has_results(True)
     assert panel._last_scan_length == 2
 
-    # Once a scan does land, its width becomes the baseline.
+    # A cancelled refine reports results too (the worker emits finished_ok with
+    # what it kept), but only the rows it reached were re-read at the new width.
     panel._scan_combo.setCurrentIndex(0)
+    panel._value_edit.setText("00 11 22 33 44 55")
+    panel._on_next_scan()
+    panel._on_cancel()
+    panel.set_has_results(True)
+    assert panel._last_scan_length == 2
+
+    # Once a scan does land uncancelled, its width becomes the baseline.
     panel._value_edit.setText("00 11 22 33")
     panel._on_next_scan()
     panel.set_has_results(True)
@@ -544,15 +552,18 @@ def test_range_readout_covers_both_bounds(qtbot):
 
 
 @pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
-def test_promoting_an_aob_hit_uses_the_pattern_width(qtbot):
+def test_promoting_an_aob_hit_yields_an_editable_byte_array_entry(qtbot):
     """
-    An IDA pattern has no Length field and a spec length of 0, so a promoted hit
-    would land in the cheat table as a zero-byte entry that reads back empty on
-    every poll tick. The width is the pattern's own — one token, one byte.
+    An IDA pattern finds an address; it can't hold a value. A pattern-typed
+    cheat entry formats the bytes it reads as hex but parses an edit as a
+    *pattern*, so typing "00" would write ASCII 0x30 0x30 instead of the byte
+    0x00 — and the spec's own length is 0, which would make the entry read back
+    empty forever. Promote as Byte Array at the pattern's width instead.
     """
     from PySide6.QtWidgets import QApplication
 
     from PyMemoryEditor.app.scanner_panel import ScannerPanel
+    from PyMemoryEditor.app.value_types import parse_value
 
     QApplication.instance() or QApplication([])
     panel = ScannerPanel()
@@ -562,8 +573,12 @@ def test_promoting_an_aob_hit_uses_the_pattern_width(qtbot):
     panel._value_edit.setText("48 8B ? ? 00")
 
     spec, length = panel.current_spec_and_length()
-    assert spec.label == "AOB Pattern (IDA)"
+    assert spec.label == "Byte Array (Hex)"
     assert length == 5  # five tokens, wildcards included
+
+    # The promoted spec round-trips a hex edit as the bytes it displays.
+    value, _ = parse_value(spec, "00", length)
+    assert value == b"\x00"
 
     panel.close()
 
