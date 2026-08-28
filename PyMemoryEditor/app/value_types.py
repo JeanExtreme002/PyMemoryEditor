@@ -41,7 +41,9 @@ class ValueTypeSpec:
     # read at the address, so a wildcard can mean "leave that byte alone".
     # ``None`` means ``parse`` already answers both, which is the case for
     # every type that isn't a pattern.
-    parse_write: Optional[Callable[[str, Optional[bytes]], Any]] = None
+    parse_write: Optional[
+        Callable[[str, Optional[bytes], Optional[int]], Any]
+    ] = None
 
 
 def _parse_bool(text: str) -> bool:
@@ -167,7 +169,9 @@ def _parse_regex(text: str) -> bytes:
     return pattern
 
 
-def _parse_pattern_write(text: str, current: Optional[bytes]) -> bytes:
+def _parse_pattern_write(
+    text: str, current: Optional[bytes], length_override: Optional[int] = None
+) -> bytes:
     """Turn an IDA pattern typed into a value cell into the bytes to write.
 
     ``_parse_pattern`` answers the scanner's question and hands back the
@@ -186,7 +190,21 @@ def _parse_pattern_write(text: str, current: Optional[bytes]) -> bytes:
     tokens = tokenize_pattern(text)
     wildcards = [index for index, token in enumerate(tokens) if token is None]
 
+    if length_override is not None and len(tokens) > length_override:
+        raise ValueError(
+            "Pattern is %d bytes but the entry holds %d. Widen the entry first, "
+            "or the extra bytes would be dropped without warning."
+            % (len(tokens), length_override)
+        )
+
     if wildcards:
+        # `current` is whatever the entry's spec produced when it was last
+        # polled, and a type change doesn't wait for a fresh tick — so it can
+        # still be the int/str/float the *previous* type read. Anything but
+        # bytes is treated as "nothing read yet" rather than reaching len()
+        # and raising a TypeError the callers' `except ValueError` won't catch.
+        if not isinstance(current, (bytes, bytearray)):
+            current = None
         if current is None:
             raise ValueError(
                 "A '?' keeps the byte that is already there, so it can't be "
@@ -205,7 +223,9 @@ def _parse_pattern_write(text: str, current: Optional[bytes]) -> bytes:
     )
 
 
-def _parse_regex_write(text: str, current: Optional[bytes]) -> bytes:
+def _parse_regex_write(
+    text: str, current: Optional[bytes], length_override: Optional[int] = None
+) -> bytes:
     """Turn a value cell's text into bytes for a regex-typed entry.
 
     A regex names a *set* of byte strings, so the pattern itself can't be
@@ -213,7 +233,7 @@ def _parse_regex_write(text: str, current: Optional[bytes]) -> bytes:
     (``_fmt_regex_match``), so an edit is taken literally — the same rule as
     String (UTF-8) — and writes exactly the characters typed.
     """
-    del current  # A literal write doesn't depend on what is there.
+    del current, length_override  # A literal write depends on neither.
     if not text:
         raise ValueError("Empty value.")
     return text.encode("utf-8")
@@ -433,7 +453,7 @@ def parse_value_for_write(
     if spec.parse_write is None:
         return parse_value(spec, text, length_override)
 
-    value = spec.parse_write(text, current)
+    value = spec.parse_write(text, current, length_override)
     if spec.accepts_length_override and length_override is not None:
         return value, max(1, int(length_override))
     return value, max(1, len(value))

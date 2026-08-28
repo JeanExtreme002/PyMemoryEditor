@@ -232,3 +232,64 @@ def test_a_pattern_without_a_length_override_reports_its_own_width():
     assert not spec.accepts_length_override
     _, width = parse_value_for_write(spec, "48 8B ? 00", None, b"\x11" * 8)
     assert width == 4
+
+
+@pytest.mark.parametrize("stale", (1234, "text", 3.14, True))
+def test_a_wildcard_refuses_a_value_left_by_another_type(stale):
+    """
+    ``current`` is whatever the entry's spec decoded on the last poll tick, and
+    a bulk edit that changes the type *and* sets a value uses the new spec on
+    the old type's value in the same pass. Anything but bytes has to come back
+    as ValueError — the callers only catch that, so a TypeError would escape
+    the Qt slot and leave the table un-rebuilt.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
+
+    with pytest.raises(ValueError, match="read at least once"):
+        parse_value_for_write(find_spec("AOB Pattern (IDA)"), "48 ? 00", 3, stale)
+
+
+def test_a_pattern_wider_than_its_entry_is_refused():
+    """
+    prepare_write truncates to the entry's width, so the extra bytes would be
+    dropped in silence — while the same edit one byte *short* is rejected by
+    the wildcard check. Report the mismatch instead.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
+
+    spec = find_spec("AOB Pattern (IDA)")
+    with pytest.raises(ValueError, match="Widen the entry"):
+        parse_value_for_write(spec, "48 8B 90 90 CC CC CC CC", 5, b"\x11" * 5)
+
+    # Exactly as wide is fine, and so is narrower.
+    assert parse_value_for_write(spec, "48 8B 90 90 CC", 5, b"\x11" * 5)[0]
+    assert parse_value_for_write(spec, "48 8B", 5, b"\x11" * 5)[0] == b"\x48\x8b"
+
+
+def test_changing_an_entry_type_forgets_the_value_the_old_one_read():
+    """
+    A spec's ``format`` only accepts what its own ``pytype`` produces, and
+    nothing waits for a fresh poll tick after a type change: formatting an
+    Int32's 1234 as a byte array raises TypeError inside a Qt slot, and a frozen
+    entry would republish the old type's value under the new ``pytype``.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import _forget_value_read_as_another_type
+
+    entry = CheatEntry(
+        description="", address=0x1000, spec_label="4 Bytes (Int32)", length=4
+    )
+    entry.last_value = 1234
+    entry.frozen_value = 1234
+
+    _forget_value_read_as_another_type(entry)
+    entry.spec_label = "Byte Array (Hex)"
+
+    assert entry.last_value is None and entry.frozen_value is None
+    assert entry.spec.format(entry.last_value) == ""  # would have raised TypeError

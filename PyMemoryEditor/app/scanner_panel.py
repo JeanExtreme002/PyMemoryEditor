@@ -534,12 +534,22 @@ class ScannerPanel(QWidget):
             self.next_scan_requested.emit(request)
 
     def _on_cancel(self) -> None:
-        # A cancelled refine still reports results (the worker breaks out of its
-        # loop and emits finished_ok with what it kept), but only the rows it
-        # reached were re-read at the new width — the rest still hold values
-        # recorded at the old one. Neither width describes the table, so keep
-        # the one the majority of rows were actually read at.
-        self._pending_scan_length = None
+        # Both workers still report results after a cancel — they break out of
+        # the loop and emit finished_ok with what they have — so what the
+        # partial results are worth depends on which scan was running.
+        #
+        # A refine re-read only the rows it reached at the new width; the rest
+        # still hold values recorded at the old one, so neither width describes
+        # the table and the previous one (which most rows match) stands.
+        #
+        # A first scan is the opposite: every address it did find, it found at
+        # its own width, and there is no earlier width to fall back on. Dropping
+        # it would send the next Changed/Unchanged refine to the spec default —
+        # 16 for a String scanned at 4 — which is the failure this whole branch
+        # exists to fix. _has_results tells the two apart: a first scan only
+        # runs when there are none yet.
+        if self._has_results:
+            self._pending_scan_length = None
         self.cancel_requested.emit()
 
     def _on_update_values(self) -> None:
@@ -570,9 +580,10 @@ class ScannerPanel(QWidget):
 
         Used by the Promote-to-Cheat-Table path and by the "Update Values"
         refresh — both act on those rows, so both need the width their scan
-        ran at rather than anything the Value box says now. (An IDA hit is
-        promoted as this spec and re-typed to Byte Array by
-        ``CheatTable.add_entry``, which is where every entry enters.)
+        ran at rather than anything the Value box says now. An IDA hit keeps
+        this spec: a pattern-typed entry reads and writes correctly now (see
+        ``parse_value_for_write``), and only its width has to come from the
+        pattern, since the spec declares none.
         """
         spec = find_spec(self._type_combo.currentText())
         if spec is None:

@@ -134,4 +134,8 @@ def tokenize_pattern(pattern: str) -> List[Optional[int]]:
     return parsed
 
 
-__all__ = ("compile_pattern", "tokenize_pattern", "PatternLike")
+# tokenize_pattern is deliberately absent: it exists so the scan and write
+# paths share one set of token rules, and nothing outside the package consumes
+# it. Exporting it would promise a documented, supported surface that neither
+# the guide nor the API reference describes.
+__all__ = ("compile_pattern", "PatternLike")

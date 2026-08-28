@@ -544,8 +544,10 @@ class CheatTable(QWidget):
                 if plan.description is not None:
                     entry.description = plan.description
 
-                if plan.spec is not None:
+                if plan.spec is not None and plan.spec.label != entry.spec_label:
                     entry.spec_label = plan.spec.label
+                    _forget_value_read_as_another_type(entry)
+                if plan.spec is not None:
                     if not plan.spec.accepts_length_override:
                         # `or entry.length`: the AOB pattern spec declares a
                         # length of 0 — the scanner derives a match's width from
@@ -685,12 +687,15 @@ class CheatTable(QWidget):
         )
         if not ok:
             return
-        self._entries[row].spec_label = chosen
+        entry = self._entries[row]
+        if chosen != entry.spec_label:
+            entry.spec_label = chosen
+            _forget_value_read_as_another_type(entry)
         spec = find_spec(chosen) or VALUE_TYPES[0]
         if not spec.accepts_length_override:
             # Same as the bulk edit: the AOB pattern spec declares no width of
             # its own, so the entry keeps the one it has.
-            self._entries[row].length = spec.length or self._entries[row].length
+            entry.length = spec.length or entry.length
         self._rebuild()
 
     def _change_length(self, row: int) -> None:
@@ -760,6 +765,21 @@ class CheatTable(QWidget):
             except (KeyError, ValueError) as exc:
                 # Surface but don't abort the whole import on one bad row.
                 QMessageBox.warning(self, "Import", f"Skipped a bad entry: {exc}")
+
+
+def _forget_value_read_as_another_type(entry: CheatEntry) -> None:
+    """Drop the cached value after an entry's type changes.
+
+    ``last_value`` and ``frozen_value`` hold whatever the *previous* spec
+    decoded — an int, a str, raw bytes. Nothing waits for a fresh poll tick
+    before the new spec is used on them, and a spec's ``format`` only accepts
+    what its own ``pytype`` produces: ``_fmt_bytes(1234)`` raises TypeError from
+    inside a Qt slot, and a frozen entry would be re-published to the poll
+    worker to write the old type's value through the new type's ``pytype``.
+    The next tick refills both, so forgetting them costs a single frame.
+    """
+    entry.last_value = None
+    entry.frozen_value = None
 
 
 def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
