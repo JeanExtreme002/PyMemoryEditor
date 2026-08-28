@@ -405,3 +405,35 @@ def test_re_promoting_an_address_forgets_the_value_its_old_type_read():
     assert stored.last_value is None and stored.frozen_value is None
     # _fmt_bytes("hello") would have raised ValueError inside add_entry.
     assert stored.spec.format(stored.last_value) == ""
+
+
+@pytest.mark.parametrize(
+    "old_label, current, expected",
+    (
+        # Byte Array → AOB keeps what the bytes mean, so the wildcard has
+        # something to keep even though the type change forgot the cache.
+        ("Byte Array (Hex)", b"\x11\x22\x33\x44", b"\x48\x22\x33\x00"),
+        # Int32 → AOB doesn't: those bytes were never read as bytes.
+        ("4 Bytes (Int32)", 1234, None),
+    ),
+)
+def test_a_bulk_edit_that_retypes_and_writes_uses_the_value_it_replaced(
+    old_label, current, expected
+):
+    """
+    The bulk edit changes the type and writes a value in the same pass, and the
+    type change forgets the cached value — so the write has to have captured it
+    first, or an IDA '?' finds nothing to keep and every selected row fails.
+    A value the new type could never have produced is ignored rather than
+    misread, which is why the Int32 case still refuses.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
+
+    spec = find_spec("AOB Pattern (IDA)")
+    if expected is None:
+        with pytest.raises(ValueError, match="read at least once"):
+            parse_value_for_write(spec, "48 ? ? 00", 4, current)
+    else:
+        assert parse_value_for_write(spec, "48 ? ? 00", 4, current)[0] == expected

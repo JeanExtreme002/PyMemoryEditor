@@ -277,7 +277,11 @@ class CheatTable(QWidget):
         self._table.setItem(row, self.COL_ADDRESS, addr)
 
         type_label = entry.spec_label
-        if entry.spec.accepts_length_override:
+        # Show the width whenever it belongs to the entry rather than to the
+        # spec. An IDA pattern declares none (length 0) yet carries a real one
+        # here — writes are refused against it — so hiding it left the user
+        # told to "widen the entry" with no way to see what it holds.
+        if entry.spec.accepts_length_override or not entry.spec.length:
             type_label += f"  · {entry.length}B"
         type_item = QTableWidgetItem(type_label)
         type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -557,6 +561,13 @@ class CheatTable(QWidget):
                 if plan.description is not None:
                     entry.description = plan.description
 
+                # What the row was showing before this plan touched it. A type
+                # change forgets it, but a write in the same pass still needs
+                # it: an IDA '?' keeps the byte that is already there, and
+                # Byte Array → AOB doesn't change what those bytes mean.
+                # parse_value_for_write ignores it when the type genuinely
+                # changed shape, so a stale int can't be misread as bytes.
+                current = entry.last_value
                 if plan.spec is not None and plan.spec.label != entry.spec_label:
                     entry.spec_label = plan.spec.label
                     _forget_value_read_as_another_type(entry)
@@ -572,7 +583,7 @@ class CheatTable(QWidget):
                     spec = entry.spec
                     try:
                         value, effective_length = parse_value_for_write(
-                            spec, plan.value_text, entry.length, entry.last_value
+                            spec, plan.value_text, entry.length, current
                         )
                     except ValueError as exc:
                         failures.append((entry.address, str(exc)))
@@ -718,11 +729,12 @@ class CheatTable(QWidget):
             "Length (bytes):",
             value=self._entries[row].length,
             minValue=1,
-            # A String / Byte Array entry is promoted at the width of the value
-            # that was scanned for, which the scanner doesn't cap at 1024 — a
-            # tighter ceiling here would silently shrink such an entry for a
-            # user who merely opened the dialog and pressed OK.
-            maxValue=max(1024, self._entries[row].length),
+            # Same ceiling the scanner uses for a value-sized width. Anything
+            # lower is a trap now that entries are promoted at the width of the
+            # value scanned for: a 2000-byte entry under a max(1024, length)
+            # ceiling could only ever be shrunk, and a wider value can't be
+            # written into it either — parse_value_for_write refuses that.
+            maxValue=2_147_483_647,
         )
         if not ok:
             return
@@ -781,7 +793,7 @@ class CheatTable(QWidget):
 
 
 def _forget_value_read_as_another_type(entry: CheatEntry) -> None:
-    """Drop the cached value after an entry's type changes.
+    """Drop the cached value when ``new_spec`` can't read what produced it.
 
     ``last_value`` and ``frozen_value`` hold whatever the *previous* spec
     decoded — an int, a str, raw bytes. Nothing waits for a fresh poll tick
@@ -790,6 +802,11 @@ def _forget_value_read_as_another_type(entry: CheatEntry) -> None:
     inside a Qt slot, and a frozen entry would be re-published to the poll
     worker to write the old type's value through the new type's ``pytype``.
     The next tick refills both, so forgetting them costs a single frame.
+
+    Unconditional: even a switch that keeps the ``pytype`` can change the
+    width, and a value decoded at the old one means nothing at the new. A
+    caller that still needs the bytes — the bulk edit writes a value in the
+    same pass — must capture them before calling.
     """
     entry.last_value = None
     entry.frozen_value = None
