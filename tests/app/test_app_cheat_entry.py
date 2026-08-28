@@ -115,54 +115,70 @@ def test_a_zero_width_entry_is_floored_at_the_table_door():
 
 
 @pytest.mark.parametrize(
-    "entry_kwargs",
+    "text, current, expected",
     (
-        # Promoted from an AOB scan, added by hand, or loaded from a JSON table
-        # written before the substitution existed — all three land in add_entry.
-        {"spec_label": "AOB Pattern (IDA)", "length": 5},
-        {"spec_label": "AOB Pattern (IDA)", "length": 0},
+        # Plain hex writes the bytes it names — the same ones the cell shows.
+        ("48 8B 00", None, b"\x48\x8b\x00"),
+        # A '?' keeps the byte already there, so a signature can be patched
+        # without disturbing the operands around what you meant to change.
+        ("48 ? 00", b"\x11\x22\x33", b"\x48\x22\x00"),
+        ("? ? ?", b"\xaa\xbb\xcc", b"\xaa\xbb\xcc"),
     ),
 )
-def test_a_pattern_entry_is_retyped_so_its_cell_round_trips(entry_kwargs):
+def test_an_aob_entry_writes_the_bytes_its_cell_displays(text, current, expected):
     """
-    An IDA pattern finds an address; it can't hold a value. Its ``parse``
-    returns the pattern *text*, so a cell that displays hex would write ASCII
-    "00" (0x30 0x30) into the target instead of the byte 0x00 — reported as a
-    successful write. add_entry is the one door every entry enters through, so
-    the substitution happens there rather than at each producer.
+    ``spec.parse`` answers the scanner's question and returns the pattern
+    *text*, which would write the ASCII spelling of the hex the cell displays
+    ("00" as 0x30 0x30). The write path asks ``parse_value_for_write``
+    instead, which resolves the tokens to the bytes they name.
     """
     pytest.importorskip("PySide6")
 
-    from types import SimpleNamespace
-
-    from PyMemoryEditor.app.cheat_entry import CheatEntry
-    from PyMemoryEditor.app.cheat_table import CheatTable
-    from PyMemoryEditor.app.value_types import parse_value
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
     from PyMemoryEditor.util.convert import prepare_write
 
-    entry = CheatEntry(description="", address=0x1000, **entry_kwargs)
-    assert entry.spec.is_pattern  # what a producer handed over
-
-    table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
-    CheatTable.add_entry(table, entry)
-
-    stored = table._entries[0]
-    assert stored.spec_label == "Byte Array (Hex)"
-    assert stored.length >= 1
-
-    # Editing the cell now writes the byte it displays, not its ASCII spelling.
-    value, _ = parse_value(stored.spec, "00", stored.length)
-    assert value == b"\x00"
-    assert prepare_write(stored.spec.pytype, stored.length, value)[2] == b"\x00"
+    spec = find_spec("AOB Pattern (IDA)")
+    value, _ = parse_value_for_write(spec, text, len(expected), current)
+    assert value == expected
+    # And survives the encode the backend performs on the way to the process.
+    assert prepare_write(spec.pytype, len(expected), value)[2] == expected
 
 
-def test_the_cheat_table_never_offers_a_pattern_as_an_entry_type():
-    """The type pickers must not let a user re-introduce what add_entry strips."""
+def test_an_aob_wildcard_needs_something_to_keep():
+    """A '?' means "leave that byte alone", so it needs a byte to leave alone."""
     pytest.importorskip("PySide6")
 
-    from PyMemoryEditor.app.cheat_table import HOLDABLE_TYPE_LABELS
-    from PyMemoryEditor.app.value_types import VALUE_TYPES, find_spec
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
 
-    assert HOLDABLE_TYPE_LABELS
-    assert not any(find_spec(label).is_pattern for label in HOLDABLE_TYPE_LABELS)
-    assert len(HOLDABLE_TYPE_LABELS) == len([s for s in VALUE_TYPES if not s.is_pattern])
+    spec = find_spec("AOB Pattern (IDA)")
+    with pytest.raises(ValueError, match="read at least once"):
+        parse_value_for_write(spec, "48 ? 00", 3, None)
+
+    # Read, but not far enough to cover the wildcard's offset.
+    with pytest.raises(ValueError, match="nothing to keep"):
+        parse_value_for_write(spec, "48 8B ?", 3, b"\x11")
+
+
+def test_a_regex_entry_writes_its_cell_text_literally():
+    """
+    A regex names a *set* of byte strings, so the pattern can't be written
+    back. The cell shows the text read at the address, so an edit is taken
+    literally — the same rule String (UTF-8) follows.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
+
+    spec = find_spec("Regex (String)")
+    value, _ = parse_value_for_write(spec, "Player01", 64, b"Player42")
+    assert value == b"Player01"
+
+
+def test_every_non_pattern_type_writes_exactly_what_it_searches_for():
+    """``parse_write`` exists only where the two questions differ."""
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import VALUE_TYPES
+
+    for spec in VALUE_TYPES:
+        assert (spec.parse_write is not None) == spec.is_pattern, spec.label

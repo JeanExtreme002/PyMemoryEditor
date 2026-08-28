@@ -35,6 +35,13 @@ class ValueTypeSpec:
     # ``byte_length`` (the number of bytes one match consumes) that
     # ``search_by_pattern`` requires for regex input.
     is_regex: bool = False
+    # How cell text becomes the bytes to write back, for the types whose
+    # ``parse`` answers a different question — "what am I searching for?"
+    # rather than "what value is this?". Receives the text and the bytes last
+    # read at the address, so a wildcard can mean "leave that byte alone".
+    # ``None`` means ``parse`` already answers both, which is the case for
+    # every type that isn't a pattern.
+    parse_write: Optional[Callable[[str, Optional[bytes]], Any]] = None
 
 
 def _parse_bool(text: str) -> bool:
@@ -160,6 +167,58 @@ def _parse_regex(text: str) -> bytes:
     return pattern
 
 
+def _parse_pattern_write(text: str, current: Optional[bytes]) -> bytes:
+    """Turn an IDA pattern typed into a value cell into the bytes to write.
+
+    ``_parse_pattern`` answers the scanner's question and hands back the
+    pattern *text*, which is not something that can be written anywhere — the
+    cell would store the ASCII spelling of the hex it displays. Here the same
+    tokens are resolved to the bytes they name.
+
+    A ``?`` keeps whatever byte is already at that offset. That mirrors its
+    search meaning ("any byte") and is what makes a signature patchable: you
+    name the bytes you mean to change and leave the operands alone. It needs
+    the current contents, so a wildcard only works once the entry has been
+    read at least one poll tick.
+    """
+    from PyMemoryEditor.util.pattern import tokenize_pattern
+
+    tokens = tokenize_pattern(text)
+    wildcards = [index for index, token in enumerate(tokens) if token is None]
+
+    if wildcards:
+        if current is None:
+            raise ValueError(
+                "A '?' keeps the byte that is already there, so it can't be "
+                "used before the value has been read at least once."
+            )
+        if len(current) < wildcards[-1] + 1:
+            raise ValueError(
+                "'?' at byte %d has nothing to keep: only %d byte(s) were read "
+                "at this address. Widen the entry or spell the byte out."
+                % (wildcards[-1] + 1, len(current))
+            )
+
+    return bytes(
+        current[index] if token is None else token  # type: ignore[index]
+        for index, token in enumerate(tokens)
+    )
+
+
+def _parse_regex_write(text: str, current: Optional[bytes]) -> bytes:
+    """Turn a value cell's text into bytes for a regex-typed entry.
+
+    A regex names a *set* of byte strings, so the pattern itself can't be
+    written back. What the cell shows is the text read at the address
+    (``_fmt_regex_match``), so an edit is taken literally — the same rule as
+    String (UTF-8) — and writes exactly the characters typed.
+    """
+    del current  # A literal write doesn't depend on what is there.
+    if not text:
+        raise ValueError("Empty value.")
+    return text.encode("utf-8")
+
+
 def _fmt_bytes(value: bytes) -> str:
     if value is None:
         return ""
@@ -271,6 +330,7 @@ VALUE_TYPES = (
         lambda v: "" if v is None else (v if isinstance(v, str) else _fmt_bytes(v)),
         accepts_length_override=False,
         is_pattern=True,
+        parse_write=_parse_pattern_write,
     ),
     # Text-regex scan — the "Value" input becomes a string regex (e.g.
     # ``Player[0-9]+``) UTF-8 encoded into the bytes pattern, and the Length
@@ -286,6 +346,7 @@ VALUE_TYPES = (
         accepts_length_override=True,
         is_pattern=True,
         is_regex=True,
+        parse_write=_parse_regex_write,
     ),
 )
 
@@ -327,3 +388,28 @@ def parse_value(
         # under-allocating would silently truncate the value the user typed.
         length = max(1, len(value.encode("utf-8")))
     return value, length
+
+
+def parse_value_for_write(
+    spec: ValueTypeSpec,
+    text: str,
+    length_override: Optional[int] = None,
+    current: Optional[bytes] = None,
+) -> Tuple[Any, int]:
+    """Parse ``text`` as the value to **write** at an address.
+
+    :func:`parse_value` answers the scanner's question ("what am I looking
+    for?"). For every type but the two pattern ones that is the same answer,
+    but a pattern's ``parse`` yields search syntax — an IDA pattern's text, or
+    a regex — which is not a value any address can hold. Those specs supply a
+    ``parse_write`` that resolves the cell text to concrete bytes instead,
+    given ``current``: the bytes last read there, which a ``?`` wildcard keeps.
+
+    Used by the cheat table, whose cells are read *and* written; the scanner
+    only ever searches, so it stays on :func:`parse_value`.
+    """
+    if spec.parse_write is None:
+        return parse_value(spec, text, length_override)
+
+    value = spec.parse_write(text, current)
+    return value, max(1, len(value))

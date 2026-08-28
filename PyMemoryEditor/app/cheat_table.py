@@ -48,14 +48,12 @@ from PyMemoryEditor import AbstractProcess
 from ._widgets import parse_hex_address, shutdown_worker_thread
 from .cheat_entry import CheatEntry
 from .cheat_poll_worker import TICK_INTERVAL_MS, _CheatPollWorker
-from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec, parse_value
-
-
-# The value types a cheat entry may hold. The pattern types (AOB / regex) are
-# search *syntax* — a way to find an address, not a shape a value can be read
-# and written back as — so they are never offered as an entry's type. The
-# pointer dialogs filter their own "Read value as" lists the same way.
-HOLDABLE_TYPE_LABELS = [s.label for s in VALUE_TYPES if not s.is_pattern]
+from .value_types import (
+    VALUE_TYPES,
+    ValueTypeSpec,
+    find_spec,
+    parse_value_for_write,
+)
 
 
 # Re-exported for backward compatibility with callers that imported the
@@ -213,18 +211,6 @@ class CheatTable(QWidget):
         # from the pattern.)
         entry.length = max(1, int(entry.length))
 
-        # An IDA pattern is a way to *find* an address, never a way to hold a
-        # value: its parse() returns the pattern *text*, so editing a cell that
-        # displays hex would write ASCII "00" (0x30 0x30) instead of the byte
-        # 0x00. Substituting the Byte Array type keeps the width and makes the
-        # cell read and write the same thing. Done here so promote, manual add
-        # and JSON import are all covered; _change_type and the bulk edit can't
-        # reintroduce it because neither offers a pattern type any more.
-        if entry.spec.is_pattern and not entry.spec.is_regex:
-            byte_array = find_spec("Byte Array (Hex)")
-            if byte_array is not None:
-                entry.spec_label = byte_array.label
-
         # If the address already exists, just refresh its description/type.
         for existing in self._entries:
             if existing.address == entry.address:
@@ -340,7 +326,9 @@ class CheatTable(QWidget):
                 # Treat empty as "unfreeze and clear" — no-op.
                 return
             try:
-                value, _length = parse_value(entry.spec, text, entry.length)
+                value, _length = parse_value_for_write(
+                    entry.spec, text, entry.length, entry.last_value
+                )
             except ValueError as exc:
                 QMessageBox.warning(self, "Invalid Value", str(exc))
                 self._suspend_signals = True
@@ -559,16 +547,17 @@ class CheatTable(QWidget):
                 if plan.spec is not None:
                     entry.spec_label = plan.spec.label
                     if not plan.spec.accepts_length_override:
-                        # Safe to take the spec's width verbatim: the picker
-                        # only offers HOLDABLE_TYPE_LABELS, and the AOB pattern
-                        # — the one spec declaring a length of 0 — isn't in it.
-                        entry.length = plan.spec.length
+                        # `or entry.length`: the AOB pattern spec declares a
+                        # length of 0 — the scanner derives a match's width from
+                        # the pattern, and an entry has none to derive from — so
+                        # keep the width it already has.
+                        entry.length = plan.spec.length or entry.length
 
                 if plan.value_text is not None:
                     spec = entry.spec
                     try:
-                        value, effective_length = parse_value(
-                            spec, plan.value_text, entry.length
+                        value, effective_length = parse_value_for_write(
+                            spec, plan.value_text, entry.length, entry.last_value
                         )
                     except ValueError as exc:
                         failures.append((entry.address, str(exc)))
@@ -685,7 +674,7 @@ class CheatTable(QWidget):
         QGuiApplication.clipboard().setText(f"{self._entries[row].address:X}")
 
     def _change_type(self, row: int) -> None:
-        labels = HOLDABLE_TYPE_LABELS
+        labels = [s.label for s in VALUE_TYPES]
         current = (
             labels.index(self._entries[row].spec_label)
             if self._entries[row].spec_label in labels
@@ -699,9 +688,9 @@ class CheatTable(QWidget):
         self._entries[row].spec_label = chosen
         spec = find_spec(chosen) or VALUE_TYPES[0]
         if not spec.accepts_length_override:
-            # Same as the bulk edit: `chosen` comes from HOLDABLE_TYPE_LABELS,
-            # so it can't be the zero-length AOB pattern spec.
-            self._entries[row].length = spec.length
+            # Same as the bulk edit: the AOB pattern spec declares no width of
+            # its own, so the entry keeps the one it has.
+            self._entries[row].length = spec.length or self._entries[row].length
         self._rebuild()
 
     def _change_length(self, row: int) -> None:
@@ -792,7 +781,7 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
         QMessageBox.warning(parent, "Add address", "Invalid hex address.")
         return None
 
-    labels = HOLDABLE_TYPE_LABELS
+    labels = [s.label for s in VALUE_TYPES]
     spec_label, ok = QInputDialog.getItem(
         parent, "Add address", "Value type:", labels, 0, False
     )
@@ -800,13 +789,16 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
         return None
     spec = find_spec(spec_label) or VALUE_TYPES[0]
 
+    # The AOB pattern spec declares a length of 0 (the scanner derives a match's
+    # width from the pattern), and an address added by hand has no pattern to
+    # measure — so ask for the width instead of minting a zero-byte buffer.
     length = spec.length
-    if spec.accepts_length_override:
+    if spec.accepts_length_override or not spec.length:
         length, ok = QInputDialog.getInt(
             parent,
             "Add address",
             "Buffer length (bytes):",
-            value=spec.length,
+            value=spec.length or 4,
             minValue=1,
             maxValue=1024,
         )
@@ -881,9 +873,9 @@ class _BulkEditDialog(QDialog):
 
         self._type_chk = QCheckBox("Set value type")
         self._type_combo = QComboBox()
-        for label in HOLDABLE_TYPE_LABELS:
-            self._type_combo.addItem(label)
-        if first.spec_label in HOLDABLE_TYPE_LABELS:
+        for s in VALUE_TYPES:
+            self._type_combo.addItem(s.label)
+        if first.spec_label in (s.label for s in VALUE_TYPES):
             self._type_combo.setCurrentText(first.spec_label)
         self._type_combo.setEnabled(False)
         self._type_chk.toggled.connect(self._type_combo.setEnabled)
