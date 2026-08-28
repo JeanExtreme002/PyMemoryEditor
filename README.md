@@ -80,32 +80,6 @@ That's it — read, write or scan another process in three lines, the same way o
 
 ---
 
-## What's inside
-
-### 🐍 The Python library
-
-Full control over another process's memory — in a few lines of Python:
-
-- ✅ **Read & write** values (`int`, `float`, `bool`, `str`, `bytes`)
-- 🔍 **Value scan** with eight comparison modes
-- 🎯 **Pattern scan** (IDA-style AOB & regex)
-- 🔗 **Pointer chains** + a live `RemotePointer` handle
-- 🧭 **Pointer scan** — find static pointers that survive ASLR
-- 🗺️ **Memory map**, **modules**, **threads**
-- 🧱 **Allocate & free** remote memory (Windows / macOS)
-
-### 🖥️ The bundled GUI app
-
-All the library's power — no code required:
-- ⚡ **Zero setup** — attach to a process and start scanning in seconds
-- 🧲 **Refine workflow** — First Scan → Next Scan with live visual feedback
-- 📋 **Cheat table** — freeze / write values on the fly, JSON import/export
-- 🔬 **Hex viewer** — browse raw memory and write back inline
-- 🧩 **Pointer scan UI** — scan, export & rescan across sessions with a few clicks
-- 🎨 **One-click access** — every feature at your fingertips, no code needed
-
----
-
 ## 📖 Documentation
 
 Full documentation lives at **[pymemoryeditor.readthedocs.io](https://pymemoryeditor.readthedocs.io)** — installation, the Cheat Engine workflow, every method and parameter, the GUI app guide, platform notes and troubleshooting.
