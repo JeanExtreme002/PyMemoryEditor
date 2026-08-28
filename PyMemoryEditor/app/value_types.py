@@ -390,6 +390,22 @@ def parse_value(
     return value, length
 
 
+def has_readable_width(spec: ValueTypeSpec) -> bool:
+    """True when the spec can size a read at an address the caller already has.
+
+    Every spec but the IDA pattern can: the numeric types declare a width, and
+    str / bytes / regex take one from the caller. An IDA pattern derives a
+    match's width from the pattern itself, so at a bare address it has none —
+    it declares a length of 0 *and* refuses a length override, which is exactly
+    the combination this tests. Offering it where the address is already known
+    would read zero bytes and display nothing forever.
+
+    Note this says nothing about a *cheat entry*, which carries its own width
+    and so can hold an IDA pattern quite happily (see ``parse_value_for_write``).
+    """
+    return spec.length > 0 or spec.accepts_length_override
+
+
 def parse_value_for_write(
     spec: ValueTypeSpec,
     text: str,

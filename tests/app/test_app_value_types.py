@@ -203,3 +203,38 @@ def test_format_round_trips():
     assert INT4.format(123) == "123"
     assert BYTES.format(None) == ""
     assert INT4.format(None) == ""
+
+
+def test_only_the_ida_pattern_cannot_size_a_read_at_a_known_address():
+    """
+    The pointer dialogs read a value at an address the user already has, so the
+    type list is filtered by this. Everything can size such a read except the
+    IDA pattern, which declares a length of 0 *and* refuses an override — it
+    would read zero bytes and display nothing.
+
+    Regex is deliberately on the allowed side: its width comes from the Length
+    field, and it renders bytes as text up to the first NUL, which
+    "String (UTF-8)" does not.
+    """
+    from PyMemoryEditor.app.value_types import VALUE_TYPES, has_readable_width
+
+    refused = [s.label for s in VALUE_TYPES if not has_readable_width(s)]
+    assert refused == ["AOB Pattern (IDA)"]
+
+
+def test_a_regex_read_stops_at_the_nul_a_string_read_runs_past():
+    """The reason Regex stays offered where the address is already known."""
+    import ctypes
+
+    from PyMemoryEditor.app.value_types import find_spec
+    from PyMemoryEditor.util.convert import convert_from_byte_array
+
+    raw = b"Player42\x00\xff\xfe\x01rest"
+    buffer = (ctypes.c_byte * len(raw))(*raw)
+
+    def shown(label):
+        spec = find_spec(label)
+        return spec.format(convert_from_byte_array(buffer, spec.pytype, len(raw)))
+
+    assert shown("Regex (String)") == "Player42"
+    assert shown("String (UTF-8)").startswith("Player42\x00")

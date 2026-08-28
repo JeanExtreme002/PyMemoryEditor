@@ -59,7 +59,12 @@ from ._widgets import (
     parse_hex_address,
     shutdown_worker_thread,
 )
-from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec
+from .value_types import (
+    VALUE_TYPES,
+    ValueTypeSpec,
+    find_spec,
+    has_readable_width,
+)
 
 
 _LOG = logging.getLogger(__name__)
@@ -409,8 +414,13 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         # type into the cheat table on promotion.
         self._value_type_combo = QComboBox()
         for spec in VALUE_TYPES:
-            if spec.is_pattern:
-                continue  # reading a value "as a pattern" is meaningless here
+            # The address is already known here, so the only spec that can't be
+            # offered is the one with no width of its own — an IDA pattern,
+            # which would read zero bytes. A regex is welcome: its width comes
+            # from the Length field and it renders the bytes as text up to the
+            # first NUL, which "String (UTF-8)" doesn't do.
+            if not has_readable_width(spec):
+                continue
             self._value_type_combo.addItem(spec.label)
         self._value_type_combo.currentTextChanged.connect(self._on_value_type_changed)
         form.addRow("Read value as:", self._value_type_combo)
