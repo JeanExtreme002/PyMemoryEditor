@@ -38,6 +38,7 @@ from .libsystem import PROC_ALL_PIDS, libsystem, mach_error_message, mach_task_s
 from .types import (
     KERN_INVALID_ADDRESS,
     KERN_INVALID_ARGUMENT,
+    KERN_MEMORY_ERROR,
     KERN_NO_ACCESS,
     KERN_PROTECTION_FAILURE,
     KERN_SUCCESS,
@@ -294,10 +295,20 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
 # KERN_NO_ACCESS / KERN_INVALID_ARGUMENT can also surface for guard pages and
 # freshly-unmapped pages on modern macOS; treating them as fatal aborts a scan
 # that should just skip the page.
+#
+# KERN_MEMORY_ERROR is the same story one level down: the pager backing a page
+# declined to produce its data. The kernel header calls that failure
+# "temporary" in as many words, in explicit contrast with the permanent
+# KERN_MEMORY_FAILURE beside it (the pair is spelled out in types.py). It is
+# what file-backed, read-only mappings (code segments, dylibs, the dyld shared
+# cache) return, so any scan that walks them — every pattern scan, and any value
+# scan with "writable regions only" turned off — hits it routinely, and used to
+# abort on the first one.
 _PAGE_GONE_KRS = (
     KERN_INVALID_ADDRESS,
     KERN_NO_ACCESS,
     KERN_INVALID_ARGUMENT,
+    KERN_MEMORY_ERROR,
 )
 
 
