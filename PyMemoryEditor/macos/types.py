@@ -65,6 +65,12 @@ KERN_PROTECTION_FAILURE = 2
 KERN_INVALID_ARGUMENT = 4
 KERN_FAILURE = 5
 KERN_NO_ACCESS = 8
+# "During a page fault, the memory object indicated that the data could not be
+# returned. This failure may be temporary; future attempts to access this same
+# data may succeed, as defined by the memory object." — mach/kern_return.h.
+# Note the deliberate contrast with KERN_MEMORY_FAILURE (9) directly above it
+# in that header, whose comment ends "This failure is permanent."
+KERN_MEMORY_ERROR = 10
 
 
 class vm_region_basic_info_64(Structure):
