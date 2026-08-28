@@ -65,11 +65,17 @@ KERN_PROTECTION_FAILURE = 2
 KERN_INVALID_ARGUMENT = 4
 KERN_FAILURE = 5
 KERN_NO_ACCESS = 8
-# "During a page fault, the memory object indicated that the data could not be
-# returned. This failure may be temporary; future attempts to access this same
-# data may succeed, as defined by the memory object." — mach/kern_return.h.
-# Note the deliberate contrast with KERN_MEMORY_FAILURE (9) directly above it
-# in that header, whose comment ends "This failure is permanent."
+# These two are neighbours in mach/kern_return.h and are the line between a page
+# a scan may walk past and one it may not, so they are defined together:
+#
+#   9  "the target address refers to a memory object that has been destroyed.
+#       This failure is permanent."
+#  10  "the memory object indicated that the data could not be returned. This
+#       failure may be temporary; future attempts to access this same data may
+#       succeed, as defined by the memory object."
+#
+# Only the second belongs in functions._PAGE_GONE_KRS.
+KERN_MEMORY_FAILURE = 9
 KERN_MEMORY_ERROR = 10
 
 

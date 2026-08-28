@@ -28,12 +28,13 @@ from PyMemoryEditor.macos.functions import (  # noqa: E402
     _is_transient,
 )
 from PyMemoryEditor.macos.types import (  # noqa: E402
+    KERN_FAILURE,
     KERN_INVALID_ADDRESS,
     KERN_INVALID_ARGUMENT,
     KERN_MEMORY_ERROR,
+    KERN_MEMORY_FAILURE,
     KERN_NO_ACCESS,
     KERN_PROTECTION_FAILURE,
-    KERN_SUCCESS,
 )
 
 
@@ -54,14 +55,12 @@ def test_a_vanished_page_lets_the_scan_continue(kr):
 
 
 # The complement matters just as much: a permission or configuration problem
-# must reach the caller instead of being silently scanned past. KERN_MEMORY_
-# FAILURE (9) sits directly above KERN_MEMORY_ERROR in the header and is
-# documented as permanent, which is exactly the distinction being drawn.
-KERN_MEMORY_FAILURE = 9
-
-
+# must reach the caller instead of being silently scanned past. The header puts
+# KERN_MEMORY_FAILURE directly above KERN_MEMORY_ERROR and documents it as
+# permanent, which is exactly the distinction being drawn here; KERN_FAILURE is
+# what task_for_pid returns without the debugger entitlement.
 @pytest.mark.parametrize(
-    "kr", (KERN_SUCCESS, KERN_PROTECTION_FAILURE, KERN_MEMORY_FAILURE)
+    "kr", (KERN_FAILURE, KERN_PROTECTION_FAILURE, KERN_MEMORY_FAILURE)
 )
 def test_a_real_failure_still_propagates(kr):
     assert not _is_transient(MachReadError(kr, "read failed (kr=%d)" % kr))
