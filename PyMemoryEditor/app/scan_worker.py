@@ -22,7 +22,12 @@ from PySide6.QtCore import QThread, Signal
 
 from PyMemoryEditor import AbstractProcess, MemoryRegion, ScanTypesEnum
 
-from .scan_types import NextScanType, NO_VALUE_SCAN_TYPES, ScanType
+from .scan_types import (
+    DELTA_SCAN_TYPES,
+    NextScanType,
+    NO_VALUE_SCAN_TYPES,
+    ScanType,
+)
 from .value_types import parse_value, ValueTypeSpec
 
 
@@ -85,6 +90,7 @@ def build_scan_request(
     value_text: str,
     second_value_text: str = "",
     length_spin_value: Optional[int] = None,
+    previous_scan_length: Optional[int] = None,
     writeable_only: bool = False,
     with_value: bool = True,
 ) -> ScanRequest:
@@ -93,11 +99,19 @@ def build_scan_request(
 
     This is the pure core of ``ScannerPanel._build_request`` lifted out of the
     widget so the request-assembly rules (pattern short-circuit, the
-    str-ignores-length override, range parsing, the no-value scan types) can be
-    unit-tested without a ``QApplication``. The widget keeps only the bits that
-    are genuinely UI: reading the fields and showing a ``QMessageBox`` on the
-    ``ValueError`` raised here.
+    value-derived width for str / bytes, range parsing, the no-value scan types)
+    can be unit-tested without a ``QApplication``. The widget keeps only the
+    bits that are genuinely UI: reading the fields and showing a ``QMessageBox``
+    on the ``ValueError`` raised here.
 
+    :param length_spin_value: the Length field. Only the regex type reads it
+        (as ``byte_length``) — every other type derives its width from the spec
+        or from the value itself.
+    :param previous_scan_length: the width the scan that produced the current
+        results used. Only the no-value comparisons read it, and only for the
+        variable-width types, whose baseline is meaningless at another width.
+        (The ``*_BY`` deltas compare against the baseline too, but they are
+        rejected outright for those types — see below.)
     :raises ValueError: if a value/pattern fails to parse (message is
         user-facing — the caller picks the dialog title from ``spec.is_pattern``).
     """
@@ -116,19 +130,35 @@ def build_scan_request(
             writeable_only=writeable_only,
         )
 
-    # String (UTF-8) ignores the length field: pass None so parse_value derives
-    # the buffer width from the typed text's UTF-8 byte length. Byte Array still
-    # honours the user-set override.
-    length_override = (
-        length_spin_value
-        if spec.accepts_length_override and spec.pytype is not str
-        else None
-    )
+    # "Increased/Decreased value BY" adds the delta to the baseline, which only
+    # means anything for a number: on str/bytes ``prev + exp`` concatenates (so
+    # the comparison is never true) and ``prev - exp`` raises TypeError, which
+    # the refine worker swallows into "doesn't match". Either way every address
+    # is dropped and the user is told nothing, so reject the combination with a
+    # message instead. Checked *after* the pattern short-circuit above: the
+    # pattern specs are bytes-typed too, but they force EXACT regardless of the
+    # scan type passed, and the comparisons this message points at are disabled
+    # in pattern mode anyway.
+    if scan_type in DELTA_SCAN_TYPES and spec.pytype in (str, bytes):
+        raise ValueError(
+            "Increased/Decreased Value By adds a numeric amount to the previous "
+            "value, which doesn't apply to %s. Use Changed Value or Unchanged "
+            "Value to compare against the previous scan." % spec.label
+        )
 
-    # Increased/Decreased/Changed/Unchanged compare current vs previous and need
-    # no target value — just the value shape (type + length).
+    # Increased/Decreased/Changed/Unchanged compare the value read now against
+    # the one the *previous* scan recorded, so they need no target value — but
+    # they must re-read at the width that baseline was recorded with. Reading
+    # 16 bytes where the first scan recorded 4 yields "olá\0\0…" against "olá",
+    # which never compares equal, so every address would report as Changed.
+    # ``previous_scan_length`` carries that width for the variable-width types;
+    # the fixed-width types own theirs and ignore it.
     if scan_type in NO_VALUE_SCAN_TYPES:
-        length = length_override if length_override is not None else spec.length
+        length = (
+            previous_scan_length
+            if spec.accepts_length_override and previous_scan_length
+            else spec.length
+        )
         return ScanRequest(
             spec=spec,
             length=int(length),
@@ -137,14 +167,22 @@ def build_scan_request(
             writeable_only=writeable_only,
         )
 
+    # Every scan that carries a value sizes its buffer from that value: the
+    # numeric types have a fixed width, and str / bytes derive theirs in
+    # parse_value (the text's UTF-8 byte length / the number of hex bytes
+    # entered). So no length override is passed here. Letting the Length field
+    # win could only break the scan — a width below the value's raises
+    # "byte string too long" from the fixed-width ctypes buffer, and a width
+    # above it NUL-pads the target, silently searching for "the value followed
+    # by zeros". Partial matching has its own value type (AOB Pattern).
     value: Any
     if scan_type in (ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN):
-        lo, lo_len = parse_value(spec, value_text, length_override)
-        hi, hi_len = parse_value(spec, second_value_text, length_override)
+        lo, lo_len = parse_value(spec, value_text)
+        hi, hi_len = parse_value(spec, second_value_text)
         length = max(lo_len, hi_len)
         value = (lo, hi)
     else:
-        value, length = parse_value(spec, value_text, length_override)
+        value, length = parse_value(spec, value_text)
 
     if not with_value:
         value = None  # Used by callers that only need spec/length/scan_type.

@@ -26,7 +26,7 @@ The function returns a compiled ``re.Pattern[bytes]`` ready to be used with
 """
 
 import re
-from typing import Pattern, Tuple, Union
+from typing import List, Optional, Pattern, Tuple, Union
 
 
 PatternLike = Union[str, bytes, "re.Pattern[bytes]"]
@@ -84,16 +84,41 @@ def compile_pattern(
             "compiled re.Pattern, not %r" % type(pattern).__name__
         )
 
+    tokens = tokenize_pattern(pattern)
+
+    parts = []
+    for token in tokens:
+        if token is None:
+            # Single-byte wildcard. ``.`` together with re.DOTALL matches any
+            # byte 0x00-0xFF without special-casing 0x0A.
+            parts.append(b".")
+            continue
+        # Escape the byte so e.g. 0x5C (backslash) or 0x28 ('(') don't get
+        # interpreted as regex meta chars.
+        parts.append(re.escape(bytes((token,))))
+
+    return re.compile(b"".join(parts), re.DOTALL), len(tokens)
+
+
+def tokenize_pattern(pattern: str) -> List[Optional[int]]:
+    """Split an IDA-style hex pattern into one entry per byte.
+
+    Each entry is the byte's value, or ``None`` for a ``?`` / ``??`` wildcard.
+    ``compile_pattern`` turns these into a regex; the app's cheat table uses
+    them to write a signature back, where a wildcard means "leave the byte
+    that is already there alone". Both need the same token rules and the same
+    error messages, so they share this.
+
+    :raises ValueError: on an empty pattern or a malformed token.
+    """
     tokens = pattern.split()
     if not tokens:
         raise ValueError("Empty pattern.")
 
-    parts = []
+    parsed: List[Optional[int]] = []
     for token in tokens:
         if token in ("?", "??"):
-            # Single-byte wildcard. ``.`` together with re.DOTALL matches any
-            # byte 0x00-0xFF without special-casing 0x0A.
-            parts.append(b".")
+            parsed.append(None)
             continue
         if len(token) != 2:
             raise ValueError(
@@ -101,16 +126,16 @@ def compile_pattern(
                 "Example of a valid pattern: '48 8B ? ? 00'." % token
             )
         try:
-            byte = bytes.fromhex(token)
+            parsed.append(bytes.fromhex(token)[0])
         except ValueError as exc:
             raise ValueError(
                 "Pattern token %r is not valid hex: %s" % (token, exc)
             )
-        # Escape the byte so e.g. 0x5C (backslash) or 0x28 ('(') don't get
-        # interpreted as regex meta chars.
-        parts.append(re.escape(byte))
-
-    return re.compile(b"".join(parts), re.DOTALL), len(tokens)
+    return parsed
 
 
+# tokenize_pattern is deliberately absent: it exists so the scan and write
+# paths share one set of token rules, and nothing outside the package consumes
+# it. Exporting it would promise a documented, supported surface that neither
+# the guide nor the API reference describes.
 __all__ = ("compile_pattern", "PatternLike")

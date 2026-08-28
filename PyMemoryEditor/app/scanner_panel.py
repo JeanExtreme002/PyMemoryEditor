@@ -6,7 +6,7 @@ Inputs:
 * primary value (and a second value for "Value Between" / "Not Value Between")
 * value type
 * scan type
-* explicit byte length for str / bytes
+* byte length (fixed per numeric type; derived from the value for str / bytes)
 * "writable regions only" toggle (passed to PyMemoryEditor as ``writeable_only``)
 
 Outputs (signals):
@@ -44,7 +44,30 @@ from .scan_types import (
     is_next_scan_type,
 )
 from .scan_worker import build_scan_request, ScanRequest
-from .value_types import VALUE_TYPES, find_spec
+from .value_types import parse_value, ValueTypeSpec, VALUE_TYPES, find_spec
+
+
+# Shown in the (read-only) Length field of String / Byte Array before a value
+# has been entered: those types take their width from the value itself, so
+# there is genuinely no number to report yet.
+EMPTY_LENGTH_TEXT = "—  (set by the value)"
+
+
+def is_sized_by_value(spec: ValueTypeSpec) -> bool:
+    """True for the types whose buffer width comes from the value entered.
+
+    String (UTF-8) and Byte Array (Hex) only. The numeric types have a fixed
+    width, an IDA pattern derives one from the pattern, and a regex's Length
+    field is a genuine user-set ``byte_length`` — none of them may have their
+    width taken from a scan's value.
+    """
+    return spec.pytype in (str, bytes) and not spec.is_pattern
+
+
+# The two scan types that take a second value; their width is max(lo, hi).
+RANGE_SCAN_TYPES = frozenset(
+    (ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN)
+)
 
 
 SCAN_TYPE_CHOICES = (
@@ -79,6 +102,17 @@ class ScannerPanel(QWidget):
         self._has_results = False
         self._busy = False
         self._initial_focus_done = False
+        # Width the scan that produced the current results ran at. The no-value
+        # comparisons (Increased / Changed / …) must re-read at exactly this
+        # width or they compare against a baseline recorded at another one; the
+        # Length readout can't stand in, since it tracks whatever value is in
+        # the field right now, which the user is free to edit between scans.
+        self._last_scan_length: Optional[int] = None
+        # Width of a scan that has been dispatched but hasn't landed yet. It is
+        # promoted above only when the owner reports results, so a scan that
+        # errors out or finds nothing leaves the values on screen described by
+        # the width they were actually read at.
+        self._pending_scan_length: Optional[int] = None
         self._build_ui()
         self._refresh_buttons()
 
@@ -119,14 +153,17 @@ class ScannerPanel(QWidget):
         self._value_edit = QLineEdit()
         self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
         self._value_edit.returnPressed.connect(self._on_value_submitted)
-        # For String (UTF-8) the length is dictated by the typed text, so keep
-        # the (disabled) length field in sync as the user types.
+        # For String (UTF-8) and Byte Array (Hex) the length is dictated by the
+        # typed value, so keep the (disabled) length field in sync as the user types.
         self._value_edit.textChanged.connect(self._on_value_text_changed)
         value_form.addRow("Value:", self._value_edit)
 
         self._second_value_edit = QLineEdit()
         self._second_value_edit.setPlaceholderText("Upper bound (for ranges only)")
         self._second_value_edit.returnPressed.connect(self._on_value_submitted)
+        # A range scan sizes with max(lo, hi), so the upper bound moves the
+        # readout just as the primary value does.
+        self._second_value_edit.textChanged.connect(self._on_value_text_changed)
         self._second_value_label = QLabel("Up to:")
         value_form.addRow(self._second_value_label, self._second_value_edit)
         self._second_value_edit.hide()
@@ -205,7 +242,7 @@ class ScannerPanel(QWidget):
 
         self._cancel_btn = QPushButton("Cancel scan")
         self._cancel_btn.setObjectName("danger")
-        self._cancel_btn.clicked.connect(self.cancel_requested.emit)
+        self._cancel_btn.clicked.connect(self._on_cancel)
         buttons.addWidget(self._cancel_btn)
 
         layout.addWidget(buttons_box)
@@ -216,11 +253,34 @@ class ScannerPanel(QWidget):
         self._on_scan_type_changed(0)
 
     def set_has_results(self, has_results: bool) -> None:
+        """Report whether the results table currently holds anything.
+
+        Called by the owner once a scan has actually finished, which is what
+        makes it the right moment to adopt that scan's width as the baseline.
+        """
         self._has_results = has_results
+        if has_results:
+            if self._pending_scan_length:
+                self._last_scan_length = self._pending_scan_length
+        else:
+            self._last_scan_length = None
+        self._pending_scan_length = None
         self._refresh_buttons()
 
     def set_busy(self, busy: bool) -> None:
+        """Report whether a scan is running.
+
+        The falling edge ends the scan cycle, which is where a pending width
+        that was never adopted gets dropped. The owner emits it after the
+        completion signal (``finished`` follows ``finished_ok``), so a scan that
+        landed has already had its width promoted by ``set_has_results``; one
+        that errored out never will, and must not leave the width behind for
+        an unrelated later completion — an "Update Values" refresh reports
+        results too — to pick up.
+        """
         self._busy = busy
+        if not busy:
+            self._pending_scan_length = None
         self._refresh_buttons()
 
     def use_snapshot_cache(self) -> bool:
@@ -253,7 +313,7 @@ class ScannerPanel(QWidget):
 
         is_pattern = spec.is_pattern
         is_regex = spec.is_regex
-        is_string = spec.pytype is str and not is_pattern
+        sized_by_value = is_sized_by_value(spec)
 
         # Pattern modes reuse the "Value" line for the pattern and force the
         # scan-type combo to EXACT (Bigger/Smaller/Between don't apply). The
@@ -261,15 +321,15 @@ class ScannerPanel(QWidget):
         # token count), but a *regex* has no inferable width, so its Length
         # field stays enabled and supplies search_by_pattern's byte_length.
         #
-        # String (UTF-8) also locks the length field: the buffer width is the
-        # UTF-8 byte length of the typed text (multi-byte aware), so letting the
-        # user override it would only allow truncating or over-allocating the
-        # value they entered. The field stays visible as a read-only readout
-        # kept in sync by _sync_string_length / _on_value_text_changed.
-        self._length_spin.setEnabled(
-            (spec.accepts_length_override and not is_pattern and not is_string)
-            or is_regex
-        )
+        # Regex is the one spec whose width is genuinely the user's to set (its
+        # byte_length is the max match width, which nothing can infer). String /
+        # Byte Array mirror the value they were given — overriding that could
+        # only truncate it, which the fixed-width ctypes buffer rejects, or
+        # over-allocate it, which NUL-pads the target into a silent search for
+        # "the value followed by zeros". Everything else is fixed by its spec.
+        # The field stays visible as a read-only readout throughout, kept in
+        # sync by _sync_value_length / _on_value_text_changed.
+        self._length_spin.setEnabled(is_regex)
 
         if is_regex:
             self._value_edit.setPlaceholderText(
@@ -281,6 +341,13 @@ class ScannerPanel(QWidget):
             )
         else:
             self._value_edit.setPlaceholderText("e.g. 100  or  0x64  or  Hello")
+
+        # Every type but the value-sized pair owns a real number here, so clear
+        # the "no width yet" slot the previous type may have opened (0 would
+        # otherwise render as EMPTY_LENGTH_TEXT for e.g. "1 Byte (Int8)").
+        if not sized_by_value:
+            self._length_spin.setSpecialValueText("")
+            self._length_spin.setMinimum(1)
 
         if is_regex:
             # Length = the regex's max match width in bytes (byte_length); it
@@ -294,16 +361,22 @@ class ScannerPanel(QWidget):
             self._length_spin.setMaximum(1024)
             self._length_spin.setValue(1)
             self._length_spin.setSuffix("  bytes")
-        elif is_string:
-            # Length tracks the typed text — raise the ceiling so long strings
-            # aren't visually clamped, then mirror the current text's byte size.
+        elif sized_by_value:  # String (UTF-8) / Byte Array (Hex)
+            # Length tracks the typed value — raise the ceiling so long strings
+            # aren't visually clamped, then mirror the current value's byte size.
+            #
+            # Until a value has been entered there is no width to report, and
+            # the readout is read-only, so the user can't correct a number we
+            # invent. Open a 0 slot rendered as EMPTY_LENGTH_TEXT for that
+            # state rather than seeding the spec default (which would show
+            # "4 bytes" for an empty byte array and then jump to "1 byte" on
+            # the first hex digit) or keeping a width the previous type wrote.
+            self._length_spin.setMinimum(0)
+            self._length_spin.setSpecialValueText(EMPTY_LENGTH_TEXT)
             self._length_spin.setMaximum(2_147_483_647)
             self._length_spin.setSuffix("  bytes")
-            self._sync_string_length()
-        elif spec.accepts_length_override:  # Byte Array (Hex)
-            self._length_spin.setMaximum(1024)
-            self._length_spin.setValue(max(4, self._length_spin.value()))
-            self._length_spin.setSuffix("  bytes")
+            self._length_spin.setValue(0)
+            self._sync_value_length()
         else:
             self._length_spin.setMaximum(1024)
             self._length_spin.setValue(spec.length)
@@ -332,30 +405,62 @@ class ScannerPanel(QWidget):
         self._refresh_buttons()
 
     def _on_value_text_changed(self, text: str) -> None:
-        # Only String (UTF-8) derives its length from the value text; every
-        # other type owns its length field independently.
-        spec = find_spec(self._type_combo.currentText())
-        if spec is not None and spec.pytype is str and not spec.is_pattern:
-            self._sync_string_length(text)
+        # _sync_value_length ignores the types that own their length field.
+        self._sync_value_length(text)
 
-    def _sync_string_length(self, text: Optional[str] = None) -> None:
-        """Mirror the UTF-8 byte length of the value text into the length field.
+    def _sync_value_length(self, text: Optional[str] = None) -> None:
+        """Mirror the byte size of the value text into the length field.
 
-        Matches ``parse_value``'s str rule (byte length, not character count)
-        so the read-only readout shows exactly the buffer width the scan uses.
+        Matches ``parse_value``'s rules for the two variable-width types so the
+        read-only readout shows exactly the buffer width the scan will use: the
+        UTF-8 byte length for a string (byte length, not character count) and
+        the number of parsed hex bytes for a byte array.
+
+        The readout is exactly what the current value sizes to, and nothing
+        else: an empty field, or a half-typed byte array ("00 1"), reports no
+        width at all (EMPTY_LENGTH_TEXT) rather than a number no scan would
+        use. A range scan sizes with ``max(lo, hi)``, so both bounds count.
+        The "Next Scan" comparisons that carry no value of their own don't read
+        this field — they refine at ``_last_scan_length``, the width the scan
+        holding the current results actually ran at.
+
+        ``text`` is accepted (and ignored) so the method can sit directly on a
+        ``textChanged`` signal; the width always comes from reading the fields,
+        since either of the two can be the one that sets it.
         """
-        if text is None:
-            text = self._value_edit.text()
-        self._length_spin.setValue(max(1, len(text.encode("utf-8"))))
+        del text  # Both fields are read below; see the docstring.
+        spec = find_spec(self._type_combo.currentText())
+        # Only the value-sized types have a width to mirror; every other type
+        # owns the field (a fixed width, or the regex's editable match width)
+        # and must not have it overwritten from here.
+        if spec is None or not is_sized_by_value(spec):
+            return
+
+        texts = [self._value_edit.text()]
+        # Read the scan type rather than the widget's visibility: a child of a
+        # panel that hasn't been shown yet reports isVisible() False even after
+        # setVisible(True), which would silently drop the upper bound.
+        _, scan_type = SCAN_TYPE_CHOICES[self._scan_combo.currentIndex()]
+        if scan_type in RANGE_SCAN_TYPES:
+            texts.append(self._second_value_edit.text())
+
+        length = 0
+        for candidate in texts:
+            try:
+                _, candidate_length = parse_value(spec, candidate)
+            except ValueError:
+                continue
+            length = max(length, candidate_length)
+
+        self._length_spin.setValue(length)
 
     def _on_scan_type_changed(self, index: int) -> None:
         _, scan_type = SCAN_TYPE_CHOICES[index]
-        ranged = scan_type in (
-            ScanTypesEnum.VALUE_BETWEEN,
-            ScanTypesEnum.NOT_VALUE_BETWEEN,
-        )
+        ranged = scan_type in RANGE_SCAN_TYPES
         self._second_value_edit.setVisible(ranged)
         self._second_value_label.setVisible(ranged)
+        # Entering or leaving a range changes which fields size the scan.
+        self._sync_value_length()
 
         # In pattern mode the Value field holds the AOB pattern and the
         # scan-type combo is forced to EXACT, so leave its value field alone.
@@ -393,6 +498,7 @@ class ScannerPanel(QWidget):
                 value_text=self._value_edit.text(),
                 second_value_text=self._second_value_edit.text(),
                 length_spin_value=self._length_spin.value(),
+                previous_scan_length=self._last_scan_length,
                 writeable_only=self._writable_check.isChecked(),
                 with_value=with_value,
             )
@@ -415,24 +521,117 @@ class ScannerPanel(QWidget):
             return
         request = self._build_request()
         if request is not None:
+            self._pending_scan_length = self._dispatched_width(request)
             self.first_scan_requested.emit(request)
 
     def _on_next_scan(self) -> None:
         request = self._build_request()
         if request is not None:
+            # The refine rewrites every kept value at this width, so it becomes
+            # the baseline the next no-value comparison has to match — once it
+            # has actually run.
+            self._pending_scan_length = self._dispatched_width(request)
             self.next_scan_requested.emit(request)
 
+    def _dispatched_width(self, request: ScanRequest) -> int:
+        """Width the rows this request finds will have been read at.
+
+        Normally the request's own length. An IDA pattern is the exception: it
+        reports 0, because the scanner derives a match's width from the pattern
+        rather than from a field — so the width one hit occupies is the token
+        count, which is what a promoted row has to be read at.
+        """
+        if request.spec.is_pattern and not request.spec.is_regex:
+            return self._pattern_byte_length()
+        return request.length
+
+    def _on_cancel(self) -> None:
+        # Both workers still report results after a cancel — they break out of
+        # the loop and emit finished_ok with what they have — so what the
+        # partial results are worth depends on which scan was running.
+        #
+        # A refine re-read only the rows it reached at the new width; the rest
+        # still hold values recorded at the old one, so neither width describes
+        # the table and the previous one (which most rows match) stands.
+        #
+        # A first scan is the opposite: every address it did find, it found at
+        # its own width, and there is no earlier width to fall back on. Dropping
+        # it would send the next Changed/Unchanged refine to the spec default —
+        # 16 for a String scanned at 4 — which is the failure this whole branch
+        # exists to fix. _has_results tells the two apart: a first scan only
+        # runs when there are none yet.
+        if self._has_results:
+            self._pending_scan_length = None
+        self.cancel_requested.emit()
+
     def _on_update_values(self) -> None:
-        request = self._build_request()
-        if request is not None:
-            self.update_values_requested.emit(request)
+        # A read-only refresh of the rows already on screen. RefineScanWorker
+        # applies no comparison when filter_only is False, so this needs no
+        # target value — and must not parse one: the Value box may be empty
+        # (a no-value scan type clears it outright), which would abort the
+        # refresh with "Invalid value" instead of refreshing.
+        spec, length = self.current_spec_and_length()
+        # The refresh re-reads and patches every row at this width, so it is the
+        # width the table holds once it lands — the same one it was scanned at,
+        # recorded here so that a width left behind by a request the owner
+        # rejected before the busy cycle began (an early return in its handler)
+        # is overwritten rather than adopted in its place.
+        self._pending_scan_length = length
+        self.update_values_requested.emit(
+            ScanRequest(
+                spec=spec,
+                length=length,
+                scan_type=ScanTypesEnum.EXACT_VALUE,
+                value=None,
+                writeable_only=self._writable_check.isChecked(),
+            )
+        )
 
     def current_spec_and_length(self):
-        """Return the active (spec, length) pair for the Promote-to-Cheat-Table path."""
+        """Return the (spec, width) the rows currently on screen were read at.
+
+        Used by the Promote-to-Cheat-Table path and by the "Update Values"
+        refresh — both act on those rows, so both need the width their scan
+        ran at rather than anything the Value box says now. An IDA hit keeps
+        this spec: a pattern-typed entry reads and writes correctly now (see
+        ``parse_value_for_write``), and only its width has to come from the
+        pattern, since the spec declares none.
+        """
         spec = find_spec(self._type_combo.currentText())
         if spec is None:
             spec = VALUE_TYPES[0]
+        # An IDA pattern has no Length field and a spec length of 0 — the width
+        # of one match is the pattern's own, one token per byte. Prefer the
+        # width the scan ran at: the Value box stays editable in pattern mode,
+        # so re-deriving it here would read at a width the hits were never
+        # found at, which is the staleness _last_scan_length exists to avoid.
+        if spec.is_pattern and not spec.is_regex:
+            return spec, self._last_scan_length or self._pattern_byte_length()
+
+        # The rows being promoted were read at the width their scan ran at, so
+        # that is the width the cheat entry has to keep. The Length readout
+        # can't stand in: it follows the Value box, which a no-value scan type
+        # clears outright (a 4-byte "olá" scan would promote at the spec's 16,
+        # and the entry would read 12 bytes of neighbouring memory into the
+        # cell on every poll tick).
+        if is_sized_by_value(spec) and self._last_scan_length:
+            return spec, self._last_scan_length
+
         length = (
             self._length_spin.value() if spec.accepts_length_override else spec.length
         )
-        return spec, int(length)
+        # No scan has run yet and no value is entered (readout 0): a cheat entry
+        # can't have a zero-width buffer, so the spec default stands in.
+        return spec, int(length) or spec.length
+
+    def _pattern_byte_length(self) -> int:
+        """Width of one match of the AOB pattern currently in the Value field."""
+        from PyMemoryEditor.util.pattern import compile_pattern
+
+        try:
+            return max(1, compile_pattern(self._value_edit.text().strip())[1])
+        except ValueError:
+            # The results being promoted came from a pattern that compiled, so
+            # this only happens if the field was edited afterwards. One byte is
+            # a harmless entry the user can widen from the cheat table.
+            return 1

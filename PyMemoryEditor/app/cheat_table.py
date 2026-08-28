@@ -48,7 +48,12 @@ from PyMemoryEditor import AbstractProcess
 from ._widgets import parse_hex_address, shutdown_worker_thread
 from .cheat_entry import CheatEntry
 from .cheat_poll_worker import TICK_INTERVAL_MS, _CheatPollWorker
-from .value_types import VALUE_TYPES, ValueTypeSpec, find_spec, parse_value
+from .value_types import (
+    VALUE_TYPES,
+    ValueTypeSpec,
+    find_spec,
+    parse_value_for_write,
+)
 
 
 # Re-exported for backward compatibility with callers that imported the
@@ -197,10 +202,25 @@ class CheatTable(QWidget):
         delete_shortcut.activated.connect(self._on_remove_selected)
 
     def add_entry(self, entry: CheatEntry) -> None:
+        # Every entry enters here, whichever way it was created — promoted from
+        # a scan, from a pointer dialog, added by hand, or loaded from JSON. A
+        # zero-width buffer reads back empty on every poll tick and can't be
+        # spotted from the table, so the floor is enforced once, at the door,
+        # rather than at each of those call sites. (The AOB pattern spec is the
+        # one whose declared length is 0 — the scanner derives its real width
+        # from the pattern.)
+        entry.length = max(1, int(entry.length))
+
         # If the address already exists, just refresh its description/type.
         for existing in self._entries:
             if existing.address == entry.address:
                 existing.description = entry.description or existing.description
+                # Re-promoting an address that is already in the table is the
+                # third place a spec_label changes, and the cached value has to
+                # go with it here too — _rebuild formats it through the new
+                # spec on the way out of this method.
+                if entry.spec_label != existing.spec_label:
+                    _forget_value_read_as_another_type(existing)
                 existing.spec_label = entry.spec_label
                 existing.length = entry.length
                 self._rebuild()
@@ -257,7 +277,11 @@ class CheatTable(QWidget):
         self._table.setItem(row, self.COL_ADDRESS, addr)
 
         type_label = entry.spec_label
-        if entry.spec.accepts_length_override:
+        # Show the width whenever it belongs to the entry rather than to the
+        # spec. An IDA pattern declares none (length 0) yet carries a real one
+        # here — writes are refused against it — so hiding it left the user
+        # told to "widen the entry" with no way to see what it holds.
+        if entry.spec.accepts_length_override or not entry.spec.length:
             type_label += f"  · {entry.length}B"
         type_item = QTableWidgetItem(type_label)
         type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -312,7 +336,9 @@ class CheatTable(QWidget):
                 # Treat empty as "unfreeze and clear" — no-op.
                 return
             try:
-                value, _length = parse_value(entry.spec, text, entry.length)
+                value, _length = parse_value_for_write(
+                    entry.spec, text, entry.length, entry.last_value
+                )
             except ValueError as exc:
                 QMessageBox.warning(self, "Invalid Value", str(exc))
                 self._suspend_signals = True
@@ -390,6 +416,13 @@ class CheatTable(QWidget):
                     continue
                 entry = self._entries[row]
                 entry.last_value = value
+                # A frozen row whose baseline was dropped — its type changed,
+                # so what the old spec had read no longer means anything —
+                # re-adopts the first value read under the new one. The poll
+                # worker skips a frozen entry with no frozen_value, so without
+                # this the Active box stays ticked while nothing is written.
+                if entry.frozen and entry.frozen_value is None:
+                    entry.frozen_value = value
                 self._update_value_cell(row, entry)
         finally:
             self._suspend_signals = False
@@ -528,16 +561,40 @@ class CheatTable(QWidget):
                 if plan.description is not None:
                     entry.description = plan.description
 
-                if plan.spec is not None:
+                # What the row was showing before this plan touched it. A type
+                # change forgets it, but a write in the same pass still needs
+                # it: an IDA '?' keeps the byte that is already there, and
+                # Byte Array → AOB doesn't change what those bytes mean.
+                # parse_value_for_write ignores it when the type genuinely
+                # changed shape, so a stale int can't be misread as bytes.
+                current = entry.last_value
+                retyped = False
+                if plan.spec is not None and plan.spec.label != entry.spec_label:
+                    retyped = True
                     entry.spec_label = plan.spec.label
+                    _forget_value_read_as_another_type(entry)
+                if plan.spec is not None:
                     if not plan.spec.accepts_length_override:
-                        entry.length = plan.spec.length
+                        # `or entry.length`: the AOB pattern spec declares a
+                        # length of 0 — the scanner derives a match's width from
+                        # the pattern, and an entry has none to derive from — so
+                        # keep the width it already has.
+                        entry.length = plan.spec.length or entry.length
 
                 if plan.value_text is not None:
                     spec = entry.spec
+                    # A retype to a variable-width spec re-sizes the entry from
+                    # the value, rather than inheriting the width of the type it
+                    # replaced. Otherwise three Int32 rows retyped to String
+                    # with "hello" all fail on "the entry holds 4 — widen it
+                    # first", and the bulk dialog has no width field, nor does
+                    # a multi-row selection offer one: a dead end.
+                    cap: Optional[int] = entry.length
+                    if retyped and spec.accepts_length_override:
+                        cap = None
                     try:
-                        value, effective_length = parse_value(
-                            spec, plan.value_text, entry.length
+                        value, effective_length = parse_value_for_write(
+                            spec, plan.value_text, cap, current
                         )
                     except ValueError as exc:
                         failures.append((entry.address, str(exc)))
@@ -665,10 +722,15 @@ class CheatTable(QWidget):
         )
         if not ok:
             return
-        self._entries[row].spec_label = chosen
+        entry = self._entries[row]
+        if chosen != entry.spec_label:
+            entry.spec_label = chosen
+            _forget_value_read_as_another_type(entry)
         spec = find_spec(chosen) or VALUE_TYPES[0]
         if not spec.accepts_length_override:
-            self._entries[row].length = spec.length
+            # Same as the bulk edit: the AOB pattern spec declares no width of
+            # its own, so the entry keeps the one it has.
+            entry.length = spec.length or entry.length
         self._rebuild()
 
     def _change_length(self, row: int) -> None:
@@ -678,7 +740,9 @@ class CheatTable(QWidget):
             "Length (bytes):",
             value=self._entries[row].length,
             minValue=1,
-            maxValue=1024,
+            # An entry already wider than the cap can still be shrunk from here;
+            # it just can't grow past it.
+            maxValue=max(MAX_ENTRY_LENGTH, self._entries[row].length),
         )
         if not ok:
             return
@@ -736,6 +800,41 @@ class CheatTable(QWidget):
                 QMessageBox.warning(self, "Import", f"Skipped a bad entry: {exc}")
 
 
+# Ceiling for an entry's buffer width. Entries are promoted at the width of the
+# value scanned for, which the scanner doesn't cap, so 1024 was too tight — but
+# the poll worker allocates this many bytes per entry on every 100 ms tick, so
+# an unbounded field turns one typo into a multi-gigabyte allocation the tick's
+# blanket except swallows and retries forever. A megabyte is far past any real
+# value and still cheap to read ten times a second.
+MAX_ENTRY_LENGTH = 1_048_576
+
+
+def _forget_value_read_as_another_type(entry: CheatEntry) -> None:
+    """Drop the cached value when ``new_spec`` can't read what produced it.
+
+    ``last_value`` and ``frozen_value`` hold whatever the *previous* spec
+    decoded — an int, a str, raw bytes. Nothing waits for a fresh poll tick
+    before the new spec is used on them, and a spec's ``format`` only accepts
+    what its own ``pytype`` produces: ``_fmt_bytes(1234)`` raises TypeError from
+    inside a Qt slot, and a frozen entry would be re-published to the poll
+    worker to write the old type's value through the new type's ``pytype``.
+    The next tick refills both, so forgetting them costs a single frame.
+
+    Unconditional: even a switch that keeps the ``pytype`` can change the
+    width, and a value decoded at the old one means nothing at the new. A
+    caller that still needs the bytes — the bulk edit writes a value in the
+    same pass — must capture them before calling.
+
+    The freeze is released with it. Leaving the box ticked with no target would
+    make the next poll tick adopt whatever the address happens to hold, pinning
+    a value the user never chose; a released box is visible and re-arming it is
+    one click.
+    """
+    entry.last_value = None
+    entry.frozen_value = None
+    entry.frozen = False
+
+
 def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
     """Sequential QInputDialog flow for the "Add Address Manually" button."""
     description, ok = QInputDialog.getText(
@@ -763,13 +862,16 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
         return None
     spec = find_spec(spec_label) or VALUE_TYPES[0]
 
+    # The AOB pattern spec declares a length of 0 (the scanner derives a match's
+    # width from the pattern), and an address added by hand has no pattern to
+    # measure — so ask for the width instead of minting a zero-byte buffer.
     length = spec.length
-    if spec.accepts_length_override:
+    if spec.accepts_length_override or not spec.length:
         length, ok = QInputDialog.getInt(
             parent,
             "Add address",
             "Buffer length (bytes):",
-            value=spec.length,
+            value=spec.length or 4,
             minValue=1,
             maxValue=1024,
         )
