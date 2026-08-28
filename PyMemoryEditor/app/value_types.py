@@ -212,9 +212,9 @@ def _parse_pattern_write(
             )
         if len(current) < wildcards[-1] + 1:
             raise ValueError(
-                "'?' at byte %d has nothing to keep: only %d byte(s) were read "
-                "at this address. Widen the entry or spell the byte out."
-                % (wildcards[-1] + 1, len(current))
+                "'?' at byte %d has nothing to keep: the last read of this "
+                "address returned %d byte(s). Wait for the next refresh, or "
+                "spell the byte out." % (wildcards[-1] + 1, len(current))
             )
 
     return bytes(
@@ -451,7 +451,27 @@ def parse_value_for_write(
     tick, which the user set and the write has no business shrinking.
     """
     if spec.parse_write is None:
-        return parse_value(spec, text, length_override)
+        value, length = parse_value(spec, text, length_override)
+        # prepare_write treats bufflength as a hard cap and truncates past it
+        # — characters for str, bytes for bytes — so a value wider than the
+        # entry would be written short with no word said, while the cell keeps
+        # showing all of it until the next poll tick corrects itself. The
+        # pattern path already refuses this; so do the other two.
+        if (
+            length_override is not None
+            and spec.pytype in (str, bytes)
+            and len(value) > length_override
+        ):
+            raise ValueError(
+                "Value is %d %s but the entry holds %d. Widen the entry first, "
+                "or the extra would be dropped without warning."
+                % (
+                    len(value),
+                    "characters" if spec.pytype is str else "bytes",
+                    length_override,
+                )
+            )
+        return value, length
 
     value = spec.parse_write(text, current, length_override)
     if spec.accepts_length_override and length_override is not None:

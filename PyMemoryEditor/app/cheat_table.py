@@ -406,6 +406,13 @@ class CheatTable(QWidget):
                     continue
                 entry = self._entries[row]
                 entry.last_value = value
+                # A frozen row whose baseline was dropped — its type changed,
+                # so what the old spec had read no longer means anything —
+                # re-adopts the first value read under the new one. The poll
+                # worker skips a frozen entry with no frozen_value, so without
+                # this the Active box stays ticked while nothing is written.
+                if entry.frozen and entry.frozen_value is None:
+                    entry.frozen_value = value
                 self._update_value_cell(row, entry)
         finally:
             self._suspend_signals = False

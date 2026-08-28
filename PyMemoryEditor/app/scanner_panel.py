@@ -521,7 +521,7 @@ class ScannerPanel(QWidget):
             return
         request = self._build_request()
         if request is not None:
-            self._pending_scan_length = request.length
+            self._pending_scan_length = self._dispatched_width(request)
             self.first_scan_requested.emit(request)
 
     def _on_next_scan(self) -> None:
@@ -530,8 +530,20 @@ class ScannerPanel(QWidget):
             # The refine rewrites every kept value at this width, so it becomes
             # the baseline the next no-value comparison has to match — once it
             # has actually run.
-            self._pending_scan_length = request.length
+            self._pending_scan_length = self._dispatched_width(request)
             self.next_scan_requested.emit(request)
+
+    def _dispatched_width(self, request: ScanRequest) -> int:
+        """Width the rows this request finds will have been read at.
+
+        Normally the request's own length. An IDA pattern is the exception: it
+        reports 0, because the scanner derives a match's width from the pattern
+        rather than from a field — so the width one hit occupies is the token
+        count, which is what a promoted row has to be read at.
+        """
+        if request.spec.is_pattern and not request.spec.is_regex:
+            return self._pattern_byte_length()
+        return request.length
 
     def _on_cancel(self) -> None:
         # Both workers still report results after a cancel — they break out of
@@ -589,9 +601,12 @@ class ScannerPanel(QWidget):
         if spec is None:
             spec = VALUE_TYPES[0]
         # An IDA pattern has no Length field and a spec length of 0 — the width
-        # of one match is the pattern's own, one token per byte.
+        # of one match is the pattern's own, one token per byte. Prefer the
+        # width the scan ran at: the Value box stays editable in pattern mode,
+        # so re-deriving it here would read at a width the hits were never
+        # found at, which is the staleness _last_scan_length exists to avoid.
         if spec.is_pattern and not spec.is_regex:
-            return spec, self._pattern_byte_length()
+            return spec, self._last_scan_length or self._pattern_byte_length()
 
         # The rows being promoted were read at the width their scan ran at, so
         # that is the width the cheat entry has to keep. The Length readout

@@ -293,3 +293,69 @@ def test_changing_an_entry_type_forgets_the_value_the_old_one_read():
 
     assert entry.last_value is None and entry.frozen_value is None
     assert entry.spec.format(entry.last_value) == ""  # would have raised TypeError
+
+
+@pytest.mark.parametrize(
+    "label, too_wide, exactly_wide",
+    (
+        ("Byte Array (Hex)", "DE AD BE EF 11 22", "DE AD BE EF"),
+        ("String (UTF-8)", "abcdef", "abcd"),
+    ),
+)
+def test_a_value_wider_than_its_entry_is_refused(label, too_wide, exactly_wide):
+    """
+    ``prepare_write`` treats the entry width as a hard truncating cap, so a
+    wider value was written short in silence while the cell kept showing all of
+    it until the next poll tick. The pattern path already refused this; the two
+    variable-width types now do too, so the three behave alike.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
+
+    with pytest.raises(ValueError, match="Widen the entry"):
+        parse_value_for_write(find_spec(label), too_wide, 4, b"\x00" * 4)
+
+    # Exactly as wide still goes through, at the entry's width.
+    value, width = parse_value_for_write(find_spec(label), exactly_wide, 4, b"\x00" * 4)
+    assert value and width == 4
+
+
+def test_a_frozen_row_rearms_after_its_type_changes():
+    """
+    Changing the type drops frozen_value — what the old spec read means nothing
+    under the new one — but leaves ``frozen`` ticked, and the poll worker skips
+    a frozen entry whose frozen_value is None. Without re-adopting the first
+    value read under the new type, the Active box stays on while nothing is
+    ever written again.
+    """
+    pytest.importorskip("PySide6")
+
+    from types import SimpleNamespace
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import (
+        CheatTable,
+        _forget_value_read_as_another_type,
+    )
+
+    entry = CheatEntry(
+        description="", address=0x1000, spec_label="4 Bytes (Int32)", length=4
+    )
+    entry.frozen = True
+    entry.frozen_value = 1234
+    entry.last_value = 1234
+
+    _forget_value_read_as_another_type(entry)
+    entry.spec_label = "2 Bytes (Int16)"
+    assert entry.frozen and entry.frozen_value is None  # freeze is inert here
+
+    table = SimpleNamespace(
+        _entries=[entry],
+        _editing_row=lambda: None,
+        _update_value_cell=lambda row, e: None,
+        _suspend_signals=False,
+    )
+    CheatTable._on_values_ready(table, [(0x1000, int, 4, 77)])
+
+    assert entry.frozen_value == 77  # re-armed on the next tick
