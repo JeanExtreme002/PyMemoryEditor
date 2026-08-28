@@ -568,7 +568,9 @@ class CheatTable(QWidget):
                 # parse_value_for_write ignores it when the type genuinely
                 # changed shape, so a stale int can't be misread as bytes.
                 current = entry.last_value
+                retyped = False
                 if plan.spec is not None and plan.spec.label != entry.spec_label:
+                    retyped = True
                     entry.spec_label = plan.spec.label
                     _forget_value_read_as_another_type(entry)
                 if plan.spec is not None:
@@ -581,9 +583,18 @@ class CheatTable(QWidget):
 
                 if plan.value_text is not None:
                     spec = entry.spec
+                    # A retype to a variable-width spec re-sizes the entry from
+                    # the value, rather than inheriting the width of the type it
+                    # replaced. Otherwise three Int32 rows retyped to String
+                    # with "hello" all fail on "the entry holds 4 — widen it
+                    # first", and the bulk dialog has no width field, nor does
+                    # a multi-row selection offer one: a dead end.
+                    cap: Optional[int] = entry.length
+                    if retyped and spec.accepts_length_override:
+                        cap = None
                     try:
                         value, effective_length = parse_value_for_write(
-                            spec, plan.value_text, entry.length, current
+                            spec, plan.value_text, cap, current
                         )
                     except ValueError as exc:
                         failures.append((entry.address, str(exc)))
@@ -729,12 +740,9 @@ class CheatTable(QWidget):
             "Length (bytes):",
             value=self._entries[row].length,
             minValue=1,
-            # Same ceiling the scanner uses for a value-sized width. Anything
-            # lower is a trap now that entries are promoted at the width of the
-            # value scanned for: a 2000-byte entry under a max(1024, length)
-            # ceiling could only ever be shrunk, and a wider value can't be
-            # written into it either — parse_value_for_write refuses that.
-            maxValue=2_147_483_647,
+            # An entry already wider than the cap can still be shrunk from here;
+            # it just can't grow past it.
+            maxValue=max(MAX_ENTRY_LENGTH, self._entries[row].length),
         )
         if not ok:
             return
@@ -792,6 +800,15 @@ class CheatTable(QWidget):
                 QMessageBox.warning(self, "Import", f"Skipped a bad entry: {exc}")
 
 
+# Ceiling for an entry's buffer width. Entries are promoted at the width of the
+# value scanned for, which the scanner doesn't cap, so 1024 was too tight — but
+# the poll worker allocates this many bytes per entry on every 100 ms tick, so
+# an unbounded field turns one typo into a multi-gigabyte allocation the tick's
+# blanket except swallows and retries forever. A megabyte is far past any real
+# value and still cheap to read ten times a second.
+MAX_ENTRY_LENGTH = 1_048_576
+
+
 def _forget_value_read_as_another_type(entry: CheatEntry) -> None:
     """Drop the cached value when ``new_spec`` can't read what produced it.
 
@@ -807,9 +824,15 @@ def _forget_value_read_as_another_type(entry: CheatEntry) -> None:
     width, and a value decoded at the old one means nothing at the new. A
     caller that still needs the bytes — the bulk edit writes a value in the
     same pass — must capture them before calling.
+
+    The freeze is released with it. Leaving the box ticked with no target would
+    make the next poll tick adopt whatever the address happens to hold, pinning
+    a value the user never chose; a released box is visible and re-arming it is
+    one click.
     """
     entry.last_value = None
     entry.frozen_value = None
+    entry.frozen = False
 
 
 def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:

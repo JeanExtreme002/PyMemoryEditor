@@ -331,34 +331,48 @@ def test_a_value_wider_than_its_entry_is_refused(
     assert value and reported == width
 
 
-def test_a_frozen_row_rearms_after_its_type_changes():
+def test_changing_a_type_releases_the_freeze_instead_of_retargeting_it():
     """
-    Changing the type drops frozen_value — what the old spec read means nothing
-    under the new one — but leaves ``frozen`` ticked, and the poll worker skips
-    a frozen entry whose frozen_value is None. Without re-adopting the first
-    value read under the new type, the Active box stays on while nothing is
-    ever written again.
+    A type change drops frozen_value, and leaving ``frozen`` ticked would make
+    the next poll tick adopt whatever the address happens to hold as the new
+    freeze target — the app would start pinning a value the user never chose.
+    Releasing the box is visible and re-arming it is one click.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import _forget_value_read_as_another_type
+
+    entry = CheatEntry(
+        description="", address=0x1000, spec_label="4 Bytes (Int32)", length=4
+    )
+    entry.frozen = True
+    entry.frozen_value = 100
+    entry.last_value = 100
+
+    _forget_value_read_as_another_type(entry)
+
+    assert not entry.frozen
+    assert entry.frozen_value is None and entry.last_value is None
+
+
+def test_a_row_frozen_before_its_first_read_arms_on_that_read():
+    """
+    Ticking Active before the first poll leaves frozen with no target — the
+    poll worker skips such an entry — so the first value read arms it. That is
+    a deliberate user action on an unchanged type, unlike the retype above.
     """
     pytest.importorskip("PySide6")
 
     from types import SimpleNamespace
 
     from PyMemoryEditor.app.cheat_entry import CheatEntry
-    from PyMemoryEditor.app.cheat_table import (
-        CheatTable,
-        _forget_value_read_as_another_type,
-    )
+    from PyMemoryEditor.app.cheat_table import CheatTable
 
     entry = CheatEntry(
         description="", address=0x1000, spec_label="4 Bytes (Int32)", length=4
     )
-    entry.frozen = True
-    entry.frozen_value = 1234
-    entry.last_value = 1234
-
-    _forget_value_read_as_another_type(entry)
-    entry.spec_label = "2 Bytes (Int16)"
-    assert entry.frozen and entry.frozen_value is None  # freeze is inert here
+    entry.frozen = True  # ticked before anything was read
 
     table = SimpleNamespace(
         _entries=[entry],
@@ -368,7 +382,7 @@ def test_a_frozen_row_rearms_after_its_type_changes():
     )
     CheatTable._on_values_ready(table, [(0x1000, int, 4, 77)])
 
-    assert entry.frozen_value == 77  # re-armed on the next tick
+    assert entry.frozen_value == 77
 
 
 def test_re_promoting_an_address_forgets_the_value_its_old_type_read():
@@ -437,3 +451,40 @@ def test_a_bulk_edit_that_retypes_and_writes_uses_the_value_it_replaced(
             parse_value_for_write(spec, "48 ? ? 00", 4, current)
     else:
         assert parse_value_for_write(spec, "48 ? ? 00", 4, current)[0] == expected
+
+
+def test_a_bulk_retype_sizes_the_entry_from_the_value_it_writes():
+    """
+    A bulk edit that changes the type *and* sets a value has no width field —
+    and a multi-row selection offers no "change length" either — so inheriting
+    the replaced type's width made a widening retype a dead end: three Int32
+    rows retyped to String with "hello" all failed on "the entry holds 4".
+    A variable-width spec takes its width from the value instead.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
+
+    spec = find_spec("String (UTF-8)")
+
+    # What the entry inherited from Int32 would have refused it.
+    with pytest.raises(ValueError, match="Widen the entry"):
+        parse_value_for_write(spec, "hello", 4, None)
+
+    # Sized from the value, as the retype path now asks for.
+    value, width = parse_value_for_write(spec, "hello", None, None)
+    assert value == "hello" and width == 5
+
+
+def test_an_entry_width_is_bounded_by_what_a_poll_tick_can_read():
+    """
+    The poll worker allocates the entry's width for every row on every 100 ms
+    tick, so an unbounded field turns one typo into a multi-gigabyte allocation
+    that the tick's blanket except swallows and retries forever.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.cheat_table import MAX_ENTRY_LENGTH
+
+    # Far above any value a scan produces, far below a problem allocation.
+    assert 1024 < MAX_ENTRY_LENGTH <= 16 * 1024 * 1024
