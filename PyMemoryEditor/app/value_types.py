@@ -407,9 +407,17 @@ def parse_value_for_write(
 
     Used by the cheat table, whose cells are read *and* written; the scanner
     only ever searches, so it stays on :func:`parse_value`.
+
+    The returned width follows :func:`parse_value`'s rule — an explicit
+    ``length_override`` wins for the types that accept one. Writing a value to
+    an entry must not resize it: the cheat table stores this width back onto the
+    entry, and the entry's width is how many bytes it *reads* on every poll
+    tick, which the user set and the write has no business shrinking.
     """
     if spec.parse_write is None:
         return parse_value(spec, text, length_override)
 
     value = spec.parse_write(text, current)
+    if spec.accepts_length_override and length_override is not None:
+        return value, max(1, int(length_override))
     return value, max(1, len(value))

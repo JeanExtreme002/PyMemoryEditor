@@ -182,3 +182,53 @@ def test_every_non_pattern_type_writes_exactly_what_it_searches_for():
 
     for spec in VALUE_TYPES:
         assert (spec.parse_write is not None) == spec.is_pattern, spec.label
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    (
+        ("String (UTF-8)", "hi"),
+        ("Byte Array (Hex)", "AA"),
+        ("Regex (String)", "hi"),
+    ),
+)
+def test_writing_a_value_never_resizes_the_entry(label, text):
+    """
+    The cheat table stores the width ``parse_value_for_write`` returns back onto
+    the entry (bulk edit), and that width is how many bytes the row *reads* on
+    every poll tick. A write must not shrink it to the size of what was typed —
+    which is what the pattern specs started doing once they got their own
+    ``parse_write``, since Regex accepts a length override.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import (
+        find_spec,
+        parse_value,
+        parse_value_for_write,
+    )
+
+    spec = find_spec(label)
+    entry_width = 64
+    _, write_width = parse_value_for_write(spec, text, entry_width, b"\x00" * 64)
+
+    assert write_width == entry_width
+    # And it agrees with what the search path reports for the same override.
+    assert write_width == parse_value(spec, text, entry_width)[1]
+
+
+def test_a_pattern_without_a_length_override_reports_its_own_width():
+    """
+    An IDA pattern declares no width, so with nothing to honour the write width
+    is the pattern's own byte count. Nothing stores it (the spec doesn't accept
+    an override, so the cheat table leaves the entry's width alone), but 0 —
+    what the search path reports — would be a nonsense buffer size.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
+
+    spec = find_spec("AOB Pattern (IDA)")
+    assert not spec.accepts_length_override
+    _, width = parse_value_for_write(spec, "48 8B ? 00", None, b"\x11" * 8)
+    assert width == 4
