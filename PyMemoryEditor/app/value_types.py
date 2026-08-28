@@ -190,13 +190,6 @@ def _parse_pattern_write(
     tokens = tokenize_pattern(text)
     wildcards = [index for index, token in enumerate(tokens) if token is None]
 
-    if length_override is not None and len(tokens) > length_override:
-        raise ValueError(
-            "Pattern is %d bytes but the entry holds %d. Widen the entry first, "
-            "or the extra bytes would be dropped without warning."
-            % (len(tokens), length_override)
-        )
-
     if wildcards:
         # `current` is whatever the entry's spec produced when it was last
         # polled, and a type change doesn't wait for a fresh tick — so it can
@@ -410,6 +403,19 @@ def parse_value(
     return value, length
 
 
+def _written_width(value: Any) -> int:
+    """Bytes ``value`` occupies once written, or 0 when its spec sets the size.
+
+    ``str`` is measured encoded: the entry's width is a byte count, so counting
+    characters would let a multibyte value overflow it.
+    """
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    if isinstance(value, (bytes, bytearray)):
+        return len(value)
+    return 0
+
+
 def has_readable_width(spec: ValueTypeSpec) -> bool:
     """True when the spec can size a read at an address the caller already has.
 
@@ -452,28 +458,26 @@ def parse_value_for_write(
     """
     if spec.parse_write is None:
         value, length = parse_value(spec, text, length_override)
-        # prepare_write treats bufflength as a hard cap and truncates past it
-        # — characters for str, bytes for bytes — so a value wider than the
-        # entry would be written short with no word said, while the cell keeps
-        # showing all of it until the next poll tick corrects itself. The
-        # pattern path already refuses this; so do the other two.
-        if (
-            length_override is not None
-            and spec.pytype in (str, bytes)
-            and len(value) > length_override
-        ):
-            raise ValueError(
-                "Value is %d %s but the entry holds %d. Widen the entry first, "
-                "or the extra would be dropped without warning."
-                % (
-                    len(value),
-                    "characters" if spec.pytype is str else "bytes",
-                    length_override,
-                )
-            )
-        return value, length
+    else:
+        value = spec.parse_write(text, current, length_override)
+        length = (
+            max(1, int(length_override))
+            if spec.accepts_length_override and length_override is not None
+            else max(1, _written_width(value))
+        )
 
-    value = spec.parse_write(text, current, length_override)
-    if spec.accepts_length_override and length_override is not None:
-        return value, max(1, int(length_override))
-    return value, max(1, len(value))
+    # One guard for every path that reaches an address. An entry's length is a
+    # *byte* width — it is the bufflength each poll tick reads — while
+    # prepare_write treats it as a hard cap and truncates past it, counting
+    # characters for str. So a wider value was written short with no word said
+    # while the cell kept showing all of it, and a multibyte str could slip the
+    # other way: "ábc" is 3 characters but 4 bytes, one past a 3-byte entry.
+    # Measuring what actually goes on the wire covers both.
+    written = _written_width(value)
+    if length_override is not None and written > length_override:
+        raise ValueError(
+            "Value is %d bytes but the entry holds %d. Widen the entry first, "
+            "or the extra would be dropped without warning."
+            % (written, length_override)
+        )
+    return value, length

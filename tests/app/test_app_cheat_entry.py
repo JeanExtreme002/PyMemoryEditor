@@ -296,13 +296,20 @@ def test_changing_an_entry_type_forgets_the_value_the_old_one_read():
 
 
 @pytest.mark.parametrize(
-    "label, too_wide, exactly_wide",
+    "label, width, too_wide, exactly_wide",
     (
-        ("Byte Array (Hex)", "DE AD BE EF 11 22", "DE AD BE EF"),
-        ("String (UTF-8)", "abcdef", "abcd"),
+        ("Byte Array (Hex)", 4, "DE AD BE EF 11 22", "DE AD BE EF"),
+        ("String (UTF-8)", 4, "abcdef", "abcd"),
+        ("Regex (String)", 4, "ABCDEFGH", "ABCD"),
+        ("AOB Pattern (IDA)", 4, "DE AD BE EF 11", "DE AD BE EF"),
+        # "ábc" is 3 characters but 4 bytes, and an entry's width is a byte
+        # count — measuring characters would let it write one byte past.
+        ("String (UTF-8)", 3, "ábc", "abc"),
     ),
 )
-def test_a_value_wider_than_its_entry_is_refused(label, too_wide, exactly_wide):
+def test_a_value_wider_than_its_entry_is_refused(
+    label, width, too_wide, exactly_wide
+):
     """
     ``prepare_write`` treats the entry width as a hard truncating cap, so a
     wider value was written short in silence while the cell kept showing all of
@@ -313,12 +320,15 @@ def test_a_value_wider_than_its_entry_is_refused(label, too_wide, exactly_wide):
 
     from PyMemoryEditor.app.value_types import find_spec, parse_value_for_write
 
+    current = b"\x00" * width
     with pytest.raises(ValueError, match="Widen the entry"):
-        parse_value_for_write(find_spec(label), too_wide, 4, b"\x00" * 4)
+        parse_value_for_write(find_spec(label), too_wide, width, current)
 
     # Exactly as wide still goes through, at the entry's width.
-    value, width = parse_value_for_write(find_spec(label), exactly_wide, 4, b"\x00" * 4)
-    assert value and width == 4
+    value, reported = parse_value_for_write(
+        find_spec(label), exactly_wide, width, current
+    )
+    assert value and reported == width
 
 
 def test_a_frozen_row_rearms_after_its_type_changes():
@@ -359,3 +369,39 @@ def test_a_frozen_row_rearms_after_its_type_changes():
     CheatTable._on_values_ready(table, [(0x1000, int, 4, 77)])
 
     assert entry.frozen_value == 77  # re-armed on the next tick
+
+
+def test_re_promoting_an_address_forgets_the_value_its_old_type_read():
+    """
+    add_entry's "address already exists" branch is the third place a
+    spec_label changes — promoting the same address again from a scan or from
+    a pointer dialog — and _rebuild formats the cached value through the new
+    spec on the way out, so the old type's value has to go here too.
+    """
+    pytest.importorskip("PySide6")
+
+    from types import SimpleNamespace
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import CheatTable
+
+    existing = CheatEntry(
+        description="", address=0x1000, spec_label="String (UTF-8)", length=8
+    )
+    existing.last_value = "hello"
+    existing.frozen = True
+    existing.frozen_value = "hello"
+
+    table = SimpleNamespace(_entries=[existing], _rebuild=lambda: None)
+    CheatTable.add_entry(
+        table,
+        CheatEntry(
+            description="", address=0x1000, spec_label="Byte Array (Hex)", length=4
+        ),
+    )
+
+    stored = table._entries[0]
+    assert stored.spec_label == "Byte Array (Hex)"
+    assert stored.last_value is None and stored.frozen_value is None
+    # _fmt_bytes("hello") would have raised ValueError inside add_entry.
+    assert stored.spec.format(stored.last_value) == ""

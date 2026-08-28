@@ -215,6 +215,12 @@ class CheatTable(QWidget):
         for existing in self._entries:
             if existing.address == entry.address:
                 existing.description = entry.description or existing.description
+                # Re-promoting an address that is already in the table is the
+                # third place a spec_label changes, and the cached value has to
+                # go with it here too — _rebuild formats it through the new
+                # spec on the way out of this method.
+                if entry.spec_label != existing.spec_label:
+                    _forget_value_read_as_another_type(existing)
                 existing.spec_label = entry.spec_label
                 existing.length = entry.length
                 self._rebuild()
