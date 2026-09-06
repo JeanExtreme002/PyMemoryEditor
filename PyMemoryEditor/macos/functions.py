@@ -311,6 +311,31 @@ _PAGE_GONE_KRS = (
     KERN_MEMORY_ERROR,
 )
 
+# KERN_PROTECTION_FAILURE is tolerated by a full-address-space *sweep* only,
+# never by a read of caller-supplied addresses — hence a second tuple rather
+# than another entry above.
+#
+# The sweeps walk every region the filter accepted and have no opinion about
+# any single one: a range the kernel declines to hand over is a range with no
+# matches in it, and aborting the whole scan over it loses every region that
+# came after. `search_values_by_addresses` is the opposite case — the caller
+# named those addresses, and its documented `raise_error=True` must still be
+# able to report that one of them could not be read. Anything in the tuple
+# above is swallowed even when `raise_error` is set (see
+# process.scanning.iter_values_for_addresses), so putting kr=2 there would
+# silently turn "permission denied" into the same `(address, None)` the caller
+# gets for an address in a gap.
+#
+# Honest limits of what is known here. This was added because a plain
+# search_by_value over the current process died with kr=2 on GitHub's
+# virtualized macOS runners, on a 22 MB region that reported VM_PROT_READ and
+# Shared=False. The mechanism was not established. It does *not* reproduce
+# locally: probing all 135 scannable regions of a live process yields only kr=1
+# and kr=10, and a page deliberately re-protected to PROT_NONE (or never
+# mapped) answers KERN_INVALID_ADDRESS, not kr=2 — so the usual
+# "protection changed under us" story does not explain it.
+_SWEEP_SKIPPABLE_KRS = _PAGE_GONE_KRS + (KERN_PROTECTION_FAILURE,)
+
 
 class MachReadError(OSError):
     """OSError subclass that carries the underlying kern_return_t."""
@@ -492,6 +517,14 @@ def _make_read_chunk(task: int):
 def _is_transient(exc: BaseException) -> bool:
     """Classify ``exc`` as a transient page-vanished failure for scan loops."""
     return isinstance(exc, MachReadError) and exc.kr in _PAGE_GONE_KRS
+
+
+def _is_skippable_by_sweep(exc: BaseException) -> bool:
+    """
+    Same as :func:`_is_transient`, plus the codes only a full-address-space
+    sweep may skip. See :data:`_SWEEP_SKIPPABLE_KRS`.
+    """
+    return isinstance(exc, MachReadError) and exc.kr in _SWEEP_SKIPPABLE_KRS
 
 
 def _query_region(task: int, address: int):
@@ -683,7 +716,7 @@ def search_addresses_by_value(
         scan_type,
         _make_read_chunk(task),
         progress_information=progress_information,
-        transient_error_check=_is_transient,
+        transient_error_check=_is_skippable_by_sweep,
     )
 
 
@@ -1044,7 +1077,7 @@ def search_addresses_by_pattern(
         length,
         _make_read_chunk(task),
         progress_information=progress_information,
-        transient_error_check=_is_transient,
+        transient_error_check=_is_skippable_by_sweep,
     )
 
 

@@ -133,6 +133,54 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
 
+  # macOS gets a single cell instead of a row in the matrix above. Its only
+  # purpose is to measure the `macos` backend so the merged Codecov report
+  # covers all three platforms; the Python-version sweep stays on Linux and
+  # Windows, where it costs a fraction of the wall clock.
+  #
+  # Unlike the matrix, this job installs `.[dev,speed]` (NumPy). That is not a
+  # preference — it is what makes a macOS cell viable at all. A macOS process
+  # exposes ~390 GiB of sparse address space across ~145 regions, two orders of
+  # magnitude more than a Linux one, and the scan tests walk all of it. Measured
+  # on an M-series Mac, this exact command takes ~82s with NumPy and 681s
+  # without: an 8x gap that a 3-core runner only widens, which is what made
+  # macOS look like it hung here before (it was removed in 041bfc0).
+  # The pure-Python scan path loses nothing — all eight cells of the matrix
+  # above still exercise it.
+  build-macos:
+    needs: lint
+    runs-on: macos-latest
+    # Hard ceiling so a pathological scan can never sit at the 6h default.
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    # No Qt system-library step here: the PySide6 macOS wheel bundles its own
+    # Qt frameworks, unlike the Linux one.
+    - name: Install dependencies (with NumPy speed extra)
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev,speed]"
+    - name: Test with pytest
+      env:
+        QT_QPA_PLATFORM: offscreen
+      # Same conservative coverage gate as the main matrix (see that step's note).
+      run: |
+        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+    - name: Upload coverage to Codecov
+      # Flag mirrors the matrix format (`runner.os` is "macOS" here) so Codecov
+      # groups this cell alongside the Linux and Windows uploads.
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        files: ./coverage.xml
+        flags: macOS-py3.12
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+
   # Isolated job for the optional NumPy-accelerated scan fast path (the
   # `[speed]` extra). The matrix above deliberately runs WITHOUT NumPy so the
   # pure-Python scan path stays covered; this single Linux job installs
