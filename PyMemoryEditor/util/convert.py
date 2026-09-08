@@ -360,12 +360,6 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
             ctypes.c_char * 0
         )()
 
-    elif length < 1:
-        raise ValueError(
-            "bufflength must be at least 1 byte for %s (got %d)."
-            % (pytype.__name__, length)
-        )
-
     elif pytype is int:
 
         if length == 1:
@@ -389,6 +383,23 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
 
     else:
         raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    # After the dispatch, not inside it. Sitting in the elif chain, this test
+    # ran before the unsupported-type branch could: `get_c_type_of(Foo, 0)`
+    # complained about the width instead of the type, and for a `pytype` with
+    # no `__name__` -- a string, say -- formatting the message raised
+    # AttributeError, which is neither documented nor caught by the
+    # `except ValueError` in the MCP toolset or in any of the three backends.
+    if length < 1 and pytype is not str and pytype is not bytes:
+        # str/bytes are exempt: `prepare_write(str, None, "")` yields a length
+        # of 0 and writing an empty value has always been a successful no-op on
+        # the public API. Moving this check out of the elif chain above (so the
+        # unsupported-type branch is reachable at length 0) briefly took that
+        # exemption with it.
+        raise ValueError(
+            "bufflength must be at least 1 byte for %s (got %d)."
+            % (getattr(pytype, "__name__", pytype), length)
+        )
 
     size = ctypes.sizeof(value)
     if size < length:

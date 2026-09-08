@@ -315,12 +315,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev,speed]"
     - name: Test the MCP server
-      # Same `--cov=PyMemoryEditor` as every other job: `source` in pyproject
-      # is the whole package and wins over a narrower `--cov` path, so scoping
-      # this to `PyMemoryEditor/mcp` would silently measure the library anyway.
-      # What differs is the subset exercised — the MCP suite reaches 71% of the
-      # package on its own (it drives the library through the real backends),
-      # so 60 is the same kind of floor the other jobs carry.
+      # Coverage is scoped to the package under test, via both --cov and
+      # .coveragerc-mcp. Measured against the whole package instead, this gate
+      # came out at 71% on macOS but 60.4% on Linux -- four tenths of a point
+      # above a floor of 60, on a number mostly about code this job does not
+      # target. Scoped, the MCP package is 91% covered by its own suite on
+      # macOS and 90.4% on Linux, so 80 leaves real headroom.
       env:
         PYTEST_ADDOPTS: ${{ matrix.addopts }}
       # -p no:pytest-qt: the dev extra brings pytest-qt, whose plugin imports

@@ -10,7 +10,13 @@
 # Scoped this way, both jobs carry a floor that means something, and Codecov
 # merges the two halves into one view.
 [run]
-source = ["PyMemoryEditor/mcp"]
+# A plain value, not a TOML list: this is an INI file, and
+# coverage's parser read `["PyMemoryEditor/mcp"]` as a directory literally
+# named that. It only appeared to work because CI always passes an
+# explicit --cov=PATH, which overrides `source`; `coverage
+# --rcfile=` or a bare `pytest --cov` measured nothing and reported
+# "No data to report".
+source = PyMemoryEditor/mcp
 omit =
     PyMemoryEditor/mcp/__main__.py
 

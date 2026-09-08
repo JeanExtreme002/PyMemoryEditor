@@ -1432,3 +1432,71 @@ class TestScopedReviewRegressions:
         opened = toolset.open_process(pid=4242)
         assert opened["opened"] is True
         assert opened["is_64bit"] is None
+
+
+class TestPointerScanArgumentDefaults:
+    """`null` means the documented default, for all three arguments alike.
+
+    They used to disagree: `max_depth or 3` and `max_results or 20` sent a
+    null to their documented default, while `max_offset or 0` sent it to 0 --
+    the *narrowest* search possible. So a client that renders an unset integer
+    as JSON null, which is exactly the case the code claimed to tolerate, got
+    "No static path reached that address" for a target the default call finds.
+    The three defaults now come from one table shared with the signature.
+    """
+
+    @pytest.mark.parametrize("argument", ["max_depth", "max_offset", "max_results"])
+    def test_null_resolves_to_the_documented_default(self, argument):
+        # Against the resolver, not the tool result: `max_results` is not
+        # echoed in the payload, and asserting "only if the key is present"
+        # is how a test ends up vacuous for exactly the row that matters.
+        from PyMemoryEditor.mcp.toolset import (
+            POINTER_SCAN_DEFAULTS,
+            _clamp_pointer_arg,
+        )
+
+        assert _clamp_pointer_arg(argument, None) == POINTER_SCAN_DEFAULTS[argument]
+
+    def test_null_max_offset_is_the_default_not_zero(self, toolset, session):
+        from PyMemoryEditor.mcp.toolset import POINTER_SCAN_DEFAULTS
+
+        result = toolset.find_pointer_paths(
+            session["session_id"], hex(WRITABLE_BASE), max_offset=None
+        )
+        assert result["max_offset"] == POINTER_SCAN_DEFAULTS["max_offset"]
+
+    def test_an_explicit_zero_max_offset_is_still_honoured(self, toolset, session):
+        # The tightest search there is: only hops pointing exactly at the
+        # address. Distinguishable from "unset" precisely because null is not 0.
+        result = toolset.find_pointer_paths(
+            session["session_id"], hex(WRITABLE_BASE), max_offset=0
+        )
+        assert result["max_offset"] == 0
+
+    @pytest.mark.parametrize("argument, value, expected", [
+        ("max_depth", 0, 1),          # clamps to the minimum, not the default
+        ("max_depth", 99, 7),
+        ("max_offset", -5, 0),
+        ("max_offset", 10**9, 0x10000),
+    ])
+    def test_out_of_range_values_clamp(
+        self, toolset, session, argument, value, expected
+    ):
+        result = toolset.find_pointer_paths(
+            session["session_id"], hex(WRITABLE_BASE), **{argument: value}
+        )
+        assert result[argument] == expected
+
+    def test_the_signature_defaults_come_from_the_shared_table(self):
+        # The bug was one default written in two places. This pins that they
+        # cannot drift apart again.
+        import inspect
+
+        from PyMemoryEditor.mcp.toolset import (
+            POINTER_SCAN_DEFAULTS,
+            MemoryToolset,
+        )
+
+        signature = inspect.signature(MemoryToolset.find_pointer_paths)
+        for name, default in POINTER_SCAN_DEFAULTS.items():
+            assert signature.parameters[name].default == default, name

@@ -13,7 +13,13 @@
 # pyproject config. A developer running plain `pytest` still measures
 # everything, which is the honest full-suite number.
 [run]
-source = ["PyMemoryEditor"]
+# A plain value, not a TOML list: this is an INI file, and
+# coverage's parser read `["PyMemoryEditor"]` as a directory literally
+# named that. It only appeared to work because CI always passes an
+# explicit --cov=PATH, which overrides `source`; `coverage
+# --rcfile=` or a bare `pytest --cov` measured nothing and reported
+# "No data to report".
+source = PyMemoryEditor
 omit =
     PyMemoryEditor/app/*
     PyMemoryEditor/__main__.py

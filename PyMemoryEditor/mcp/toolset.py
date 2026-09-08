@@ -91,6 +91,19 @@ MODULE_PREVIEW = 20
 #: instead.
 MAX_PAGE_SIZE = 100
 
+#: Defaults for ``find_pointer_paths``, named because they were previously
+#: written twice — once in the signature and once in the clamp — and the two
+#: disagreed for ``None``. ``max_offset`` fell to 0, the *narrowest* possible
+#: search, while its siblings fell to their documented defaults; a client that
+#: renders an unset integer as JSON null therefore got "No static path reached
+#: that address" for a target the default call finds.
+POINTER_SCAN_DEFAULTS = {"max_depth": 3, "max_offset": 1024, "max_results": 20}
+
+#: Ceilings for the same three. ``max_offset`` may legitimately be 0 (keep only
+#: hops pointing exactly at the address); the other two need at least 1.
+POINTER_SCAN_LIMITS = {"max_depth": (1, 7), "max_offset": (0, 0x10000),
+                       "max_results": (1, MAX_PAGE_SIZE)}
+
 #: The value types a tool argument may name, mapped to the ``pytype`` the
 #: library expects.
 VALUE_TYPES: Dict[str, Type] = {
@@ -1412,9 +1425,9 @@ class MemoryToolset:
         self,
         session_id: str,
         target_address: str,
-        max_depth: int = 3,
-        max_offset: int = 1024,
-        max_results: int = 20,
+        max_depth: int = POINTER_SCAN_DEFAULTS["max_depth"],
+        max_offset: int = POINTER_SCAN_DEFAULTS["max_offset"],
+        max_results: int = POINTER_SCAN_DEFAULTS["max_results"],
     ) -> Dict[str, Any]:
         """Reverse-scan for static pointer paths that reach an address.
 
@@ -1427,11 +1440,16 @@ class MemoryToolset:
         :param target_address: the dynamic address to find paths to.
         :param max_depth: pointer levels to follow. Cost grows sharply with
             depth; 1–4 is the useful range and 3 is a good default. A chain
-            needs at least one level, so ``0`` is treated as unset.
+            needs at least one level, so ``0`` clamps to 1 rather than to the
+            default — and ``null`` means "use the default", as it does for
+            every argument here.
         :param max_offset: largest offset a single hop may add — effectively
             the assumed struct size. Larger finds more and noisier paths.
-            ``0`` is meaningful rather than "unset": it keeps only hops that
-            point exactly at the address.
+            An explicit ``0`` is meaningful rather than "unset": it keeps only
+            hops that point exactly at the address. ``null`` means "use the
+            default" (1024) — it used to mean 0, i.e. the narrowest search
+            possible, which is the opposite of what a client sending null for
+            an unset field intends.
         :param max_results: stop after this many paths.
 
         This is the most expensive tool here, and it runs in two phases: it
@@ -1444,18 +1462,13 @@ class MemoryToolset:
         """
         session = self.store.get(session_id)
         target = parse_address(target_address, field="target_address")
-        max_depth = max(1, min(int(max_depth or 3), 7))
-        # Clamped without the `or 1024` sentinel the other arguments use: unlike
-        # a width, 0 is a meaningful max_offset — it restricts every hop to a
-        # slot pointing exactly at the address, which is the tightest scan you
-        # can ask for. Treating it as "unset" silently widened the window to
-        # 1024 bytes.
-        # `or 0` rather than a bare int(): a client that renders an unset
-        # integer as JSON null would otherwise crash here, and this was the
-        # only one of the four arguments without that tolerance. 0 stays
-        # meaningful because `0 or 0` is 0.
-        max_offset = min(max(int(max_offset or 0), 0), 0x10000)
-        max_results = max(1, min(int(max_results or 20), MAX_PAGE_SIZE))
+        # `is None` rather than a falsy test, and one rule for all three: a
+        # client is free to send JSON null for an unset integer, and each of
+        # these then means "use the documented default" — including
+        # max_offset, whose 0 stays meaningful when it is passed explicitly.
+        max_depth = _clamp_pointer_arg("max_depth", max_depth)
+        max_offset = _clamp_pointer_arg("max_offset", max_offset)
+        max_results = _clamp_pointer_arg("max_results", max_results)
 
         # Both clocks start once the target is ours. Computed before the lock
         # they would count time spent *queued* behind another tool call, and a
@@ -1925,6 +1938,19 @@ def _truncate_to_span(pytype: Type, value: Any, span: Optional[int]) -> Any:
         # Never split a multibyte character in the reported value.
         return encoded.decode("utf-8", errors="ignore")
     return value
+
+
+def _clamp_pointer_arg(name: str, value: Any) -> int:
+    """Resolve one ``find_pointer_paths`` argument: null means the default.
+
+    Written once for all three because writing it per argument is how they
+    came to disagree — ``max_offset or 0`` sent a null to the narrowest
+    possible search while ``max_depth or 3`` sent it to the documented one.
+    """
+    if value is None:
+        value = POINTER_SCAN_DEFAULTS[name]
+    low, high = POINTER_SCAN_LIMITS[name]
+    return min(max(int(value), low), high)
 
 
 class _ScanDeadline(Exception):

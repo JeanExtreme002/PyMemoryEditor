@@ -254,3 +254,101 @@ class TestAdvertisedLimitsMatchEnforcement:
         # list_processes clamped at 200 while server_info said 100.
         advertised = toolset.server_info()["limits"]["max_page_size"]
         assert toolset.list_processes(limit=10**6)["returned"] <= advertised
+
+
+class TestGetCTypeOfContract:
+    """`get_c_type_of` is the choke point every buffer is sized through.
+
+    Its three refusals interact, and getting the order wrong is how a width
+    complaint came back for an unsupported type, and how a `pytype` without
+    `__name__` raised AttributeError -- which neither the MCP toolset nor any
+    of the three backends catch, since they all guard `ValueError`.
+    """
+
+    def test_an_unsupported_type_is_rejected_by_type_not_by_width(self):
+        class NotAType:
+            pass
+
+        from PyMemoryEditor.util import get_c_type_of
+
+        for width in (0, 1, 4, 99):
+            with pytest.raises(ValueError, match="must be bool, int, float"):
+                get_c_type_of(NotAType, width)
+
+    def test_a_pytype_without_a_name_still_raises_value_error(self):
+        # Formatting the width message with `pytype.__name__` blew up here.
+        from PyMemoryEditor.util import get_c_type_of
+
+        with pytest.raises(ValueError):
+            get_c_type_of("notatype", 0)
+
+    @pytest.mark.parametrize("pytype", [int, float, bool])
+    def test_zero_is_refused_for_numeric_types(self, pytype):
+        from PyMemoryEditor.util import get_c_type_of
+
+        with pytest.raises(ValueError, match="at least 1 byte"):
+            get_c_type_of(pytype, 0)
+
+    @pytest.mark.parametrize("pytype", [str, bytes])
+    def test_zero_stays_legal_for_text(self, pytype):
+        # An empty write is a documented no-op on the public API.
+        import ctypes
+
+        from PyMemoryEditor.util import get_c_type_of
+
+        assert ctypes.sizeof(get_c_type_of(pytype, 0)) == 0
+
+    def test_a_negative_width_is_refused_for_every_type(self):
+        from PyMemoryEditor.util import get_c_type_of
+
+        for pytype in (int, float, bool, str, bytes):
+            with pytest.raises(ValueError, match="negative"):
+                get_c_type_of(pytype, -1)
+
+    def test_a_width_narrower_than_the_c_type_is_allowed(self):
+        # Documented and safe: an int of 3 bytes reads 3 into a 4-byte buffer.
+        import ctypes
+
+        from PyMemoryEditor.util import get_c_type_of
+
+        assert ctypes.sizeof(get_c_type_of(int, 3)) == 4
+
+    def test_a_width_wider_than_the_c_type_is_refused(self):
+        from PyMemoryEditor.util import get_c_type_of
+
+        for pytype, width in ((bool, 2), (int, 9), (float, 9)):
+            with pytest.raises(ValueError, match="too wide"):
+                get_c_type_of(pytype, width)
+
+
+class TestCoverageConfigsAreValidIni:
+    """The CI coverage configs are INI, and were written as if they were TOML.
+
+    `source = ["PyMemoryEditor"]` parsed as a directory literally named
+    `["PyMemoryEditor"]`. It looked fine only because CI always passes an
+    explicit `--cov=PATH`, which overrides `source`; anyone running
+    `coverage --rcfile=` or a bare `pytest --cov` measured nothing.
+    """
+
+    @pytest.mark.parametrize("config_file, expected", [
+        (".coveragerc-lib", "PyMemoryEditor"),
+        (".coveragerc-mcp", "PyMemoryEditor/mcp"),
+    ])
+    def test_source_parses_to_a_real_path(self, config_file, expected):
+        from pathlib import Path
+
+        from coverage import Coverage
+
+        root = Path(__file__).resolve().parents[2]
+        config = Coverage(config_file=str(root / config_file)).config
+        assert config.source == [expected]
+        assert (root / expected).is_dir()
+
+    def test_the_library_config_omits_the_mcp_package(self):
+        from pathlib import Path
+
+        from coverage import Coverage
+
+        root = Path(__file__).resolve().parents[2]
+        omit = Coverage(config_file=str(root / ".coveragerc-lib")).config.run_omit
+        assert any("mcp" in pattern for pattern in omit), omit

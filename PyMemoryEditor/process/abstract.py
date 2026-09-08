@@ -442,9 +442,11 @@ class AbstractProcess(ABC):
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
-            any positive width is accepted (for ``int`` an unusual width such as
-            3 or 6 is rounded up to the next C integer type). For numeric types
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. An
+            unusual width such as 3 or 6 is rounded up to the next C integer
+            type; a width wider than the type's largest C representation (over
+            8 for ``int``/``float``, over 1 for ``bool``) raises ``ValueError``,
+            because the buffer would be smaller than the read. For numeric types
             (int, float, bool) you may omit this; defaults are int→4, float→8,
             bool→1. str and bytes require an explicit size.
 
