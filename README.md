@@ -116,7 +116,7 @@ Or in any client that reads `mcpServers` JSON (Claude Desktop, editors, …):
 
 Fourteen tools cover the full workflow, with scan results kept server-side behind a handle, so a 40 000-hit first scan costs a few tokens instead of your whole context.
 
-It runs with your privileges and is **not a sandbox** — read the [MCP guide](docs/mcp.md) before pointing it at anything you care about.
+Read the [MCP guide](docs/mcp.md) to learn more.
 
 ---
 
