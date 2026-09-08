@@ -1221,15 +1221,23 @@ class TestThirdReviewRegressions:
         as well as the session list. The store had already been guarded for
         the same call; this file had not.
         """
+        # `os.getpid()`, not pid 1: Windows has no pid 1 (System Idle is 0,
+        # System is 4), so `pid_exists(1)` is False there and this test failed
+        # on that runner alone. The test's own process is alive by definition
+        # everywhere.
+        import os
+
+        alive_pid = os.getpid()
+
         toolset = make_toolset(config())
         toolset.store.open(FakeProcess(pid=2 ** 31), 2 ** 31, "impossible")
-        toolset.store.open(FakeProcess(pid=1), 1, "ordinary")
+        toolset.store.open(FakeProcess(pid=alive_pid), alive_pid, "ordinary")
 
         sessions = toolset.server_info()["open_sessions"]
 
         by_pid = {entry["pid"]: entry["alive"] for entry in sessions}
         assert by_pid[2 ** 31] is False
-        assert by_pid[1] is True
+        assert by_pid[alive_pid] is True
 
     def test_a_refused_attach_does_not_leak_the_handle(
         self, make_toolset, monkeypatch
