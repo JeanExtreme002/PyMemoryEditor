@@ -158,6 +158,65 @@ class TestParseOffset:
         assert parse_offset(-MAX_OFFSET_MAGNITUDE) == -MAX_OFFSET_MAGNITUDE
 
 
+class TestNumericArgumentsReachTheModelAsToolError:
+    """Only ``ToolError`` text reaches the model.
+
+    Everything else becomes an ``UnexpectedToolError`` whose message the SDK
+    withholds — so a bare ``int(raw)`` on a model-supplied argument was a hole
+    in the contract this module is built around. ``max_depth="deep"`` raised
+    ``ValueError: invalid literal for int() with base 10: 'deep'`` and the
+    model was told nothing, for an argument it could have fixed itself.
+    """
+
+    @pytest.mark.parametrize("raw", ["deep", "muito", "", "0x", "1.5", [], {}])
+    def test_a_non_numeric_argument_is_a_tool_error(self, raw):
+        from PyMemoryEditor.mcp.toolset import ToolError, parse_int_arg
+
+        with pytest.raises(ToolError):
+            parse_int_arg(raw, "max_depth")
+
+    def test_a_boolean_is_refused_like_every_other_parser_refuses_it(self):
+        # bool is an int subclass, so True would silently mean 1.
+        from PyMemoryEditor.mcp.toolset import ToolError, parse_int_arg
+
+        for value in (True, False):
+            with pytest.raises(ToolError) as error:
+                parse_int_arg(value, "limit")
+            assert "boolean" in str(error.value)
+
+    @pytest.mark.parametrize("raw, expected", [
+        (7, 7), ("7", 7), ("0x10", 16), ("  12  ", 12), ("1_000", 1000), (-3, -3),
+    ])
+    def test_numeric_forms_still_parse(self, raw, expected):
+        from PyMemoryEditor.mcp.toolset import parse_int_arg
+
+        assert parse_int_arg(raw, "limit") == expected
+
+    def test_none_takes_the_default_when_there_is_one(self):
+        from PyMemoryEditor.mcp.toolset import ToolError, parse_int_arg
+
+        assert parse_int_arg(None, "max_depth", default=3) == 3
+        with pytest.raises(ToolError):
+            parse_int_arg(None, "limit")
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_bufflength_is_refused(self, value):
+        """`bufflength=true` used to mean a width of 1.
+
+        Both values are asserted, and `False` is the one that matters: it is
+        falsy, so without an explicit check it slips past `if raw` and comes
+        back as the "use the default width" sentinel instead of an error. A
+        mutation removing the check passed while only `True` was tested,
+        because `parse_int_arg` happens to refuse that one too.
+        """
+        from PyMemoryEditor.mcp.toolset import ToolError, parse_bufflength
+
+        with pytest.raises(ToolError) as error:
+            parse_bufflength(value, int, required=False)
+
+        assert "boolean" in str(error.value)
+
+
 class TestParseValue:
     @pytest.mark.parametrize(
         "raw, expected",

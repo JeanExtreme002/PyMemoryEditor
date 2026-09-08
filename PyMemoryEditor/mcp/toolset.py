@@ -69,16 +69,23 @@ SAMPLE_SIZE = 10
 #: 64 KiB is far past any plausible string or byte-array read.
 MAX_TEXT_BYTES = 0x10000
 
-#: The numeric widths a scan, read and write all agree on. Deliberately
-#: narrower than what the library accepts: ``int`` at 3, 5, 6 or 7 bytes reads
-#: correctly through ``read_process_memory`` but comes back ``None`` from
-#: ``search_by_addresses`` (it rounds up to the next C type, whose buffer the
-#: address reader then refuses), so a scan would find addresses and report
-#: every one of them as unreadable. ``float`` at anything but 4 or 8 silently
-#: decodes garbage — measured, width 2 gives ``2.5e-321`` and width 3
-#: ``9.7e-319``, which is worse than ``0.0`` because it reads like a real
-#: measurement. Offering widths that half-work to a model that is told to
-#: guess them is worse than refusing them.
+#: The numeric widths this server offers a model. Deliberately narrower than
+#: what the library now accepts, and the reasons it was *first* written down
+#: no longer apply — both were fixed in this same PR, so the justification is
+#: recorded honestly rather than left to rot:
+#:
+#: * ``int`` at 3, 5, 6 or 7 used to come back ``None`` from
+#:   ``search_by_addresses`` while ``read_process_memory`` returned a value.
+#:   Both paths now agree and sign-extend, so these widths work — measured,
+#:   width 3 reads ``1118481``, not ``None``.
+#: * ``float`` at anything but 4 or 8 used to decode garbage that read like a
+#:   real measurement. ``get_c_type_of`` now refuses those widths outright.
+#:
+#: What remains is a product decision, not a workaround: a model is told to
+#: guess widths, and an unusual one is far more often a guess gone wrong than
+#: a genuine 24-bit field. Offering 1, 2, 4 and 8 keeps the guess space the
+#: size of the answer space. A caller who really wants a 3-byte field has the
+#: library API, which no longer half-supports it.
 VALID_NUMERIC_WIDTHS = {int: (1, 2, 4, 8), float: (4, 8), bool: (1,)}
 
 #: Modules listed inline by ``process_info``. A desktop app loads hundreds of
@@ -103,11 +110,22 @@ MAX_PAGE_SIZE = 100
 MAX_ADDRESS = (1 << 64) - 1
 
 #: Ceiling on the magnitude of a pointer-chain offset. Offsets are struct
-#: displacements -- published Cheat Engine recipes use tens or hundreds of
-#: bytes, occasionally thousands -- so 4 GiB is far past anything real while
-#: still keeping ``base + sum(offsets)`` clear of the truncation boundary
-#: above. Negative offsets stay legal: walking backwards through a struct is
-#: ordinary (see :func:`parse_offset`).
+#: displacements: published Cheat Engine recipes use tens or hundreds of bytes,
+#: occasionally thousands, and this server's own pointer scanner caps a hop at
+#: ``POINTER_SCAN_LIMITS["max_offset"]`` (0x10000) -- so no chain it emits can
+#: approach 4 GiB. The module-base-plus-RVA form cannot either: ``SizeOfImage``
+#: in a PE header is 32 bits, so an RVA never exceeds this.
+#:
+#: What it does *not* do is keep the running address inside the space. An
+#: earlier version of this comment claimed it kept ``base + sum(offsets)``
+#: clear of the truncation boundary, and that arithmetic does not happen:
+#: ``resolve_pointer_chain`` dereferences first and adds each offset to a value
+#: read out of the target, which is unbounded up to 2**64-1. The address is
+#: guarded where it is produced instead -- see the check at the end of
+#: ``resolve_pointer_chain``.
+#:
+#: Negative offsets stay legal: walking backwards through a struct is ordinary
+#: (see :func:`parse_offset`).
 MAX_OFFSET_MAGNITUDE = 1 << 32
 
 #: Defaults for ``find_pointer_paths``, named because they were previously
@@ -173,7 +191,19 @@ class ToolError(Exception):
 # --------------------------------------------------------------------------- #
 
 def format_address(address: int) -> str:
-    """Render an address as the ``0x``-prefixed string every tool returns."""
+    """Render an address as the ``0x``-prefixed string every tool returns.
+
+    A negative value is a bug at the call site, not something to render: it
+    would come out as ``"0x-8"``, which :func:`parse_address` then rejects, so
+    the server would be handing the model a string it refuses to read back
+    (see :func:`format_offset`, written for that exact failure on the offset
+    side). Better to fail where the wrong number was produced.
+    """
+    if address < 0:
+        raise ValueError(
+            "format_address received a negative value (%d). Addresses are "
+            "unsigned; use format_offset for a signed displacement." % address
+        )
     return "0x%X" % address
 
 
@@ -385,6 +415,42 @@ def format_value(value: Any) -> Any:
     return value
 
 
+def parse_int_arg(raw: Any, field: str, *, default: Optional[int] = None) -> int:
+    """Coerce a numeric tool argument, as a ``ToolError`` rather than a crash.
+
+    A bare ``int(raw)`` on a model-supplied value is a hole in this module's
+    error contract: only ``ToolError`` text reaches the model, and everything
+    else becomes an ``UnexpectedToolError`` whose message is withheld. So
+    ``max_depth="deep"`` or ``limit="dez"`` raised
+    ``ValueError: invalid literal for int() with base 10`` and the model was
+    told nothing it could act on — for an argument it can fix by itself, which
+    is the worst case to be silent about.
+
+    ``bool`` is refused for the same reason :func:`parse_address` refuses it:
+    it is an ``int`` subclass, so ``True`` would silently mean 1.
+    """
+    if raw is None:
+        if default is None:
+            raise ToolError("%s is required." % field)
+        return default
+
+    if isinstance(raw, bool):
+        raise ToolError(
+            "%s must be a number, not a boolean (got %r)." % (field, raw)
+        )
+
+    if isinstance(raw, int):
+        return raw
+
+    text = str(raw).strip().replace("_", "")
+    try:
+        return int(text, 16) if text[:2].lower() == "0x" else int(text, 10)
+    except ValueError:
+        raise ToolError(
+            "%s must be a whole number (got %r)." % (field, raw)
+        ) from None
+
+
 def parse_bufflength(raw: int, pytype: Type, *, required: bool) -> Optional[int]:
     """Turn the ``bufflength=0`` sentinel into the library's ``None``.
 
@@ -393,11 +459,18 @@ def parse_bufflength(raw: int, pytype: Type, *, required: bool) -> Optional[int]
     models fill in with the string ``"null"``. Zero is never a legal width, so
     it is free to mean "use the default".
     """
-    if raw and raw < 0:
-        raise ToolError("bufflength must be positive (got %d)." % raw)
+    if isinstance(raw, bool):
+        # An int subclass, so `bufflength=true` silently meant a width of 1 --
+        # the same trap parse_address and _parse_signed_int already refuse.
+        raise ToolError(
+            "bufflength must be a number, not a boolean (got %r)." % raw
+        )
+
+    if raw and parse_int_arg(raw, "bufflength") < 0:
+        raise ToolError("bufflength must be positive (got %r)." % raw)
 
     if raw:
-        width = int(raw)
+        width = parse_int_arg(raw, "bufflength")
 
         # This is the one argument every tool funnels a size through, so it is
         # where both width failures get stopped: a numeric width the read, scan
@@ -407,9 +480,10 @@ def parse_bufflength(raw: int, pytype: Type, *, required: bool) -> Optional[int]
         if allowed is not None and width not in allowed:
             raise ToolError(
                 "bufflength=%d is not a usable width for value_type=%r. Use "
-                "%s. (Other widths either overflow this process's buffers or "
-                "read back as garbage, so they are refused rather than "
-                "half-supported.)"
+                "%s. (This server offers only the widths a target actually "
+                "stores values in; an unusual width is nearly always a "
+                "mis-guess, and guessing at a width is how a write lands on "
+                "the wrong bytes.)"
                 % (width, pytype.__name__,
                    " or ".join(str(size) for size in allowed))
             )
@@ -517,6 +591,14 @@ class MemoryToolset:
                     pytype.__name__: list(widths)
                     for pytype, widths in VALID_NUMERIC_WIDTHS.items()
                 },
+                # Same principle applied to the two bounds a pointer recipe
+                # runs into. MAX_ADDRESS is a property of the hardware and a
+                # model can be expected to know it; the offset ceiling is a
+                # number this project picked, so leaving it to be discovered by
+                # hitting the error is exactly the case the line above objects
+                # to.
+                "max_address": format_address(MAX_ADDRESS),
+                "max_offset_magnitude": format_address(MAX_OFFSET_MAGNITUDE),
             },
             "open_sessions": sessions,
         }
@@ -541,8 +623,8 @@ class MemoryToolset:
         distinguishable from it not running.
         """
         needle = (name_filter or "").strip().casefold()
-        limit = max(1, min(int(limit or 50), MAX_PAGE_SIZE))
-        offset = max(0, int(offset or 0))
+        limit = max(1, min(parse_int_arg(limit or 50, "limit"), MAX_PAGE_SIZE))
+        offset = max(0, parse_int_arg(offset or 0, "offset"))
 
         # Guarded: iter_processes() is a generator that raises on first
         # iteration when the OS refuses to enumerate (Windows
@@ -651,7 +733,7 @@ class MemoryToolset:
                 }
             pid = candidates[0]
 
-        pid = int(pid)
+        pid = parse_int_arg(pid, "pid")
         resolved = self._name_for_pid(pid)
         return {
             "status": "ok",
@@ -833,8 +915,8 @@ class MemoryToolset:
         :param offset: rows to skip, for paging.
         """
         session = self.store.get(session_id)
-        limit = max(1, min(int(limit or 40), MAX_PAGE_SIZE))
-        offset = max(0, int(offset or 0))
+        limit = max(1, min(parse_int_arg(limit or 40, "limit"), MAX_PAGE_SIZE))
+        offset = max(0, parse_int_arg(offset or 0, "offset"))
         needle = (path_filter or "").strip().casefold()
 
         with session.lock, self._target_errors(session, "list_memory_regions"):
@@ -1123,8 +1205,21 @@ class MemoryToolset:
         #
         # Both failed silently and only for those types, which is why the whole
         # loop looked fine on ints. Values are therefore re-read as raw bytes
-        # and decoded through the same helper, making this bit-for-bit
-        # equivalent to a fresh scan.
+        # and decoded through the same helper, so the comparison a refine
+        # applies is the one a fresh scan applies.
+        #
+        # One deliberate difference, since "equivalent to a fresh scan" was
+        # written here unqualified and is not true in general: for
+        # ``not_exact`` on ``str`` / ``bytes`` a fresh scan also drops any
+        # offset whose window *overlaps* an exact match (the bisect_left
+        # window in ``scan_memory_for_exact_value``), so that byte-by-byte
+        # stepping does not report the bytes beside a match as independent
+        # hits. A refine cannot reproduce that and should not: it was handed
+        # specific addresses and reads only those, with no view of the
+        # neighbours the window is computed from. So a refine can keep an
+        # address a fresh scan would have suppressed as adjacent. That is the
+        # right answer for "does this address still not hold X", which is what
+        # the caller asked.
         # Always concrete: scan_value resolves the width before storing it, and
         # the only result sets without one are byte-pattern scans, rejected
         # above. Re-deriving it from the *refine* value would be actively wrong
@@ -1222,8 +1317,8 @@ class MemoryToolset:
         :param offset: rows to skip.
         """
         session, scan = self.store.find_scan(scan_id)
-        limit = max(1, min(int(limit or 20), MAX_PAGE_SIZE))
-        offset = max(0, int(offset or 0))
+        limit = max(1, min(parse_int_arg(limit or 20, "limit"), MAX_PAGE_SIZE))
+        offset = max(0, parse_int_arg(offset or 0, "offset"))
 
         page = scan.addresses[offset : offset + limit]
 
@@ -1483,7 +1578,27 @@ class MemoryToolset:
         # the target's own memory plus the offsets. Handing back something that
         # would truncate the moment the model passed it to write_value is the
         # same bug as accepting it, one call later.
-        if not 0 <= final <= MAX_ADDRESS:
+        #
+        # The two directions are different failures and get different messages.
+        # Below zero is the common one and it has a specific cause: the last
+        # offset is added *without* a dereference, so a hop that read NULL (a
+        # freed object, a chain built for another build) plus a negative offset
+        # lands under zero. Calling that "outside any 64-bit address space" is
+        # true but useless — it points at the offset instead of at the dead
+        # pointer. It also has to be rendered with `format_offset`: `"0x%X" %
+        # -8` is `"0x-8"`, the malformed form that function exists to prevent,
+        # and this message was emitting it.
+        if final < 0:
+            raise ToolError(
+                "The chain resolved to %s, below zero. The last offset is "
+                "applied without a dereference, so a hop that read NULL plus a "
+                "negative offset lands here — the chain is stale (the object "
+                "was freed or never existed in this build), not merely "
+                "misaligned."
+                % format_offset(final)
+            )
+
+        if final > MAX_ADDRESS:
             raise ToolError(
                 "The chain resolved to 0x%X, which is outside any 64-bit "
                 "address space. One of the hops read a value that is not a "
@@ -2025,10 +2140,9 @@ def _clamp_pointer_arg(name: str, value: Any) -> int:
     came to disagree — ``max_offset or 0`` sent a null to the narrowest
     possible search while ``max_depth or 3`` sent it to the documented one.
     """
-    if value is None:
-        value = POINTER_SCAN_DEFAULTS[name]
     low, high = POINTER_SCAN_LIMITS[name]
-    return min(max(int(value), low), high)
+    resolved = parse_int_arg(value, name, default=POINTER_SCAN_DEFAULTS[name])
+    return min(max(resolved, low), high)
 
 
 class _ScanDeadline(Exception):

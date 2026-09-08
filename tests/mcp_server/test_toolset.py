@@ -1236,6 +1236,48 @@ class TestThirdReviewRegressions:
 
         assert "64-bit" in str(error.value)
 
+    def test_a_chain_resolving_below_zero_says_the_pointer_was_dead(
+        self, make_toolset, fake_process
+    ):
+        """The negative half, which had the guard but no test.
+
+        A mutation that dropped the `0 <=` half of the bound passed the whole
+        suite, so the branch was unverified -- and it is the *reachable* half:
+        `resolve_pointer_chain` adds the last offset without dereferencing it,
+        so a hop that read NULL plus a negative offset lands under zero. That
+        is the ordinary stale-chain case, not an exotic one.
+
+        Two things are asserted because the guard got both wrong: the message
+        used "0x%X", which renders -8 as the malformed "0x-8" that
+        `parse_offset` rejects, and it blamed the address space when the cause
+        is a dead pointer.
+        """
+        toolset = make_toolset(config())
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        # A NULL pointer, then a negative offset applied to it.
+        fake_process.poke(WRITABLE_BASE + 0x200, int, 0, 8)
+
+        with pytest.raises(ToolError) as error:
+            toolset.resolve_pointer_chain(
+                session_id, hex(WRITABLE_BASE + 0x200), offsets=["-0x8"]
+            )
+
+        message = str(error.value)
+        assert "0x-8" not in message, "the malformed hex form format_offset exists to prevent"
+        assert "-0x8" in message
+        assert "NULL" in message
+
+    def test_format_address_refuses_a_negative_rather_than_rendering_it(self):
+        """The rendering hole itself, not just the one caller that hit it."""
+        from PyMemoryEditor.mcp.toolset import format_address, format_offset
+
+        with pytest.raises(ValueError):
+            format_address(-8)
+
+        # And the signed renderer still produces the parseable form.
+        assert format_offset(-8) == "-0x8"
+
     # The paired half -- that an ordinary chain still resolves -- is
     # `test_resolves_a_chain` above and `test_resolves_a_chain_built_by_hand`
     # in test_live.py, so a bound that rejected everything would fail there.
