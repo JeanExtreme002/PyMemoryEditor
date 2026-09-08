@@ -30,7 +30,7 @@ import pytest
 from PyMemoryEditor.mcp import MemoryToolset, ServerConfig
 from PyMemoryEditor.mcp.toolset import ToolError
 
-from .conftest import WRITABLE_BASE, FakeProcess, _toolset_for, config
+from .conftest import FakeProcess, _toolset_for, config
 
 
 class Target:
@@ -59,15 +59,30 @@ class Target:
         )
 
 
+#: A dedicated writable region for the fake target's scratch buffers, well
+#: clear of the two the fake ships with. Sized for the whole module because the
+#: `target` fixture is module-scoped: handing out a fresh slice per test and
+#: never reusing one walked straight off the end of the fake's 4 KiB region
+#: ("address 0x140001000 is not mapped in the fake target").
+SCRATCH_BASE = 0x1_6000_0000
+SCRATCH_SIZE = 0x40000
+
+
 class FakeTarget(Target):
     def __init__(self, process: FakeProcess, toolset: MemoryToolset, session_id: str):
         super().__init__("fake", toolset, session_id)
         self.process = process
-        self._next = WRITABLE_BASE + 0x400
+        process._blocks.append((SCRATCH_BASE, bytearray(SCRATCH_SIZE), True))
+        self._offset = 0
 
     def scratch(self, size: int = 32) -> int:
-        address = self._next
-        self._next += size + 0x40  # keep buffers clear of each other
+        stride = size + 0x40  # keep consecutive buffers clear of each other
+        if self._offset + stride > SCRATCH_SIZE:
+            # Wrap rather than overrun. Safe because every test fills its own
+            # buffer before asserting on it, so a reused slice carries nothing.
+            self._offset = 0
+        address = SCRATCH_BASE + self._offset
+        self._offset += stride
         self.process.poke(address, bytes, b"\x00" * size, size)
         return address
 
@@ -79,9 +94,21 @@ class RealTarget(Target):
         return ctypes.addressof(buffer)
 
 
-@pytest.fixture(params=["fake", "real"])
+@pytest.fixture(params=["fake", "real"], scope="module")
 def target(request):
-    """The same toolset API over the fake target and over this process."""
+    """The same toolset API over the fake target and over this process.
+
+    Module-scoped, which is a performance fix with teeth. Every
+    ``open_process`` resolves the pid to a name through ``iter_processes()``,
+    i.e. a full walk of the machine's process table -- ``/proc/<pid>/comm`` per
+    process on Linux, a ``proc_name`` syscall per process on macOS. Attaching
+    once per test made that ~110 walks in this file alone, which is invisible
+    in a container (five processes) and brutal on a CI runner (hundreds): the
+    suite ran in 12s locally and took 17-20 minutes on a runner.
+
+    Sharing one attach is safe because every test takes its own ``scratch()``
+    buffer; nothing here mutates state another test reads.
+    """
     if request.param == "fake":
         process = FakeProcess()
         toolset = _toolset_for(process, config(max_scan_seconds=120))

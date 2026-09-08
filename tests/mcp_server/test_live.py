@@ -23,7 +23,7 @@ from PyMemoryEditor.mcp.toolset import ToolError
 pytestmark = pytest.mark.slow
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def live() -> MemoryToolset:
     """A toolset attached to the running test process, writes enabled.
 
@@ -43,8 +43,14 @@ def live() -> MemoryToolset:
     toolset.store.close_all()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def live_session(live: MemoryToolset) -> str:
+    """One attach for the module.
+
+    Each `open_process` walks the machine's whole process table to resolve the
+    pid to a name; per-test attaches made that ~17 walks here and hundreds
+    across the suite, which is what made the CI job take 20 minutes.
+    """
     return live.open_process(pid=os.getpid())["session_id"]
 
 

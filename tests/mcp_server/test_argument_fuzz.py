@@ -111,10 +111,27 @@ def _survives(call) -> None:
         ) from None
 
 
+#: Bytes per region in the fuzz target, against the fake's usual 0x1000.
+#:
+#: The fake scans byte by byte in pure Python, so one `scan_value` over its
+#: default two 4 KiB regions is ~8 200 decode-and-compare iterations. Several
+#: of the properties below scan, Hypothesis runs each ~250 times, and CI runs
+#: all of it under coverage's line tracer -- which is how this one file came to
+#: take 12.9s locally, 24.1s under --cov, and something like 15 minutes on a
+#: runner. These properties are about *argument handling*: whether a tool
+#: returns a result or a ToolError. Scan breadth is irrelevant to that, and
+#: `test_fake_fidelity.py` / `test_toolset.py` cover the scanning itself.
+FUZZ_REGION_SIZE = 0x100
+
+
 @pytest.fixture
 def fuzz_target():
-    """A toolset on the fake target, sized so a scan stays quick."""
+    """A toolset on a deliberately tiny fake target."""
     process = FakeProcess()
+    process._blocks = [
+        (base, bytearray(FUZZ_REGION_SIZE), writable)
+        for base, _block, writable in process._blocks
+    ]
     toolset = _toolset_for(
         process, config(max_scan_results=200, max_scan_seconds=5)
     )
@@ -220,7 +237,19 @@ class TestArgumentsNeverCrash:
                               st.text(max_size=6)),
     )
     @FUZZ
-    def test_list_processes(self, fuzz_target, limit, offset, name_filter):
+    def test_list_processes(
+        self, fuzz_target, monkeypatch, limit, offset, name_filter
+    ):
+        # Over a stubbed process table: the property is about how the
+        # arguments are handled, and enumerating the machine's real one per
+        # example meant a few hundred `/proc` walks for no added coverage.
+        import PyMemoryEditor.mcp.toolset as toolset_module
+
+        fleet = [(1000 + index, "proc%02d" % index) for index in range(12)]
+        monkeypatch.setattr(
+            toolset_module, "iter_processes", lambda: iter(fleet)
+        )
+
         toolset, _session_id, _process = fuzz_target
         _survives(
             lambda: toolset.list_processes(
