@@ -275,7 +275,9 @@ jobs:
   build-mcp:
     needs: lint
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 45  # temporariamente alto: o Windows precisa
+    # terminar para a tabela de --durations imprimir. Baixar assim que a
+    # causa da lentidao estiver identificada.
     strategy:
       fail-fast: false
       matrix:
@@ -323,6 +325,14 @@ jobs:
       # macOS and 90.4% on Linux, so 80 leaves real headroom.
       env:
         PYTEST_ADDOPTS: ${{ matrix.addopts }}
+      # `-q --durations=25` rather than the `-v -s` the library jobs use. This
+      # job's timing is the open question -- 20 minutes on a runner against
+      # 12.5s in a container, and cutting the process-table walks 14x changed
+      # nothing -- and `-v -s` emitted 977 log lines in the first 8 seconds,
+      # so GitHub truncated the log long before the part that would say which
+      # tests were slow. Quiet output keeps the log small enough that the
+      # duration table at the end survives.
+      #
       # -p no:pytest-qt: the dev extra brings pytest-qt, whose plugin imports
       # QtGui at startup. The name is the entry point's, hyphen included --
       # `-p no:pytestqt` silently does nothing, which is how this failed twice.
@@ -330,7 +340,7 @@ jobs:
       # library jobs apt-install a pile of X libraries for it. This job runs no
       # Qt tests, so it disables the plugin instead of paying for them.
       run: |
-        pytest tests/mcp_server -p no:pytest-qt -v -s -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
+        pytest tests/mcp_server -p no:pytest-qt -q --durations=25 -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
     - name: Upload coverage to Codecov
       # Its own flag, so the merged report shows MCP coverage alongside the
       # library's instead of one overwriting the other.
