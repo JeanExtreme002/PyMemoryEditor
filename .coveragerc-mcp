@@ -1,0 +1,19 @@
+# Coverage config for the `build-mcp` CI job, which runs
+# `pytest tests/mcp_server`.
+#
+# The mirror of .coveragerc-lib: that job tests the MCP server, so it measures
+# the MCP server. Measuring the whole package instead made the gate depend on
+# which platform's backend happened to be importable -- 71% on macOS but 60.4%
+# against a floor of 60 on Linux, i.e. four tenths of a point of headroom on a
+# number that was mostly about code the job does not target.
+#
+# Scoped this way, both jobs carry a floor that means something, and Codecov
+# merges the two halves into one view.
+[run]
+source = ["PyMemoryEditor/mcp"]
+omit =
+    PyMemoryEditor/mcp/__main__.py
+
+[report]
+show_missing = True
+skip_empty = True

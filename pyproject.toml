@@ -163,6 +163,8 @@ packages = ["PyMemoryEditor"]
 exclude = [
     "/.github",
     "/codecov.yml",
+    "/.coveragerc-lib",
+    "/.coveragerc-mcp",
     "/scripts",
 ]
 

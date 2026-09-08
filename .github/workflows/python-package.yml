@@ -118,24 +118,22 @@ jobs:
       # 20-minute budget.
       #
       # --cov-fail-under is the real, in-repo coverage gate (deterministic and
-      # independent of any external service), and it is deliberately a floor
-      # rather than a target.
+      # independent of any external service), and `--cov-config` is what keeps
+      # it meaningful now that the MCP suite lives in `build-mcp`.
       #
-      # It dropped from 60 to 50 when the MCP suite moved to `build-mcp`, and
-      # that is a change of denominator, not of quality. `source` in pyproject
-      # is the whole package, and coverage has no per-invocation way to drop a
-      # subpackage, so this job now measures `PyMemoryEditor/mcp` — 918
-      # statements, a third of the codebase — as entirely uncovered. Measured:
-      # the full suite is 88%, this job's subset is 59%, and `build-mcp`'s is
-      # 71%. Two floors over two subsets catch strictly more than one floor
-      # over the union did, since a regression in either half used to be able
-      # to hide behind the other.
+      # Without it this job measures PyMemoryEditor/mcp -- 918 statements it
+      # never runs -- as uncovered, which is a measurement of absence, not of
+      # quality. It also varies by platform in a way the gate cannot absorb:
+      # measured that way, Linux came out at 46% and macOS at 59%, so a floor
+      # picked from macOS alone failed all eight matrix cells. Scoped to the
+      # library, the numbers are 87% on macOS and 66% on Linux, and 60 is the
+      # same floor this job carried before the MCP server existed.
       #
-      # (coverage.py only counts the host backend + shared code — the two
-      # foreign backends aren't imported, so they don't drag the number down
-      # per-platform.) Ratchet both up once the numbers settle on Codecov.
+      # (coverage.py only counts the host backend + shared code -- the two
+      # foreign backends aren't imported, which is most of that platform
+      # spread.) Ratchet up once the numbers settle on Codecov.
       run: |
-        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=50
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       # Upload from every matrix cell so Codecov merges each OS's backend
       # coverage into one combined view (each platform exercises a different
@@ -186,7 +184,7 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=50
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       # Flag mirrors the matrix format (`runner.os` is "macOS" here) so Codecov
       # groups this cell alongside the Linux and Windows uploads.
@@ -245,7 +243,7 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=50
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       if: always()
       uses: codecov/codecov-action@v5
@@ -304,7 +302,7 @@ jobs:
       # package on its own (it drives the library through the real backends),
       # so 60 is the same kind of floor the other jobs carry.
       run: |
-        pytest tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests/mcp_server -v -s -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
     - name: Upload coverage to Codecov
       # Its own flag, so the merged report shows MCP coverage alongside the
       # library's instead of one overwriting the other.
