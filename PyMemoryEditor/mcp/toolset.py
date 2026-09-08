@@ -38,7 +38,7 @@ from ..enums import ScanTypesEnum
 from ..process.abstract import AbstractProcess
 from ..process.errors import PyMemoryEditorError
 from ..process.region import MemoryRegion
-from ..process.util import get_process_ids_by_name, iter_processes
+from ..process.util import get_process_ids_by_name, iter_processes, pid_exists
 from ..util import (
     decode_scan_target,
     resolve_bufflength,
@@ -556,12 +556,18 @@ class MemoryToolset:
         reachable, how long a scan may run, and which sessions are already
         open from earlier in the conversation.
         """
+        # `alive` because a session outlives its target: nothing here notices
+        # a process exiting, `process_info` keeps answering from cached state,
+        # and the open-session cap means dead ones would hold slots the model
+        # cannot identify. The store reaps them when it needs room; this is how
+        # the model sees them before that.
         sessions = [
             {
                 "session_id": session.session_id,
                 "pid": session.pid,
                 "name": session.name,
                 "scan_ids": list(session.scan_ids),
+                "alive": pid_exists(session.pid),
             }
             for session in self.store.sessions
         ]
@@ -2020,7 +2026,8 @@ class MemoryToolset:
         """Yield ``(address, value | None)`` for each address, in one pass.
 
         Uses ``search_by_addresses``, which groups the reads by region so a
-        50 000-address refine is a few hundred syscalls rather than 50 000.
+        refine of a capped result set is a few hundred syscalls rather than one
+        per address.
         """
         yield from session.process.search_by_addresses(
             pytype,

@@ -437,11 +437,15 @@ class TestAttachApproval:
         assert "did not approve" in text
         assert "Do not retry" in text
 
-    def test_a_full_server_refuses_before_spending_an_approval(self):
+    def test_a_full_server_refuses_before_spending_an_approval(self, monkeypatch):
         """The cap lives in `SessionStore.open`, which runs after the handle is
         already open — so the user used to be asked, approve, and only then be
         told the server was full."""
+        from PyMemoryEditor.mcp import session as session_module
         from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        # Fakes carry arbitrary pids, which the store's reaper reads as dead.
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
 
         server, toolset, _process = self._build(ServerConfig())
         for _ in range(MAX_OPEN_SESSIONS):
@@ -459,9 +463,13 @@ class TestAttachApproval:
         assert answerer.asked is False, "the user was prompted for an attach that could not happen"
         assert "close_process" in result.content[0].text
 
-    def test_the_refusal_names_the_target_it_declined(self):
+    def test_the_refusal_names_the_target_it_declined(self, monkeypatch):
         """A model reads this and must not conclude the pid was the problem."""
+        from PyMemoryEditor.mcp import session as session_module
         from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        # Fakes carry arbitrary pids, which the store's reaper reads as dead.
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
 
         server, toolset, _process = self._build(ServerConfig())
         for _ in range(MAX_OPEN_SESSIONS):

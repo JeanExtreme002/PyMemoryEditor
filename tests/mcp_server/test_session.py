@@ -6,6 +6,7 @@ Handle bookkeeping: sessions, scan result sets, and the region batching.
 
 import pytest
 
+from PyMemoryEditor.mcp import session as session_module
 from PyMemoryEditor.mcp.session import (
     MAX_OPEN_SESSIONS,
     MAX_SCANS_PER_SESSION,
@@ -202,11 +203,23 @@ class TestRegionSnapshotCaching:
         )
 
 
+@pytest.fixture
+def all_alive(monkeypatch):
+    """Pin every session's target as live.
+
+    The store reaps sessions whose pid is gone, and a fake's pid is an
+    arbitrary number — so without this these tests depend on the host's
+    process table, and the cap either fires or does not by luck. (Several
+    passed only because `pid_exists(1)` is true on a Unix host.)
+    """
+    monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
+
+
 class TestOpenSessionsAreCapped:
     """The store used to accept any number of open processes, each holding an
     OS handle that only `close_process` releases."""
 
-    def test_the_cap_is_enforced(self, store):
+    def test_the_cap_is_enforced(self, store, all_alive):
         for _ in range(MAX_OPEN_SESSIONS):
             store.open(FakeProcess(), 1, "a")
 
@@ -215,7 +228,7 @@ class TestOpenSessionsAreCapped:
 
         assert str(MAX_OPEN_SESSIONS) in str(error.value)
 
-    def test_the_refusal_says_how_to_recover(self, store):
+    def test_the_refusal_says_how_to_recover(self, store, all_alive):
         """The model cannot see the store, so the message has to name an id to
         close and list what is open."""
         for index in range(MAX_OPEN_SESSIONS):
@@ -226,11 +239,16 @@ class TestOpenSessionsAreCapped:
 
         message = str(error.value)
         assert "close_process" in message
-        assert "proc-1" in message          # the id it is told to close
-        assert "target0" in message         # and what is actually open
+        assert "proc-1" in message          # every open session is listed
+        assert "target0" in message
         assert "pid 100" in message
+        # No "close the oldest": the oldest is usually the target the whole
+        # session has been refining, and closing it discards its scans too.
+        assert "oldest" not in message
+        # The scan count is what makes the list actionable.
+        assert "scan" in message
 
-    def test_closing_one_frees_a_slot(self, store):
+    def test_closing_one_frees_a_slot(self, store, all_alive):
         ids = [store.open(FakeProcess(), 1, "a").session_id
                for _ in range(MAX_OPEN_SESSIONS)]
 
@@ -240,7 +258,7 @@ class TestOpenSessionsAreCapped:
         assert reopened.session_id not in ids
         assert len(store.sessions) == MAX_OPEN_SESSIONS
 
-    def test_ids_keep_climbing_after_a_close(self, store):
+    def test_ids_keep_climbing_after_a_close(self, store, all_alive):
         """Reusing an id would let a model holding a stale one address a
         different process."""
         first = store.open(FakeProcess(), 1, "a").session_id
@@ -248,6 +266,100 @@ class TestOpenSessionsAreCapped:
         second = store.open(FakeProcess(), 2, "b").session_id
 
         assert first != second
+
+
+class TestDeadSessionsDoNotHoldSlots:
+    """The lockout the cap created, and the reason it evicts here but nowhere
+    else.
+
+    Nothing in this server notices a target exiting: `_rows_for` swallows the
+    read error, `process_info` keeps answering from cached state, and the
+    session stays in the store. With a cap that refuses rather than evicts,
+    eight exited processes held every slot for the life of the server and the
+    model had no way to tell which sessions were the dead ones.
+
+    Evicting a *dead* session is the exception that proves the rule about not
+    evicting: its handle is already useless, so nothing is taken away.
+    """
+
+    def test_a_dead_session_is_reaped_to_make_room(self, store, monkeypatch):
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=500 + index), 500 + index, "gone%d" % index)
+
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: pid == 4242)
+
+        # Would have raised before the reaper existed.
+        session = store.open(FakeProcess(pid=4242), 4242, "live")
+
+        assert session.pid == 4242
+        assert [held.pid for held in store.sessions] == [4242], (
+            "the eight dead sessions should be gone, not merely joined"
+        )
+
+    def test_a_live_session_is_never_reaped(self, store, monkeypatch):
+        store.open(FakeProcess(pid=4242), 4242, "live")
+        for index in range(MAX_OPEN_SESSIONS - 1):
+            store.open(FakeProcess(pid=600 + index), 600 + index, "gone%d" % index)
+
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: pid == 4242)
+        store.open(FakeProcess(pid=4243), 4243, "second")
+
+        pids = sorted(s.pid for s in store.sessions)
+        assert 4242 in pids, "a live session was evicted"
+
+    def test_reaping_closes_the_handle(self, store, monkeypatch):
+        process = FakeProcess(pid=700)
+        store.open(process, 700, "gone")
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: False)
+
+        store._reap_dead()
+
+        assert process.closed is True, "the handle was dropped without closing"
+        assert store.sessions == ()
+
+    @pytest.mark.parametrize("pid", [2 ** 31, 2 ** 64, -3, 0])
+    def test_a_pid_the_os_refuses_reads_as_dead_not_as_a_crash(self, store, pid):
+        """The reaper runs inside `open`, so anything it raises escapes as
+        something other than SessionError and the model sees only "Error
+        executing tool".
+
+        `pid_exists(2**31)` raises OverflowError — the value does not fit the
+        platform's pid type — which the argument fuzzer found by generating
+        exactly that. Intermittently, because it also needed the store to be
+        at capacity at that moment.
+        """
+        from PyMemoryEditor.mcp.session import _looks_alive
+
+        assert _looks_alive(pid) is False
+
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=pid), pid, "weird%d" % index)
+
+        # Must not raise anything but SessionError, and here it makes room.
+        session = store.open(FakeProcess(pid=pid), pid, "another")
+        assert session.pid == pid
+
+    def test_a_full_server_of_live_targets_still_refuses(self, store, all_alive):
+        """The reaper must not become a back door around the cap."""
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=800 + index), 800 + index, "live%d" % index)
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(pid=900), 900, "another")
+
+        assert "all of them are live" in str(error.value)
+
+    def test_the_refusal_points_at_an_already_open_pid(self, store, all_alive):
+        """A model that lost count re-attaches instead of reusing the id."""
+        store.open(FakeProcess(pid=4242), 4242, "faketarget")
+        for index in range(MAX_OPEN_SESSIONS - 1):
+            store.open(FakeProcess(pid=810 + index), 810 + index, "other%d" % index)
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(pid=4242), 4242, "faketarget")
+
+        message = str(error.value)
+        assert "already open as proc-1" in message
 
 
 class TestBatchRegions:

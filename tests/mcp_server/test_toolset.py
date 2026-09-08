@@ -1215,7 +1215,12 @@ class TestThirdReviewRegressions:
     ):
         """`attach` opens the handle and *then* registers the session, so a
         refusal must close it or the cap leaks what it exists to bound."""
+        from PyMemoryEditor.mcp import session as session_module
         from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        # The store reaps sessions whose pid is gone, and a fake's pid is an
+        # arbitrary number, so the cap would never fire here otherwise.
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
 
         opened = []
 

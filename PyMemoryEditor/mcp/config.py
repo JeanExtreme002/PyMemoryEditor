@@ -47,11 +47,26 @@ Transport = Literal["stdio", "sse", "streamable-http"]
 #: keeping them all would blow out the server's memory for a result set no
 #: refine loop can use anyway. At the cap the scan stops early and says so.
 #:
-#: 100 000 costs 4.2 MB per result set and 21 ms to sort, against 2.1 MB and
-#: 10 ms at the old 50 000; wall clock is unchanged, since the 30-second
-#: budget binds long before the cap does. The gain is that a scan whose true
-#: hit count sits between the two stops being flagged ``partial``, and
-#: refining a truncated set can converge on an address that was never in it.
+#: 100 000 costs 4.2 MB per result set against 2.1 MB, and 21 ms to sort
+#: against 10 ms. The figure that matters is not per set, though: a session
+#: keeps ``MAX_SCANS_PER_SESSION`` (20) of them and a server keeps
+#: ``MAX_OPEN_SESSIONS`` (8) sessions, so the ceiling on retained addresses
+#: goes from ~336 MB to ~672 MB. Reaching it needs 160 capped result sets,
+#: which a long refine chain across several targets can do.
+#:
+#: What it buys: a scan whose true hit count falls between the two ceilings
+#: stops being flagged ``partial``, and refining a truncated set can converge
+#: on an address that was never in it. That case is real but narrow — above
+#: the new ceiling nothing changes, and a common value like ``int 0`` matches
+#: millions and is out of reach at any sane cap.
+#:
+#: What it costs in time depends on the value's density, and an earlier
+#: version of this comment got that wrong. Measured on ``int 0``, reaching
+#: either ceiling took 0.02s against 0.03s — but that is the dense case, where
+#: hits arrive faster than the clock can spend. For a sparser value the scan
+#: has to walk further to collect twice as many hits, so the time roughly
+#: doubles up to the 30-second budget. "Wall clock is unchanged" was true of
+#: one measurement, not of the change.
 DEFAULT_MAX_SCAN_RESULTS = 100_000
 
 #: Wall-clock budget for one scan, in seconds. A full address-space scan of a

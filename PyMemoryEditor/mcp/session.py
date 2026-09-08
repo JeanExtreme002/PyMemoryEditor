@@ -32,6 +32,7 @@ from time import time
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..process.abstract import AbstractProcess
+from ..process.util import pid_exists
 from ..process.region import MemoryRegion, MemoryRegionSnapshot
 
 
@@ -168,6 +169,22 @@ class Session:
         return tuple(self._scan_order)
 
 
+def _looks_alive(pid: int) -> bool:
+    """``pid_exists``, but a pid the OS will not even accept reads as dead.
+
+    The reaper runs inside ``open``, so anything raised here escapes as
+    something other than a ``SessionError`` and the model is told only
+    "Error executing tool". ``pid_exists(2**31)`` raises ``OverflowError``
+    (the value does not fit the platform's pid type), which the argument
+    fuzzer found by generating exactly that. A number the OS refuses cannot
+    name a running process, so treating it as dead is both safe and correct.
+    """
+    try:
+        return pid_exists(pid)
+    except (OverflowError, ValueError, OSError):
+        return False
+
+
 class SessionStore:
     """The server's process handles and their scan results.
 
@@ -189,20 +206,39 @@ class SessionStore:
         :raises SessionError: if :data:`MAX_OPEN_SESSIONS` are already open.
             The caller owns the handle it passed in and must close it.
         """
+        if len(self._sessions) >= MAX_OPEN_SESSIONS:
+            self._reap_dead()
+
         with self._lock:
             if len(self._sessions) >= MAX_OPEN_SESSIONS:
+                # No "close the oldest": the oldest is usually the target the
+                # whole session has been refining, and close_process discards
+                # its scan results too. The list is given instead, so the
+                # choice is made on what each session holds.
+                existing = [
+                    sid for sid, s in self._sessions.items() if s.pid == pid
+                ]
+                already = (
+                    " Note that pid %d is already open as %s — reuse that id "
+                    "rather than attaching again." % (pid, existing[0])
+                    if existing
+                    else ""
+                )
                 raise SessionError(
                     "This server already has %d processes open, which is the "
-                    "limit. Close one you are done with — close_process(%s) "
-                    "frees the oldest — and attach again. Open sessions: %s."
+                    "limit, and all of them are live. Close whichever you are "
+                    "done with (close_process also discards that session's "
+                    "scan results) and attach again. Open: %s.%s"
                     % (
                         MAX_OPEN_SESSIONS,
-                        next(iter(self._sessions)),
                         ", ".join(
-                            "%s (%s, pid %d)"
-                            % (sid, session.name or "?", session.pid)
+                            "%s (%s, pid %d, %d scan%s)"
+                            % (sid, session.name or "?", session.pid,
+                               len(session.scan_ids),
+                               "" if len(session.scan_ids) == 1 else "s")
                             for sid, session in self._sessions.items()
                         ),
+                        already,
                     )
                 )
 
@@ -213,6 +249,39 @@ class SessionStore:
             self._sessions[session_id] = session
             return session
 
+    def _reap_dead(self) -> List[str]:
+        """Drop sessions whose target no longer exists. Caller holds no lock.
+
+        The cap refuses rather than evicting, because closing a live handle
+        out from under the model is something it cannot detect. A *dead*
+        target is the exception that proves the rule: the handle is already
+        useless, so dropping it takes nothing away — and without this, eight
+        exited processes hold every slot forever and `open_process` is refused
+        for the rest of the server's life, with no way for the model to find
+        out which sessions are the dead ones (`process_info` answers happily
+        from cached state).
+
+        A recycled pid reads as alive, which is inherent to asking the OS by
+        number.
+        """
+        with self._lock:
+            dead = [
+                session_id
+                for session_id, session in self._sessions.items()
+                if not _looks_alive(session.pid)
+            ]
+
+        for session_id in dead:
+            try:
+                self.close(session_id)
+            except SessionError:  # closed concurrently
+                pass
+        return dead
+
+    def is_alive(self, session_id: str) -> bool:
+        """Whether this session's target still exists."""
+        return _looks_alive(self.get(session_id).pid)
+
     def at_capacity(self) -> bool:
         """Whether :meth:`open` would refuse right now.
 
@@ -221,7 +290,16 @@ class SessionStore:
         since spending an approval on an attach that cannot happen is worse
         than refusing outright. :meth:`open` stays the authority: this is a
         hint, and the two can differ under a concurrent open.
+
+        Reaps first, or this would report a server full of exited processes as
+        full when `open` would have made room.
         """
+        with self._lock:
+            if len(self._sessions) < MAX_OPEN_SESSIONS:
+                return False
+
+        self._reap_dead()
+
         with self._lock:
             return len(self._sessions) >= MAX_OPEN_SESSIONS
 
