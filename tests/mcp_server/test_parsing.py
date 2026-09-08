@@ -200,7 +200,13 @@ class TestAdvertisedLimitsMatchEnforcement:
             if option.startswith("--") and option != "--help"
         }
         guide = Path(__file__).resolve().parents[2] / "docs" / "mcp.md"
-        documented = set(re.findall(r"<code>(--[a-z-]+)", guide.read_text()))
+        # encoding is not optional: read_text() defaults to the locale's
+        # encoding, which is cp1252 on Windows, and docs/mcp.md has 14 distinct
+        # non-ASCII bytes (em dashes, arrows). This test was the only Windows
+        # failure in the whole CI run.
+        documented = set(
+            re.findall(r"<code>(--[a-z-]+)", guide.read_text(encoding="utf-8"))
+        )
 
         assert real - documented == set(), "undocumented flags"
         assert documented - real == set(), "documented flags that do not exist"
