@@ -206,42 +206,11 @@ class SessionStore:
         :raises SessionError: if :data:`MAX_OPEN_SESSIONS` are already open.
             The caller owns the handle it passed in and must close it.
         """
-        if len(self._sessions) >= MAX_OPEN_SESSIONS:
-            self._reap_dead()
+        refusal = self.capacity_refusal(pid)
+        if refusal is not None:
+            raise SessionError(refusal)
 
         with self._lock:
-            if len(self._sessions) >= MAX_OPEN_SESSIONS:
-                # No "close the oldest": the oldest is usually the target the
-                # whole session has been refining, and close_process discards
-                # its scan results too. The list is given instead, so the
-                # choice is made on what each session holds.
-                existing = [
-                    sid for sid, s in self._sessions.items() if s.pid == pid
-                ]
-                already = (
-                    " Note that pid %d is already open as %s — reuse that id "
-                    "rather than attaching again." % (pid, existing[0])
-                    if existing
-                    else ""
-                )
-                raise SessionError(
-                    "This server already has %d processes open, which is the "
-                    "limit, and all of them are live. Close whichever you are "
-                    "done with (close_process also discards that session's "
-                    "scan results) and attach again. Open: %s.%s"
-                    % (
-                        MAX_OPEN_SESSIONS,
-                        ", ".join(
-                            "%s (%s, pid %d, %d scan%s)"
-                            % (sid, session.name or "?", session.pid,
-                               len(session.scan_ids),
-                               "" if len(session.scan_ids) == 1 else "s")
-                            for sid, session in self._sessions.items()
-                        ),
-                        already,
-                    )
-                )
-
             session_id = "proc-%d" % next(self._session_ids)
             session = Session(
                 session_id=session_id, process=process, pid=pid, name=name
@@ -282,26 +251,64 @@ class SessionStore:
         """Whether this session's target still exists."""
         return _looks_alive(self.get(session_id).pid)
 
-    def at_capacity(self) -> bool:
-        """Whether :meth:`open` would refuse right now.
+    def capacity_refusal(self, pid: int = 0) -> Optional[str]:
+        """The reason :meth:`open` would refuse right now, or ``None``.
 
-        Lets a caller fail before doing something expensive that the refusal
-        would waste — the protocol layer asks this before prompting the user,
-        since spending an approval on an attach that cannot happen is worse
-        than refusing outright. :meth:`open` stays the authority: this is a
-        hint, and the two can differ under a concurrent open.
+        One message, rendered once. The protocol layer asks this *before*
+        prompting the user — spending an approval on an attach that cannot
+        happen is worse than refusing outright — and :meth:`open` raises it as
+        the authoritative guard. Duplicating the text gave the early path a
+        worse message than the late one, which is the path a model actually
+        hits.
 
-        Reaps first, or this would report a server full of exited processes as
-        full when `open` would have made room.
+        Reaps first, or a server full of exited processes reports as full when
+        :meth:`open` would have made room.
         """
         with self._lock:
             if len(self._sessions) < MAX_OPEN_SESSIONS:
-                return False
+                return None
 
         self._reap_dead()
 
         with self._lock:
-            return len(self._sessions) >= MAX_OPEN_SESSIONS
+            if len(self._sessions) < MAX_OPEN_SESSIONS:
+                return None
+
+            # No "close the oldest": the oldest is usually the target the whole
+            # session has been refining, and close_process discards its scan
+            # results too. The list is given instead, so the choice is made on
+            # what each session holds.
+            existing = [
+                sid for sid, session in self._sessions.items()
+                if session.pid == pid
+            ]
+            already = (
+                " Note that pid %d is already open as %s — reuse that id "
+                "rather than attaching again." % (pid, existing[0])
+                if existing
+                else ""
+            )
+            return (
+                "This server already has %d processes open, which is the "
+                "limit, and all of them are live. Close whichever you are "
+                "done with (close_process also discards that session's scan "
+                "results) and attach again. Open: %s.%s"
+                % (
+                    MAX_OPEN_SESSIONS,
+                    ", ".join(
+                        "%s (%s, pid %d, %d scan%s)"
+                        % (sid, session.name or "?", session.pid,
+                           len(session.scan_ids),
+                           "" if len(session.scan_ids) == 1 else "s")
+                        for sid, session in self._sessions.items()
+                    ),
+                    already,
+                )
+            )
+
+    def at_capacity(self) -> bool:
+        """Whether :meth:`open` would refuse right now."""
+        return self.capacity_refusal() is not None
 
     def get(self, session_id: str) -> Session:
         """Look up a session, or explain how to obtain a valid id."""

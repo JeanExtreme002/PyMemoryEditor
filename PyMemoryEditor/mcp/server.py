@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple
 
 from .. import __version__
 from .config import ServerConfig, parse_args
-from .session import MAX_OPEN_SESSIONS, SessionError, host_platform
+from .session import SessionError, host_platform
 from .toolset import MemoryToolset, ToolError
 
 if TYPE_CHECKING:  # pragma: no cover - import cost avoided at runtime
@@ -243,11 +243,15 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
         # user was asked to approve an attach, approved it, and then got told
         # the server was full. An approval is the most expensive step here and
         # the one thing this server must not spend carelessly.
-        if toolset.store.at_capacity():
+        #
+        # The store renders the message, rather than this having its own: the
+        # first version here named neither the open sessions nor their scan
+        # counts, so the path a model actually hits was the less useful one.
+        refusal = toolset.store.capacity_refusal(found_pid)
+        if refusal is not None:
             raise SdkToolError(
-                "Not asking to attach to \"%s\" (pid %d): this server already "
-                "has %d processes open, which is the limit. Close one with "
-                "close_process first." % (found_name, found_pid, MAX_OPEN_SESSIONS)
+                'Not asking to attach to "%s" (pid %d): %s'
+                % (found_name or "unknown", found_pid, refusal)
             )
 
         try:
