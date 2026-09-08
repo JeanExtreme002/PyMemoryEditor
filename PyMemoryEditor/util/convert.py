@@ -409,9 +409,10 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
     buffer in the library is sized through this function, which makes it the
     one place the invariant can be enforced for all of them.
 
-    :raises ValueError: if ``length`` is not positive, exceeds the widest C
-        representation of ``pytype``, or is a ``float`` width other than 4 or
-        8 (IEEE-754 has no form between them).
+    :raises ValueError: if ``length`` is negative; if it is zero for anything
+        but ``str`` / ``bytes`` (which are exempt — see below); if it exceeds
+        the widest C representation of ``pytype``; or if it is a ``float``
+        width other than 4 or 8 (IEEE-754 has no form between them).
     """
     if length < 0:
         raise ValueError("bufflength must not be negative (got %d)." % length)
@@ -421,9 +422,10 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
         # yields a length of 0, and writing an empty value has always been a
         # successful no-op on the public API. Rejecting it outright was a
         # silent behaviour change on a documented contract.
-        value: Any = ctypes.create_string_buffer(length) if length else (
-            ctypes.c_char * 0
-        )()
+        # `create_string_buffer(0)` already returns a zero-length
+        # `c_char_Array_0`, identical to `(c_char * 0)()`, so the conditional
+        # that used to be here had two arms that did the same thing.
+        value: Any = ctypes.create_string_buffer(length)
 
     elif pytype is int:
 

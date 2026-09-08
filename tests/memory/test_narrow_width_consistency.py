@@ -159,18 +159,39 @@ def test_a_float_width_between_the_two_ieee_forms_is_refused(width):
 
     process = OpenProcess(pid=os.getpid())
     try:
-        with pytest.raises(ValueError) as error:
+        with pytest.raises(ValueError) as direct_error:
             process.read_process_memory(address, float, width)
 
-        # And the scan-shaped path reports "not readable" rather than a number.
-        via_search = dict(
-            process.search_by_addresses(float, width, [address])
-        )[address]
+        # And the same refusal from the scan-shaped path, not a `None`.
+        #
+        # This assertion used to be `via_search is None`, which looked like
+        # agreement and was not: `None` is how this API reports an address with
+        # no backing region, so an unusable width was indistinguishable from a
+        # dead target — the same silent disagreement the sign-extension work
+        # removed from `int`, reopened one type over.
+        with pytest.raises(ValueError) as search_error:
+            list(process.search_by_addresses(float, width, [address]))
     finally:
         process.close()
 
-    assert "float" in str(error.value)
-    assert via_search is None
+    assert "float" in str(direct_error.value)
+    assert "float" in str(search_error.value)
+
+
+def test_an_unmapped_address_still_reports_none_not_an_error():
+    """The other half: `None` has to keep meaning what it means.
+
+    Validating the width up front must not turn a genuinely unreadable address
+    into an exception, or the caller loses the distinction in the other
+    direction.
+    """
+    process = OpenProcess(pid=os.getpid())
+    try:
+        result = dict(process.search_by_addresses(float, 8, [0x1000]))
+    finally:
+        process.close()
+
+    assert result[0x1000] is None
 
 
 @pytest.mark.parametrize("width", [4, 8])

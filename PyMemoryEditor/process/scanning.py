@@ -41,6 +41,7 @@ from typing import (
 from ..enums import ScanTypesEnum
 from ..util import (
     convert_from_byte_array,
+    get_c_type_of,
     iter_region_chunks,
     scan_memory,
     scan_memory_for_exact_value,
@@ -115,6 +116,22 @@ def iter_values_for_addresses(
     """
     if transient_error_check is None:
         transient_error_check = _always_false
+
+    # Validate the width once, here, instead of discovering it per address.
+    #
+    # `convert_from_byte_array` raises ValueError for a width the type cannot
+    # represent, and the per-address handler below catches ValueError and
+    # yields `(address, None)` — which is also how this function reports an
+    # address with no backing region. So a bad width did not look like a bad
+    # width: `search_by_addresses(float, 3, addresses)` reported every address
+    # as unreadable, indistinguishable from a dead target, and with
+    # `raise_error=True` it surfaced a ValueError where the documented contract
+    # promises OSError.
+    #
+    # A width the type cannot represent is a caller error, not an I/O failure,
+    # so it propagates regardless of `raise_error` — that flag is about reads
+    # that fail, not about arguments that cannot work.
+    get_c_type_of(pytype, bufflength)
 
     sorted_addresses = sorted(addresses)
     sorted_regions = _ensure_sorted_by_address(memory_regions)
