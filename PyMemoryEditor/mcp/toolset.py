@@ -91,6 +91,25 @@ MODULE_PREVIEW = 20
 #: instead.
 MAX_PAGE_SIZE = 100
 
+#: One past the widest address any supported target can have. Every address
+#: reaching a backend becomes a ``c_void_p``, which truncates to its low 64
+#: bits *silently* rather than raising -- so an address above this does not
+#: fail, it addresses somewhere else. A model that duplicates or concatenates
+#: a hex string it was handed (the kind of slip that produces
+#: ``"0x7FFD123456787FFD12345678"``) had that accepted and written to
+#: ``0x56787FFD12345678``: not the address it meant, not the prefix it typed,
+#: and possibly mapped. This is the module whose docstring says a write to a
+#: rounded address is exactly the failure it must not have.
+MAX_ADDRESS = (1 << 64) - 1
+
+#: Ceiling on the magnitude of a pointer-chain offset. Offsets are struct
+#: displacements -- published Cheat Engine recipes use tens or hundreds of
+#: bytes, occasionally thousands -- so 4 GiB is far past anything real while
+#: still keeping ``base + sum(offsets)`` clear of the truncation boundary
+#: above. Negative offsets stay legal: walking backwards through a struct is
+#: ordinary (see :func:`parse_offset`).
+MAX_OFFSET_MAGNITUDE = 1 << 32
+
 #: Defaults for ``find_pointer_paths``, named because they were previously
 #: written twice — once in the signature and once in the clamp — and the two
 #: disagreed for ``None``. ``max_offset`` fell to 0, the *narrowest* possible
@@ -179,8 +198,23 @@ def parse_offset(raw: Any, *, field: str = "offset") -> int:
     class of published recipe unusable here — with a message ("must not be
     negative") that reads like a formatting complaint, so a model would "fix"
     it by mangling the offset rather than reporting the limit.
+
+    Bounded in magnitude all the same: an offset is added to an address, and
+    an absurd one pushes an intermediate dereference past the truncation
+    boundary described on :data:`MAX_ADDRESS`, where the hop silently reads
+    from a different place and the whole chain resolves to a plausible lie.
     """
-    return _parse_signed_int(raw, field)
+    value = _parse_signed_int(raw, field)
+
+    if abs(value) > MAX_OFFSET_MAGNITUDE:
+        raise ToolError(
+            "%s %s is too large to be a struct displacement (limit is "
+            "±0x%X). An offset this size means the value was read as an "
+            "address, or two arguments were swapped."
+            % (field, format_offset(value), MAX_OFFSET_MAGNITUDE)
+        )
+
+    return value
 
 
 def parse_address(raw: Any, *, field: str = "address") -> int:
@@ -223,6 +257,18 @@ def parse_address(raw: Any, *, field: str = "address") -> int:
 
     if value < 0:
         raise ToolError("%s must not be negative (got %r)." % (field, raw))
+
+    # The floor was checked and the ceiling was not, and only one of the two
+    # fails loudly. See MAX_ADDRESS: past it, ctypes truncates instead of
+    # raising, so the write lands somewhere else entirely.
+    if value > MAX_ADDRESS:
+        raise ToolError(
+            "%s 0x%X is outside any 64-bit address space (it needs %d bits). "
+            "Addresses this large come from a hex string that got duplicated "
+            "or concatenated — re-read the address from the tool that gave it "
+            "to you rather than reconstructing it."
+            % (field, value, value.bit_length())
+        )
 
     return value
 
@@ -1432,6 +1478,18 @@ class MemoryToolset:
                 ) from None
             except (MemoryError, ValueError, PyMemoryEditorError) as error:
                 raise ToolError("Could not resolve the chain: %s" % error) from None
+
+        # The one address here the argument parsers never saw: it comes out of
+        # the target's own memory plus the offsets. Handing back something that
+        # would truncate the moment the model passed it to write_value is the
+        # same bug as accepting it, one call later.
+        if not 0 <= final <= MAX_ADDRESS:
+            raise ToolError(
+                "The chain resolved to 0x%X, which is outside any 64-bit "
+                "address space. One of the hops read a value that is not a "
+                "pointer, so the chain is stale or an offset is wrong."
+                % final
+            )
 
         return {
             "session_id": session.session_id,

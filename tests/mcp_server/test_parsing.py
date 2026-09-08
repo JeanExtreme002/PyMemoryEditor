@@ -42,6 +42,39 @@ class TestParseAddress:
     def test_accepted_forms(self, raw, expected):
         assert parse_address(raw) == expected
 
+    # The floor was checked and the ceiling was not, and only one of the two
+    # fails loudly. Past 64 bits every address becomes a `c_void_p`, which
+    # truncates to its low bits *silently*: the concatenated string below was
+    # accepted and would have been written to 0x56787FFD12345678 -- not the
+    # address the model meant, not even the prefix it typed, and possibly
+    # mapped. This is the module whose docstring says a write to a rounded
+    # address is exactly the failure it must not have.
+
+    @pytest.mark.parametrize("raw", [
+        # A hex string the model was handed, then duplicated or concatenated.
+        "0x7FFD123456787FFD12345678",
+        hex((1 << 64)),
+        hex((1 << 64) + 1),
+        (1 << 64),
+        (1 << 128),
+    ])
+    def test_an_address_wider_than_64_bits_is_refused(self, raw):
+        from PyMemoryEditor.mcp.toolset import ToolError, parse_address
+
+        with pytest.raises(ToolError) as error:
+            parse_address(raw)
+
+        # Must not read as a formatting complaint: the model's repair for that
+        # is to mangle the string, which is how it got here.
+        assert "64-bit" in str(error.value)
+
+    def test_the_widest_real_address_is_still_accepted(self):
+        """The boundary itself, so the check cannot be off by one."""
+        from PyMemoryEditor.mcp.toolset import MAX_ADDRESS, parse_address
+
+        assert MAX_ADDRESS == (1 << 64) - 1
+        assert parse_address(hex(MAX_ADDRESS)) == MAX_ADDRESS
+
     def test_bare_hex_is_accepted_when_it_cannot_be_decimal(self):
         # "DEADBEEF" has no decimal reading, so there is nothing to guess at.
         assert parse_address("DEADBEEF") == 0xDEADBEEF
@@ -81,6 +114,48 @@ class TestParseAddress:
         # JSON number in a JS client, and a rounded address is a wrong address.
         address = 2**53 + 1
         assert parse_address(format_address(address)) == address
+
+
+class TestParseOffset:
+    """Signed by design, bounded all the same.
+
+    A negative offset is ordinary — a published recipe walks backwards through
+    a struct with ``[-0x8]`` — so the sign is deliberate. The magnitude was
+    unbounded, and an offset is added to an address: a big enough one pushes an
+    intermediate dereference past the 64-bit truncation boundary, where the hop
+    reads from somewhere else and the whole chain resolves to a plausible lie.
+    """
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("-0x8", -8),          # the case the signed domain exists for
+        ("0x108", 0x108),
+        ("0", 0),
+        (-16, -16),
+    ])
+    def test_ordinary_offsets_are_accepted(self, raw, expected):
+        from PyMemoryEditor.mcp.toolset import parse_offset
+
+        assert parse_offset(raw) == expected
+
+    @pytest.mark.parametrize("raw", [
+        hex((1 << 32) + 1),
+        "-" + hex((1 << 32) + 1),
+        1 << 40,
+        -(1 << 64),
+    ])
+    def test_an_offset_too_large_to_be_a_displacement_is_refused(self, raw):
+        from PyMemoryEditor.mcp.toolset import ToolError, parse_offset
+
+        with pytest.raises(ToolError) as error:
+            parse_offset(raw)
+
+        assert "displacement" in str(error.value)
+
+    def test_the_boundary_is_inclusive_on_both_signs(self):
+        from PyMemoryEditor.mcp.toolset import MAX_OFFSET_MAGNITUDE, parse_offset
+
+        assert parse_offset(hex(MAX_OFFSET_MAGNITUDE)) == MAX_OFFSET_MAGNITUDE
+        assert parse_offset(-MAX_OFFSET_MAGNITUDE) == -MAX_OFFSET_MAGNITUDE
 
 
 class TestParseValue:

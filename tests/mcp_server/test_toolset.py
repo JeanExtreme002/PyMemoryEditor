@@ -1208,6 +1208,38 @@ class TestThirdReviewRegressions:
         )
         assert result["max_offset"] == 0x10000
 
+    # --- the one address no parser ever sees --------------------------- #
+
+    def test_a_chain_resolving_past_64_bits_is_refused_not_returned(
+        self, make_toolset, fake_process
+    ):
+        """`parse_address` guards what the model types, not what memory says.
+
+        The resolved address comes out of the target's own bytes plus the
+        offsets, so it never passes through an argument parser. Returning one
+        that would truncate the moment the model handed it to write_value is
+        the same bug as accepting it, one call later.
+        """
+        toolset = make_toolset(config())
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        # A hop that "reads" a value no address can hold. Patched on the fake
+        # rather than planted in it, because a real pointer read is bounded by
+        # ptr_size by construction -- the failure this guards is a chain whose
+        # arithmetic leaves the space, not a byte pattern.
+        fake_process.resolve_pointer_chain = lambda base, offsets: 1 << 70
+
+        with pytest.raises(ToolError) as error:
+            toolset.resolve_pointer_chain(
+                session_id, hex(WRITABLE_BASE), offsets=["0x10"]
+            )
+
+        assert "64-bit" in str(error.value)
+
+    # The paired half -- that an ordinary chain still resolves -- is
+    # `test_resolves_a_chain` above and `test_resolves_a_chain_built_by_hand`
+    # in test_live.py, so a bound that rejected everything would fail there.
+
     # --- the timeout hint named the wrong phase ------------------------ #
 
     def test_a_pointer_map_timeout_does_not_blame_the_depth(
