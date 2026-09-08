@@ -276,6 +276,27 @@ def convert_from_byte_array(
         return cast(T, bytes(byte_array).decode("utf-8", errors="replace"))
 
     c_value = get_c_type_of(pytype, length)
+    width = ctypes.sizeof(c_value)
+
+    if width > length:
+        # An unusual width rounds up to a wider C type -- `int` at 3 bytes gets
+        # a `c_int32` -- so `byte_array` is narrower than `from_buffer` needs
+        # and it raised `ValueError: Buffer size too small (3 instead of at
+        # least 4 bytes)`. Nothing surfaced that: `iter_values_for_addresses`
+        # catches ValueError and yields `(address, None)`, so
+        # `search_by_addresses(int, 3, addresses)` reported every address as
+        # unreadable while `read_process_memory(pid, address, int, 3)` returned
+        # the value fine. A silent disagreement between two ways of reading the
+        # same bytes is worse than either behaviour on its own.
+        #
+        # Copying into the front of the zero-initialised value is exactly what
+        # the three backends' read path does (see `read_process_memory`: it
+        # reads `bufflength` bytes into a buffer that `get_c_type_of` may have
+        # sized wider), so the two agree by construction rather than by
+        # coincidence.
+        raw = bytes(byte_array)[:length]
+        ctypes.memmove(ctypes.byref(c_value), raw, len(raw))
+        return c_value.value
 
     return c_value.__class__.from_buffer(byte_array).value
 

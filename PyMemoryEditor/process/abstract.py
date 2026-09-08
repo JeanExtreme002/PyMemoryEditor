@@ -316,6 +316,11 @@ class AbstractProcess(ABC):
             from — only addresses to read. Since ``bufflength`` is optional,
             pass ``addresses`` by keyword when omitting it:
             ``search_by_addresses(int, addresses=[0x1000, 0x1004])``.
+            An unusual ``int`` width rounds up to the next C integer type, as
+            in :meth:`search_by_value`, and only the requested bytes are read
+            — so this method and :meth:`read_process_memory` return the same
+            value for the same address. Widths 3, 5, 6 and 7 used to yield
+            ``None`` here while the direct read succeeded.
         :param addresses: the addresses to read. Required.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
