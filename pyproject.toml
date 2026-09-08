@@ -212,4 +212,5 @@ skip_empty = true
 addopts = "-n auto --dist=loadfile"
 markers = [
     "slow: integration tests that read/scan the current process's whole address space (minutes, not seconds)",
+    "scan_heavy: tests that scan a *live* process's entire address space. Separated from `slow` because the cost is wildly platform-dependent: a macOS process exposes ~390 GiB across ~145 regions and a Windows one is not much better, so on a CI runner each scan is minutes rather than the ~1s it takes on a developer machine. CI runs these on Linux only (see the build-mcp job); the library's own live-scan coverage on the other two platforms comes from the build/build-macos jobs.",
 ]

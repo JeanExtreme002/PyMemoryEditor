@@ -308,18 +308,22 @@ def test_argument_errors_reach_the_model(target, label, build):
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.slow
+@pytest.mark.scan_heavy
 @pytest.mark.parametrize(
     "value_type, value, bufflength, scan_type",
     [
+        # Three cases, not the nine this used to carry. The full type x width
+        # matrix is already exhaustive in
+        # test_toolset.py::TestRefineMatchesAFreshScan (16 cases, fake target,
+        # milliseconds). What a *live* target adds is proof that the real
+        # backends agree with the fake, and these three carry that: an int
+        # (the identity round trip), a 4-byte float (the case that was
+        # silently broken), and NUL-padded text (the other one). Each extra
+        # case here is another full address-space scan, which on a macOS CI
+        # runner is minutes.
         ("int", "246813", 4, "exact"),
-        ("int", "-246813", 4, "exact"),
-        ("int", "-4242", 2, "exact"),
         ("float", "0.1", 4, "exact"),
-        ("float", "0.1", 8, "exact"),
-        ("str", "hi", 2, "exact"),
         ("str", "hi", 8, "exact"),
-        ("bytes", "DEAD", 8, "exact"),
-        ("bool", "true", 1, "exact"),
     ],
 )
 def test_a_scanned_address_survives_a_refine(

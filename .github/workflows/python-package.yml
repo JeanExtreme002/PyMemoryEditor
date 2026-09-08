@@ -279,10 +279,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+        # `scan_heavy` -- the tests that scan a *live* process's whole address
+        # space -- runs on Linux only. The cost is wildly platform-dependent: a
+        # macOS process exposes ~390 GiB across ~145 regions and Windows is not
+        # much better, so on a runner each of those scans is minutes. Measured
+        # on the previous attempt: this job took 22m21s on macOS and hit its
+        # timeout at 30m on Windows, while the same suite is 18s locally.
+        #
+        # Nothing is lost by pinning them to Linux. What the other two OSes are
+        # here for is the platform-specific code -- the Windows-only read-only
+        # handle, macOS task_for_pid, per-platform enumeration and the
+        # truncated-name denylist -- none of which are scans. The library's own
+        # live-scan coverage on those platforms comes from `build` and
+        # `build-macos`.
+        #
+        # Set through PYTEST_ADDOPTS rather than the run: line because the
+        # Windows runner's default shell is pwsh, and `-m "not scan_heavy"`
+        # would need different quoting there than on bash.
+        include:
+          - os: ubuntu-latest
+            addopts: ''
+          - os: windows-latest
+            addopts: '-m "not scan_heavy"'
+          - os: macos-latest
+            addopts: '-m "not scan_heavy"'
 
     steps:
     - uses: actions/checkout@v4
@@ -301,8 +321,14 @@ jobs:
       # What differs is the subset exercised — the MCP suite reaches 71% of the
       # package on its own (it drives the library through the real backends),
       # so 60 is the same kind of floor the other jobs carry.
+      env:
+        PYTEST_ADDOPTS: ${{ matrix.addopts }}
+      # -p no:pytestqt: the dev extra brings pytest-qt, whose plugin imports
+      # QtGui at startup and dies with `ImportError: libEGL.so.1` on a bare
+      # Linux runner. The library jobs apt-install a pile of X libraries for
+      # it; this job runs no Qt tests, so it disables the plugin instead.
       run: |
-        pytest tests/mcp_server -v -s -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
+        pytest tests/mcp_server -p no:pytestqt -v -s -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
     - name: Upload coverage to Codecov
       # Its own flag, so the merged report shows MCP coverage alongside the
       # library's instead of one overwriting the other.

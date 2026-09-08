@@ -75,6 +75,7 @@ class TestLiveDiscovery:
 
 
 class TestLiveLoop:
+    @pytest.mark.scan_heavy
     def test_the_full_scan_refine_read_write_loop(self, live, live_session):
         # A distinctive value, to keep the first scan's result set small.
         target = ctypes.c_int(1928374)
@@ -101,6 +102,7 @@ class TestLiveLoop:
         # The write landed in this process's own memory, so ctypes can see it.
         assert target.value == 1234
 
+    @pytest.mark.scan_heavy
     def test_scan_finds_a_float(self, live, live_session):
         target = ctypes.c_double(1234.5678)
         address = ctypes.addressof(target)
@@ -109,6 +111,7 @@ class TestLiveLoop:
         session = live.store.get(live_session)
         assert address in session.get_scan(scan["scan_id"]).addresses
 
+    @pytest.mark.scan_heavy
     def test_scan_finds_a_byte_pattern(self, live, live_session):
         marker = b"\x8f\x2c\x71\xd4\x5a\xe3\x06\xbb"
         target = (ctypes.c_char * len(marker)).from_buffer_copy(marker)
@@ -118,6 +121,7 @@ class TestLiveLoop:
         session = live.store.get(live_session)
         assert address in session.get_scan(scan["scan_id"]).addresses
 
+    @pytest.mark.scan_heavy
     def test_range_scan_finds_a_value_in_the_window(self, live, live_session):
         target = ctypes.c_int(918273)
         address = ctypes.addressof(target)
@@ -129,6 +133,7 @@ class TestLiveLoop:
         session = live.store.get(live_session)
         assert address in session.get_scan(scan["scan_id"]).addresses
 
+    @pytest.mark.scan_heavy
     def test_list_scan_results_reads_live_values(self, live, live_session):
         target = ctypes.c_int(776655)
         address = ctypes.addressof(target)
