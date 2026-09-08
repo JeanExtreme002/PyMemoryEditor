@@ -32,11 +32,18 @@ from time import time
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..process.abstract import AbstractProcess
+from ..process.util import pid_exists
 from ..process.region import MemoryRegion, MemoryRegionSnapshot
 
 
 #: Result sets retained per session before the oldest is evicted.
 MAX_SCANS_PER_SESSION = 20
+
+#: Processes one server keeps open at once. Refuses rather than evicting,
+#: unlike the scan cap above: a session owns an OS handle, and closing one out
+#: from under the model is not something it can detect. Bounds handle
+#: exhaustion, since nothing obliges a model to call ``close_process``.
+MAX_OPEN_SESSIONS = 8
 
 
 class SessionError(Exception):
@@ -162,6 +169,22 @@ class Session:
         return tuple(self._scan_order)
 
 
+def looks_alive(pid: int) -> bool:
+    """``pid_exists``, but a pid the OS will not even accept reads as dead.
+
+    The reaper runs inside ``open``, so anything raised here escapes as
+    something other than a ``SessionError`` and the model is told only
+    "Error executing tool". ``pid_exists(2**31)`` raises ``OverflowError``
+    (the value does not fit the platform's pid type), which the argument
+    fuzzer found by generating exactly that. A number the OS refuses cannot
+    name a running process, so treating it as dead is both safe and correct.
+    """
+    try:
+        return pid_exists(pid)
+    except (OverflowError, ValueError, OSError):
+        return False
+
+
 class SessionStore:
     """The server's process handles and their scan results.
 
@@ -178,14 +201,146 @@ class SessionStore:
         self._lock = threading.Lock()
 
     def open(self, process: AbstractProcess, pid: int, name: str) -> Session:
-        """Register an already-opened process and return its session."""
+        """Register an already-opened process and return its session.
+
+        :raises SessionError: if :data:`MAX_OPEN_SESSIONS` are already open.
+            The caller owns the handle it passed in and must close it.
+        """
+        # Loop, rather than deciding to reap from a check taken earlier under
+        # a different acquisition: the store can fill between the two, and then
+        # a slot held by an exited process would be refused without anyone
+        # having looked. At most one reap — a second pass finds nothing new,
+        # and refusing has to terminate.
+        reaped = False
+
+        while True:
+            with self._lock:
+                refusal = self._refusal_locked(pid)
+
+                if refusal is None:
+                    session_id = "proc-%d" % next(self._session_ids)
+                    session = Session(
+                        session_id=session_id, process=process,
+                        pid=pid, name=name,
+                    )
+                    self._sessions[session_id] = session
+                    return session
+
+                if reaped:
+                    # Raised here, not after the block: computing the refusal
+                    # under the lock and raising it outside leaves a window
+                    # where another thread closes a session, and this caller
+                    # is turned away with a message that is already false.
+                    raise SessionError(refusal)
+
+            # Outside the lock: reaping closes handles, which takes it again.
+            self._reap_dead()
+            reaped = True
+
+    def _reap_dead(self) -> List[str]:
+        """Drop sessions whose target no longer exists. Caller holds no lock.
+
+        The cap refuses rather than evicting, because closing a live handle
+        out from under the model is something it cannot detect. A *dead*
+        target is the exception that proves the rule: the handle is already
+        useless, so dropping it takes nothing away — and without this, eight
+        exited processes hold every slot forever and `open_process` is refused
+        for the rest of the server's life, with no way for the model to find
+        out which sessions are the dead ones (`process_info` answers happily
+        from cached state).
+
+        A recycled pid reads as alive, which is inherent to asking the OS by
+        number.
+        """
         with self._lock:
-            session_id = "proc-%d" % next(self._session_ids)
-            session = Session(
-                session_id=session_id, process=process, pid=pid, name=name
+            dead = [
+                session_id
+                for session_id, session in self._sessions.items()
+                if not looks_alive(session.pid)
+            ]
+
+        for session_id in dead:
+            try:
+                self.close(session_id)
+            except SessionError:  # closed concurrently
+                pass
+        return dead
+
+    def capacity_refusal(self, pid: int = 0) -> Optional[str]:
+        """The reason :meth:`open` would refuse right now, or ``None``.
+
+        One message, rendered once. The protocol layer asks this *before*
+        prompting the user — spending an approval on an attach that cannot
+        happen is worse than refusing outright — and :meth:`open` raises it as
+        the authoritative guard. Duplicating the text gave the early path a
+        worse message than the late one, which is the path a model actually
+        hits.
+
+        Reaps first, or a server full of exited processes reports as full when
+        :meth:`open` would have made room.
+        """
+        with self._lock:
+            if len(self._sessions) < MAX_OPEN_SESSIONS:
+                return None
+
+        self._reap_dead()
+
+        with self._lock:
+            return self._refusal_locked(pid)
+
+    def _refusal_locked(self, pid: int) -> Optional[str]:
+        """Render the refusal, or ``None``. **Caller holds** ``self._lock``.
+
+        Separate from :meth:`capacity_refusal` so :meth:`open` can check and
+        insert under one acquisition. When the check released the lock and the
+        insert took it again, the cap could be exceeded: every thread saw room,
+        then every thread inserted. Demonstrated with 12 concurrent opens
+        against a cap of 8.
+        """
+        # Deterministic, so a refactor that checks capacity outside the lock
+        # fails here instead of in a timing test. That regression happened
+        # once: the check and the insert were split across two acquisitions,
+        # every racing thread saw room, and the cap was exceeded.
+        assert self._lock.locked(), "capacity must be judged under the lock"
+
+        if len(self._sessions) < MAX_OPEN_SESSIONS:
+            return None
+
+        # No "close the oldest": the oldest is usually the target the whole
+        # session has been refining, and close_process discards its scan
+        # results too. The list is given instead, so the choice is made on
+        # what each session holds.
+        existing = [
+            sid for sid, session in self._sessions.items()
+            if session.pid == pid
+        ]
+        already = (
+            " Note that pid %d is already open as %s — reuse that id "
+            "rather than attaching again." % (pid, existing[0])
+            if existing
+            else ""
+        )
+        return (
+            "This server already has %d processes open, which is the "
+            "limit, and all of them are live. Close whichever you are "
+            "done with (close_process also discards that session's scan "
+            "results) and attach again. Open: %s.%s"
+            % (
+                MAX_OPEN_SESSIONS,
+                ", ".join(
+                    "%s (%s, pid %d, %d scan%s)"
+                    % (sid, session.name or "?", session.pid,
+                       len(session.scan_ids),
+                       "" if len(session.scan_ids) == 1 else "s")
+                    for sid, session in self._sessions.items()
+                ),
+                already,
             )
-            self._sessions[session_id] = session
-            return session
+        )
+
+    def at_capacity(self) -> bool:
+        """Whether :meth:`open` would refuse right now."""
+        return self.capacity_refusal() is not None
 
     def get(self, session_id: str) -> Session:
         """Look up a session, or explain how to obtain a valid id."""
@@ -377,6 +532,8 @@ def host_platform() -> str:
 
 
 __all__ = (
+    "MAX_OPEN_SESSIONS",
+    "looks_alive",
     "MAX_SCANS_PER_SESSION",
     "ScanResult",
     "Session",

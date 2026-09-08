@@ -1210,6 +1210,68 @@ class TestThirdReviewRegressions:
 
     # --- the one address no parser ever sees --------------------------- #
 
+    def test_server_info_survives_a_session_with_an_impossible_pid(
+        self, make_toolset
+    ):
+        """`server_info` is the tool the model is told to call first.
+
+        It rendered `alive` with a bare `pid_exists`, which raises
+        OverflowError for a pid outside the platform's range — so one odd
+        session took the whole result down, hiding the limits and the policy
+        as well as the session list. The store had already been guarded for
+        the same call; this file had not.
+        """
+        # `os.getpid()`, not pid 1: Windows has no pid 1 (System Idle is 0,
+        # System is 4), so `pid_exists(1)` is False there and this test failed
+        # on that runner alone. The test's own process is alive by definition
+        # everywhere.
+        import os
+
+        alive_pid = os.getpid()
+
+        toolset = make_toolset(config())
+        toolset.store.open(FakeProcess(pid=2 ** 31), 2 ** 31, "impossible")
+        toolset.store.open(FakeProcess(pid=alive_pid), alive_pid, "ordinary")
+
+        sessions = toolset.server_info()["open_sessions"]
+
+        by_pid = {entry["pid"]: entry["alive"] for entry in sessions}
+        assert by_pid[2 ** 31] is False
+        assert by_pid[alive_pid] is True
+
+    def test_a_refused_attach_does_not_leak_the_handle(
+        self, make_toolset, monkeypatch
+    ):
+        """`attach` opens the handle and *then* registers the session, so a
+        refusal must close it or the cap leaks what it exists to bound."""
+        from PyMemoryEditor.mcp import session as session_module
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        # The store reaps sessions whose pid is gone, and a fake's pid is an
+        # arbitrary number, so the cap would never fire here otherwise.
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
+
+        opened = []
+
+        def fake_open(**_kwargs):
+            process = FakeProcess()
+            opened.append(process)
+            return process
+
+        toolset = make_toolset(config())
+        monkeypatch.setattr(toolset, "_open_process", fake_open)
+
+        for _ in range(MAX_OPEN_SESSIONS):
+            toolset.open_process(pid=4242)
+
+        with pytest.raises(SessionError):
+            toolset.open_process(pid=4242)
+
+        # The last one is the refused attach's, and only it should be closed.
+        assert len(opened) == MAX_OPEN_SESSIONS + 1
+        assert opened[-1].closed is True
+        assert all(process.closed is False for process in opened[:-1])
+
     def test_a_chain_resolving_past_64_bits_is_refused_not_returned(
         self, make_toolset, fake_process
     ):

@@ -6,8 +6,11 @@ Handle bookkeeping: sessions, scan result sets, and the region batching.
 
 import pytest
 
+from PyMemoryEditor.mcp import session as session_module
 from PyMemoryEditor.mcp.session import (
+    MAX_OPEN_SESSIONS,
     MAX_SCANS_PER_SESSION,
+    Session,
     SessionError,
     SessionStore,
     batch_regions,
@@ -201,6 +204,328 @@ class TestRegionSnapshotCaching:
         )
 
 
+@pytest.fixture
+def all_alive(monkeypatch):
+    """Pin every session's target as live.
+
+    The store reaps sessions whose pid is gone, and a fake's pid is an
+    arbitrary number — so without this these tests depend on the host's
+    process table, and the cap either fires or does not by luck. (Several
+    passed only because `pid_exists(1)` is true on a Unix host.)
+    """
+    monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
+
+
+class TestOpenSessionsAreCapped:
+    """The store used to accept any number of open processes, each holding an
+    OS handle that only `close_process` releases."""
+
+    def test_the_cap_is_enforced(self, store, all_alive):
+        for _ in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(), 1, "a")
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(), 1, "a")
+
+        assert str(MAX_OPEN_SESSIONS) in str(error.value)
+
+    def test_the_refusal_says_how_to_recover(self, store, all_alive):
+        """The model cannot see the store, so the message has to name an id to
+        close and list what is open."""
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=100 + index), 100 + index, "target%d" % index)
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(), 999, "another")
+
+        message = str(error.value)
+        assert "close_process" in message
+        assert "proc-1" in message          # every open session is listed
+        assert "target0" in message
+        assert "pid 100" in message
+        # No "close the oldest": the oldest is usually the target the whole
+        # session has been refining, and closing it discards its scans too.
+        assert "oldest" not in message
+        # The scan count is what makes the list actionable.
+        assert "scan" in message
+
+    def test_closing_one_frees_a_slot(self, store, all_alive):
+        ids = [store.open(FakeProcess(), 1, "a").session_id
+               for _ in range(MAX_OPEN_SESSIONS)]
+
+        store.close(ids[0])
+        reopened = store.open(FakeProcess(), 2, "b")
+
+        assert reopened.session_id not in ids
+        assert len(store.sessions) == MAX_OPEN_SESSIONS
+
+    def test_ids_keep_climbing_after_a_close(self, store, all_alive):
+        """Reusing an id would let a model holding a stale one address a
+        different process."""
+        first = store.open(FakeProcess(), 1, "a").session_id
+        store.close(first)
+        second = store.open(FakeProcess(), 2, "b").session_id
+
+        assert first != second
+
+
+class TestTheCapHoldsUnderConcurrency:
+    """Tool calls run on a thread pool, so `open` races with itself.
+
+    A refactor split the capacity check and the insert across two acquisitions
+    of the store's lock: every thread saw room, then every thread inserted.
+    The window is a few bytecodes wide, so it does not reproduce on its own —
+    hence the injected pause, which makes a structural defect observable
+    instead of waiting for luck.
+    """
+
+    def test_the_cap_is_not_exceeded_when_opens_race(self, store, all_alive):
+        import threading
+
+        start = threading.Barrier(MAX_OPEN_SESSIONS * 2)
+
+        def attach():
+            start.wait()
+            try:
+                store.open(FakeProcess(), 1, "a")
+            except SessionError:
+                pass
+
+        threads = [
+            threading.Thread(target=attach)
+            for _ in range(MAX_OPEN_SESSIONS * 2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(store.sessions) == MAX_OPEN_SESSIONS
+
+    def test_capacity_is_judged_while_the_lock_is_held(self, store, all_alive):
+        """The property the timing test could not actually probe.
+
+        A previous version of this test patched `capacity_refusal` and slept
+        in it to widen the race — but `open` calls `_refusal_locked`, not
+        `capacity_refusal`, so the sleep never fired and the test only
+        duplicated the one above. It passed its mutation check because that
+        mutant happened to reintroduce the `capacity_refusal` call.
+
+        Asserted structurally instead: `_refusal_locked` refuses to judge
+        capacity unless the lock is held, so splitting the check from the
+        insert fails deterministically rather than when the scheduler
+        cooperates.
+        """
+        for _ in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(), 1, "a")
+
+        # Held: this is how `open` calls it, and it answers.
+        with store._lock:
+            assert store._refusal_locked(0) is not None
+
+        # Not held: it refuses to answer at all.
+        with pytest.raises(AssertionError):
+            store._refusal_locked(0)
+
+    def test_the_refusal_is_raised_inside_the_critical_section(
+        self, store, all_alive, monkeypatch
+    ):
+        """Deciding under the lock and raising outside it leaves a window.
+
+        Another thread can close a session in that gap, so the caller is turned
+        away with a message that is already false — the store has room by the
+        time it reads it. Probed by recording whether the lock was held at the
+        moment the error was constructed.
+        """
+        for _ in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(), 1, "a")
+
+        held = []
+        original = session_module.SessionError
+
+        class Probe(original):  # type: ignore[misc, valid-type]
+            def __init__(self, *args):
+                held.append(store._lock.locked())
+                super().__init__(*args)
+
+        monkeypatch.setattr(session_module, "SessionError", Probe)
+
+        with pytest.raises(original):
+            store.open(FakeProcess(), 2, "b")
+
+        assert held == [True], (
+            "the refusal was built after the lock was released, so the store "
+            "may already have had room"
+        )
+
+    def test_open_judges_and_inserts_under_one_acquisition(self, all_alive):
+        """The assertion above is not enough on its own.
+
+        It only proves capacity is judged under *an* acquisition, not that the
+        same one covers the insert — a version that judged under its own lock,
+        released, and then took the lock again to insert passed it, and that is
+        exactly the regression this guards. Counting acquisitions separates
+        them: one for the correct implementation, two for the split.
+        """
+        import threading
+
+        class CountingLock:
+            def __init__(self):
+                self._real = threading.Lock()
+                self.acquisitions = 0
+
+            def __enter__(self):
+                self.acquisitions += 1
+                return self._real.__enter__()
+
+            def __exit__(self, *exc):
+                return self._real.__exit__(*exc)
+
+            def locked(self):
+                return self._real.locked()
+
+        store = SessionStore()
+        lock = CountingLock()
+        store._lock = lock
+
+        store.open(FakeProcess(), 1, "a")
+
+        assert lock.acquisitions == 1, (
+            "capacity and the insert must share one acquisition; %d means the "
+            "check released the lock before inserting" % lock.acquisitions
+        )
+
+    def test_a_dead_session_is_reaped_even_if_the_store_fills_meanwhile(
+        self, store, monkeypatch
+    ):
+        """`open` used to decide whether to reap from a check taken under an
+        earlier acquisition of the lock. If the store filled in between, it
+        refused without anyone having looked for a dead session.
+
+        Simulated by filling the store from inside the first check, which is
+        the same ordering a concurrent open produces.
+        """
+        alive = {4242}
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: pid in alive)
+
+        store.open(FakeProcess(pid=4242), 4242, "live")
+
+        original = type(store)._refusal_locked
+        calls = []
+
+        def fill_once(self, pid):
+            if not calls:
+                calls.append(pid)
+                for index in range(MAX_OPEN_SESSIONS - 1):
+                    session_id = "proc-%d" % next(self._session_ids)
+                    self._sessions[session_id] = Session(
+                        session_id=session_id, process=FakeProcess(pid=700 + index),
+                        pid=700 + index, name="gone%d" % index,
+                    )
+            return original(self, pid)
+
+        monkeypatch.setattr(type(store), "_refusal_locked", fill_once)
+
+        # Full at the moment of the check, but seven of the eight are dead.
+        session = store.open(FakeProcess(pid=4243), 4243, "second")
+
+        assert session.pid == 4243
+
+
+class TestDeadSessionsDoNotHoldSlots:
+    """The lockout the cap created, and the reason it evicts here but nowhere
+    else.
+
+    Nothing in this server notices a target exiting: `_rows_for` swallows the
+    read error, `process_info` keeps answering from cached state, and the
+    session stays in the store. With a cap that refuses rather than evicts,
+    eight exited processes held every slot for the life of the server and the
+    model had no way to tell which sessions were the dead ones.
+
+    Evicting a *dead* session is the exception that proves the rule about not
+    evicting: its handle is already useless, so nothing is taken away.
+    """
+
+    def test_a_dead_session_is_reaped_to_make_room(self, store, monkeypatch):
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=500 + index), 500 + index, "gone%d" % index)
+
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: pid == 4242)
+
+        # Would have raised before the reaper existed.
+        session = store.open(FakeProcess(pid=4242), 4242, "live")
+
+        assert session.pid == 4242
+        assert [held.pid for held in store.sessions] == [4242], (
+            "the eight dead sessions should be gone, not merely joined"
+        )
+
+    def test_a_live_session_is_never_reaped(self, store, monkeypatch):
+        store.open(FakeProcess(pid=4242), 4242, "live")
+        for index in range(MAX_OPEN_SESSIONS - 1):
+            store.open(FakeProcess(pid=600 + index), 600 + index, "gone%d" % index)
+
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: pid == 4242)
+        store.open(FakeProcess(pid=4243), 4243, "second")
+
+        pids = sorted(s.pid for s in store.sessions)
+        assert 4242 in pids, "a live session was evicted"
+
+    def test_reaping_closes_the_handle(self, store, monkeypatch):
+        process = FakeProcess(pid=700)
+        store.open(process, 700, "gone")
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: False)
+
+        store._reap_dead()
+
+        assert process.closed is True, "the handle was dropped without closing"
+        assert store.sessions == ()
+
+    @pytest.mark.parametrize("pid", [2 ** 31, 2 ** 64, -3, 0])
+    def test_a_pid_the_os_refuses_reads_as_dead_not_as_a_crash(self, store, pid):
+        """The reaper runs inside `open`, so anything it raises escapes as
+        something other than SessionError and the model sees only "Error
+        executing tool".
+
+        `pid_exists(2**31)` raises OverflowError — the value does not fit the
+        platform's pid type — which the argument fuzzer found by generating
+        exactly that. Intermittently, because it also needed the store to be
+        at capacity at that moment.
+        """
+        from PyMemoryEditor.mcp.session import looks_alive
+
+        assert looks_alive(pid) is False
+
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=pid), pid, "weird%d" % index)
+
+        # Must not raise anything but SessionError, and here it makes room.
+        session = store.open(FakeProcess(pid=pid), pid, "another")
+        assert session.pid == pid
+
+    def test_a_full_server_of_live_targets_still_refuses(self, store, all_alive):
+        """The reaper must not become a back door around the cap."""
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=800 + index), 800 + index, "live%d" % index)
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(pid=900), 900, "another")
+
+        assert "all of them are live" in str(error.value)
+
+    def test_the_refusal_points_at_an_already_open_pid(self, store, all_alive):
+        """A model that lost count re-attaches instead of reusing the id."""
+        store.open(FakeProcess(pid=4242), 4242, "faketarget")
+        for index in range(MAX_OPEN_SESSIONS - 1):
+            store.open(FakeProcess(pid=810 + index), 810 + index, "other%d" % index)
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(pid=4242), 4242, "faketarget")
+
+        message = str(error.value)
+        assert "already open as proc-1" in message
+
+
 class TestBatchRegions:
     def _regions(self, sizes):
         address = 0x1000
@@ -221,28 +546,18 @@ class TestBatchRegions:
         assert len(batches) == 4  # 3 x 300 bytes, then the 100-byte remainder
 
     def test_a_region_larger_than_the_budget_gets_its_own_batch(self):
-        # It cannot be split without splitting a value across the seam, so the
-        # budget is a target rather than a guarantee -- but the batch that
-        # busts it should not be carrying anything else.
-        #
-        # This assertion used to be `[2, 1]`, i.e. the oversized region shared
-        # a batch with the small one before it, under this same name. The name
-        # was right and the assertion pinned the opposite, so the test was
-        # documenting the bug it looked like it was guarding against.
+        # A region can't be split without splitting a value across the seam,
+        # so the budget is a target -- but the batch that busts it should not
+        # carry anything else. This asserted `[2, 1]` under the same name,
+        # i.e. it pinned the opposite of what the name claims.
         batches = batch_regions(self._regions([10, 5000, 10]), 100)
         assert [[region.size for region in batch] for batch in batches] == [
             [10], [5000], [10]
         ]
 
     def test_a_run_of_small_regions_does_not_ride_along_with_a_large_one(self):
-        """The case that made the deadline check pointless.
-
-        `batch_regions` exists so `_run_batched_scan` gets a chance to look at
-        the clock between batches. Without the flush, every small region before
-        an oversized one joined it: `[10, 10, 10, 5000]` against a 100-byte
-        budget came back as a *single* batch of four, so the deadline was
-        checked once for the whole scan -- the one thing the batching is for.
-        """
+        """Without the flush, `[10, 10, 10, 5000]` on a 100-byte budget was one
+        batch of four, so the deadline was checked once for the whole scan."""
         batches = batch_regions(self._regions([10, 10, 10, 5000]), 100)
 
         assert len(batches) == 2

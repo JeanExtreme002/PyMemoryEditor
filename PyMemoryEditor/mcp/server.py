@@ -238,6 +238,22 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
         if not _can_elicit(ctx):
             raise SdkToolError(decision.reason)
 
+        # Before the prompt, not after. The cap lives in SessionStore.open,
+        # which runs once the handle is already open -- so without this the
+        # user was asked to approve an attach, approved it, and then got told
+        # the server was full. An approval is the most expensive step here and
+        # the one thing this server must not spend carelessly.
+        #
+        # The store renders the message, rather than this having its own: the
+        # first version here named neither the open sessions nor their scan
+        # counts, so the path a model actually hits was the less useful one.
+        refusal = toolset.store.capacity_refusal(found_pid)
+        if refusal is not None:
+            raise SdkToolError(
+                'Not asking to attach to "%s" (pid %d): %s'
+                % (found_name or "unknown", found_pid, refusal)
+            )
+
         try:
             answer = await ctx.elicit(
                 message=(

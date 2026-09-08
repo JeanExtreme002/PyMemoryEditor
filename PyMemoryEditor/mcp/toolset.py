@@ -48,11 +48,15 @@ from ..util import (
 )
 from .config import ServerConfig
 from .session import (
+    MAX_OPEN_SESSIONS,
+    MAX_SCANS_PER_SESSION,
     ScanResult,
     Session,
+    SessionError,
     SessionStore,
     batch_regions,
     host_platform,
+    looks_alive,
     region_to_dict,
 )
 
@@ -553,12 +557,23 @@ class MemoryToolset:
         reachable, how long a scan may run, and which sessions are already
         open from earlier in the conversation.
         """
+        # `alive` because a session outlives its target: nothing here notices
+        # a process exiting, `process_info` keeps answering from cached state,
+        # and the open-session cap means dead ones would hold slots the model
+        # cannot identify. The store reaps them when it needs room; this is how
+        # the model sees them before that.
         sessions = [
             {
                 "session_id": session.session_id,
                 "pid": session.pid,
                 "name": session.name,
                 "scan_ids": list(session.scan_ids),
+                # `looks_alive`, not `pid_exists`: the raw call raises
+                # OverflowError for a pid outside the platform's range, and
+                # server_info is the tool the instructions tell the model to
+                # call first — a crash here hides the limits and the policy
+                # too, not just this field.
+                "alive": looks_alive(session.pid),
             }
             for session in self.store.sessions
         ]
@@ -599,6 +614,8 @@ class MemoryToolset:
                 # to.
                 "max_address": format_address(MAX_ADDRESS),
                 "max_offset_magnitude": format_address(MAX_OFFSET_MAGNITUDE),
+                "max_open_sessions": MAX_OPEN_SESSIONS,
+                "max_scans_per_session": MAX_SCANS_PER_SESSION,
             },
             "open_sessions": sessions,
         }
@@ -771,7 +788,17 @@ class MemoryToolset:
                 "Could not open pid %d: %s. %s" % (pid, error, _permission_hint())
             ) from None
 
-        session = self.store.open(process, pid, name)
+        try:
+            session = self.store.open(process, pid, name)
+        except SessionError:
+            # The handle already exists and the store's cap is checked after
+            # it does, so refusing without closing leaks the resource the cap
+            # protects.
+            try:
+                process.close()
+            except Exception:  # noqa: BLE001 — target may already be gone
+                pass
+            raise
 
         result: Dict[str, Any] = {
             "opened": True,
@@ -796,6 +823,10 @@ class MemoryToolset:
         ``close_process`` or server shutdown; reuse its id rather than
         reopening the same target, since each open costs a handle and resets
         the cached region map.
+
+        At most ``max_open_sessions`` (see ``server_info``) can be open at
+        once; reaching it is refused, not rotated, so ``close_process`` a
+        target you are done with.
 
         Attaching to a process the operator has not pre-approved requires the
         **user's** approval, asked for at the moment you call this. Say which
@@ -2001,7 +2032,8 @@ class MemoryToolset:
         """Yield ``(address, value | None)`` for each address, in one pass.
 
         Uses ``search_by_addresses``, which groups the reads by region so a
-        50 000-address refine is a few hundred syscalls rather than 50 000.
+        refine of a capped result set is a few hundred syscalls rather than one
+        per address.
         """
         yield from session.process.search_by_addresses(
             pytype,

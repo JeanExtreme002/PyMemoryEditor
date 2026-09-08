@@ -437,6 +437,78 @@ class TestAttachApproval:
         assert "did not approve" in text
         assert "Do not retry" in text
 
+    def test_a_full_server_refuses_before_spending_an_approval(self, monkeypatch):
+        """The cap lives in `SessionStore.open`, which runs after the handle is
+        already open — so the user used to be asked, approve, and only then be
+        told the server was full."""
+        from PyMemoryEditor.mcp import session as session_module
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        # Fakes carry arbitrary pids, which the store's reaper reads as dead.
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
+
+        server, toolset, _process = self._build(ServerConfig())
+        for _ in range(MAX_OPEN_SESSIONS):
+            toolset.store.open(FakeProcess(), 4242, "faketarget")
+
+        answerer = Answerer("accept")
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+
+        assert result.is_error is True
+        assert answerer.asked is False, "the user was prompted for an attach that could not happen"
+        assert "close_process" in result.content[0].text
+
+    def test_the_refusal_names_the_target_it_declined(self, monkeypatch):
+        """A model reads this and must not conclude the pid was the problem."""
+        from PyMemoryEditor.mcp import session as session_module
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        # Fakes carry arbitrary pids, which the store's reaper reads as dead.
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
+
+        server, toolset, _process = self._build(ServerConfig())
+        for _ in range(MAX_OPEN_SESSIONS):
+            toolset.store.open(FakeProcess(), 4242, "faketarget")
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        text = asyncio.run(run()).content[0].text
+        assert "faketarget" in text and "4242" in text
+        assert str(MAX_OPEN_SESSIONS) in text
+        # The early path renders the store's message, so it is as actionable
+        # as the late one: every open session, with its scan count.
+        assert "proc-1" in text and "scan" in text
+
+    def test_an_unnamed_target_is_not_refused_as_an_empty_string(self, monkeypatch):
+        """`_name_for_pid` returns "" for a pid missing from the listing.
+
+        The elicitation prompt below this already guards with `or "unknown"`;
+        the refusal did not, so it rendered `attach to "" (pid 4242)`.
+        """
+        from PyMemoryEditor.mcp import session as session_module
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
+        server, toolset, _process = self._build(ServerConfig())
+        monkeypatch.setattr(toolset, "_name_for_pid", lambda pid: "")
+        for _ in range(MAX_OPEN_SESSIONS):
+            toolset.store.open(FakeProcess(), 4242, "faketarget")
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        text = asyncio.run(run()).content[0].text
+        assert 'attach to ""' not in text
+        assert "unknown" in text
+
     def test_cancelling_the_dialog_is_not_approval(self):
         result, toolset = self._open(ServerConfig(), Answerer("cancel"))
         assert result.is_error is True
