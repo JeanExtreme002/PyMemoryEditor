@@ -7,6 +7,7 @@ from .convert import (
     as_writable_c_buffer,
     convert_from_byte_array,
     get_c_type_of,
+    sign_extend_narrow_int,
     prepare_write,
     resolve_bufflength,
     resolve_bufflength_for_value,
@@ -16,7 +17,9 @@ from .convert import (
 from .pattern import PatternLike, compile_pattern
 from .scan import (
     DEFAULT_MAX_REGION_CHUNK,
+    decode_scan_target,
     iter_region_chunks,
+    make_predicate,
     scan_memory,
     scan_memory_for_exact_value,
 )

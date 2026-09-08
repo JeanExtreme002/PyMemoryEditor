@@ -109,16 +109,31 @@ jobs:
     - name: Test with pytest
       env:
         QT_QPA_PLATFORM: offscreen
+      # `--ignore=tests/mcp_server`: the MCP server has its own job
+      # (`build-mcp`) so this matrix keeps measuring the library and the app,
+      # at the wall clock it always had. Its tests walk a live process's whole
+      # address space, which on macOS is ~390 GiB (see build-macos below) --
+      # running them in every cell of a 4x2 matrix plus macOS plus speed paid
+      # that cost eight times over, and it pushed build-macos past its
+      # 20-minute budget.
+      #
       # --cov-fail-under is the real, in-repo coverage gate (deterministic and
-      # independent of any external service). It's a conservative floor: the
-      # full suite measures ~87% on a given OS today (coverage.py only counts
-      # the host backend + shared code — the two foreign backends aren't
-      # imported, so they don't drag the number down per-platform). 60 leaves
-      # headroom for a less-covered backend / Python-version variance while
-      # still catching any large regression. Ratchet it up once the per-OS
-      # numbers settle on Codecov.
+      # independent of any external service), and `--cov-config` is what keeps
+      # it meaningful now that the MCP suite lives in `build-mcp`.
+      #
+      # Without it this job measures PyMemoryEditor/mcp -- 918 statements it
+      # never runs -- as uncovered, which is a measurement of absence, not of
+      # quality. It also varies by platform in a way the gate cannot absorb:
+      # measured that way, Linux came out at 46% and macOS at 59%, so a floor
+      # picked from macOS alone failed all eight matrix cells. Scoped to the
+      # library, the numbers are 87% on macOS and 66% on Linux, and 60 is the
+      # same floor this job carried before the MCP server existed.
+      #
+      # (coverage.py only counts the host backend + shared code -- the two
+      # foreign backends aren't imported, which is most of that platform
+      # spread.) Ratchet up once the numbers settle on Codecov.
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       # Upload from every matrix cell so Codecov merges each OS's backend
       # coverage into one combined view (each platform exercises a different
@@ -169,7 +184,7 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       # Flag mirrors the matrix format (`runner.os` is "macOS" here) so Codecov
       # groups this cell alongside the Linux and Windows uploads.
@@ -228,12 +243,116 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
     - name: Upload coverage to Codecov
       if: always()
       uses: codecov/codecov-action@v5
       with:
         files: ./coverage.xml
         flags: speed-Linux-py3.12
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+
+  # The MCP server gets its own job rather than a row in the matrix above.
+  #
+  # Its tests are the expensive ones: `test_live.py` and half of
+  # `test_fake_fidelity.py` attach to the running test process and scan its
+  # entire address space, which is exactly the workload the build-macos note
+  # below measures at ~390 GiB. Running them in all ten cells of the other
+  # jobs multiplied that by ten and timed macOS out; running them once per OS
+  # keeps the platform coverage that actually matters and costs a fraction.
+  #
+  # One Python version, three operating systems -- the opposite shape from the
+  # matrix above, and deliberately so. Nothing in this package is
+  # version-sensitive (it is plain 3.10+ typing over the library's own API),
+  # but plenty of it is platform-sensitive: the Windows-only read-only handle,
+  # macOS `task_for_pid`, and the per-platform process enumeration and denylist.
+  # The one Windows-only bug this suite has caught so far was a test reading a
+  # UTF-8 file with the locale's encoding, which only cp1252 could fail on.
+  #
+  # NumPy is installed for the same reason build-macos installs it: without the
+  # vectorized scan path, walking a macOS address space takes ~8x longer.
+  build-mcp:
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    # Hard ceiling, same purpose as build-macos'. The suite itself takes
+    # ~15s of pytest on all three runners; this is generous on purpose.
+    #
+    # It was briefly 45 while this job took 20+ minutes everywhere. The cause
+    # was not scan cost: one test parametrized a 200 000-character value, so
+    # its pytest id was 400 KB, and the Actions log uploader spent ~150s per
+    # such line. Five lines, twenty minutes. Fixed at the test.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # `scan_heavy` -- the tests that scan a *live* process's whole address
+        # space -- runs on Linux only. The cost is wildly platform-dependent: a
+        # macOS process exposes ~390 GiB across ~145 regions and Windows is not
+        # much better, so on a runner each of those scans is minutes. Measured
+        # on the previous attempt: this job took 22m21s on macOS and hit its
+        # timeout at 30m on Windows, while the same suite is 18s locally.
+        #
+        # Nothing is lost by pinning them to Linux. What the other two OSes are
+        # here for is the platform-specific code -- the Windows-only read-only
+        # handle, macOS task_for_pid, per-platform enumeration and the
+        # truncated-name denylist -- none of which are scans. The library's own
+        # live-scan coverage on those platforms comes from `build` and
+        # `build-macos`.
+        #
+        # Set through PYTEST_ADDOPTS rather than the run: line because the
+        # Windows runner's default shell is pwsh, and `-m "not scan_heavy"`
+        # would need different quoting there than on bash.
+        include:
+          - os: ubuntu-latest
+            addopts: ''
+          - os: windows-latest
+            addopts: '-m "not scan_heavy"'
+          - os: macos-latest
+            addopts: '-m "not scan_heavy"'
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install dependencies (MCP SDK + NumPy speed extra)
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev,speed]"
+    - name: Test the MCP server
+      # Coverage is scoped to the package under test, via both --cov and
+      # .coveragerc-mcp. Measured against the whole package instead, this gate
+      # came out at 71% on macOS but 60.4% on Linux -- four tenths of a point
+      # above a floor of 60, on a number mostly about code this job does not
+      # target. Scoped, the MCP package is 91% covered by its own suite on
+      # macOS and 90.4% on Linux, so 80 leaves real headroom.
+      env:
+        PYTEST_ADDOPTS: ${{ matrix.addopts }}
+      # `-q --durations=25` rather than the `-v -s` the library jobs use. This
+      # job's timing is the open question -- 20 minutes on a runner against
+      # 12.5s in a container, and cutting the process-table walks 14x changed
+      # nothing -- and `-v -s` emitted 977 log lines in the first 8 seconds,
+      # so GitHub truncated the log long before the part that would say which
+      # tests were slow. Quiet output keeps the log small enough that the
+      # duration table at the end survives.
+      #
+      # -p no:pytest-qt: the dev extra brings pytest-qt, whose plugin imports
+      # QtGui at startup. The name is the entry point's, hyphen included --
+      # `-p no:pytestqt` silently does nothing, which is how this failed twice.
+      # It dies with `ImportError: libEGL.so.1` on a bare Linux runner; the
+      # library jobs apt-install a pile of X libraries for it. This job runs no
+      # Qt tests, so it disables the plugin instead of paying for them.
+      run: |
+        pytest tests/mcp_server -p no:pytest-qt -q --durations=25 -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
+    - name: Upload coverage to Codecov
+      # Its own flag, so the merged report shows MCP coverage alongside the
+      # library's instead of one overwriting the other.
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        files: ./coverage.xml
+        flags: mcp-${{ runner.os }}-py3.12
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false

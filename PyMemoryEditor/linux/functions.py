@@ -32,6 +32,7 @@ from ..util import (
     _validate_pytype,
     as_writable_c_buffer,
     get_c_type_of,
+    sign_extend_narrow_int,
     values_to_bytes,
 )
 from ..util.pattern import PatternLike, compile_pattern
@@ -369,13 +370,23 @@ def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int
     _validate_pytype(pytype)
 
     data = get_c_type_of(pytype, bufflength)
-    _process_vm_readv(pid, addressof(data), address, sizeof(data))
+    # `bufflength`, not `sizeof(data)`. The two differ whenever the width
+    # rounds up to a wider C type — `int` at 3 bytes gets a `c_int32` — and
+    # passing the buffer size made this backend read 4 bytes where Windows and
+    # macOS read 3, so the same call returned a different value per platform
+    # (0x11223344 here against 0x223344 there). `get_c_type_of` guarantees
+    # `sizeof(data) >= bufflength`, so reading into the front of a larger,
+    # zero-initialised buffer is safe and matches the other two backends.
+    _process_vm_readv(pid, addressof(data), address, bufflength)
 
     if pytype is str:
         return bytes(data).decode("utf-8", errors="replace")
     elif pytype is bytes:
         return bytes(data)
     else:
+        # Narrow widths pad with zeroes, which reads a signed value as
+        # unsigned -- and a scan for the same bytes is signed.
+        sign_extend_narrow_int(data, pytype, bufflength)
         return data.value
 
 
@@ -525,7 +536,12 @@ def write_process_memory(
     data = get_c_type_of(pytype, bufflength)
     data.value = value.encode() if isinstance(value, str) else value
 
-    _process_vm_writev(pid, addressof(data), address, sizeof(data))
+    # `bufflength`, not `sizeof(data)` — this one corrupted memory rather than
+    # merely disagreeing. A write of 3 bytes sized a 4-byte `c_int32` and then
+    # wrote all four, destroying a byte the caller never asked to touch, while
+    # Windows and macOS wrote exactly three. Verified on Linux: `w=3` touched 4
+    # bytes and `w=5` touched 8.
+    _process_vm_writev(pid, addressof(data), address, bufflength)
     return value
 
 

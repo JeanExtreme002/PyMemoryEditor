@@ -11,6 +11,11 @@ app:
       - any-glob-to-any-file:
           - "PyMemoryEditor/app/**"
 
+mcp:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "PyMemoryEditor/mcp/**"
+
 linux:
   - changed-files:
       - any-glob-to-any-file:

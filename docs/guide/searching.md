@@ -36,9 +36,10 @@ memory.
    :no-index:
 
    :param Type pytype: ``bool``, ``int``, ``float``, ``str`` or ``bytes``.
-   :param int bufflength: value size in bytes — typically 1, 2, 4 or 8, though
-      any positive width is accepted (for ``int`` an unusual width such as 3 or 6
-      is rounded up to the next C integer type). **Optional** —
+   :param int bufflength: value size in bytes — typically 1, 2, 4 or 8. For
+      ``int`` an unusual width such as 3 or 6 is accepted (rounded up to the
+      next C integer type, and sign-extended on read); for ``float`` only 4 and
+      8 are, since IEEE-754 has no form between them. **Optional** —
       defaults to ``None``: numeric types use their default width and ``str`` /
       ``bytes`` infer it from the encoded length of ``value``. Since it is
       optional, pass ``value`` by keyword when omitting it
@@ -165,6 +166,10 @@ it raises `OSError` instead of yielding `None`.
       (defaults to ``None`` → int→4, float→8, bool→1). ``str`` / ``bytes`` still
       require an explicit size — there is no value to infer it from, only
       addresses to read. Pass ``addresses`` by keyword when omitting it.
+      Unusual ``int`` widths behave exactly as in ``search_by_value`` — 3 or 6
+      rounds up to the next C integer type, only the requested bytes are read,
+      and the value is sign-extended — so this call, ``read_process_memory``
+      and a scan for the same bytes all agree on the same address.
    :param Sequence[int] addresses: addresses to inspect.
    :param bool raise_error: when ``True``, raises ``OSError`` instead of yielding
       ``None`` for an address that is inside a mapped region but fails to read.

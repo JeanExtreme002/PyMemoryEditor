@@ -1,0 +1,25 @@
+# Coverage config for the `build-mcp` CI job, which runs
+# `pytest tests/mcp_server`.
+#
+# The mirror of .coveragerc-lib: that job tests the MCP server, so it measures
+# the MCP server. Measuring the whole package instead made the gate depend on
+# which platform's backend happened to be importable -- 71% on macOS but 60.4%
+# against a floor of 60 on Linux, i.e. four tenths of a point of headroom on a
+# number that was mostly about code the job does not target.
+#
+# Scoped this way, both jobs carry a floor that means something, and Codecov
+# merges the two halves into one view.
+[run]
+# A plain value, not a TOML list: this is an INI file, and
+# coverage's parser read `["PyMemoryEditor/mcp"]` as a directory literally
+# named that. It only appeared to work because CI always passes an
+# explicit --cov=PATH, which overrides `source`; `coverage
+# --rcfile=` or a bare `pytest --cov` measured nothing and reported
+# "No data to report".
+source = PyMemoryEditor/mcp
+omit =
+    PyMemoryEditor/mcp/__main__.py
+
+[report]
+show_missing = True
+skip_empty = True

@@ -1,0 +1,30 @@
+# Coverage config for the library/app CI jobs, which run
+# `pytest tests --ignore=tests/mcp_server`.
+#
+# It exists for one reason: those jobs do not exercise PyMemoryEditor/mcp, and
+# `source` in pyproject.toml is the whole package with no per-invocation way to
+# drop a subpackage. Measuring 918 statements the job deliberately never runs
+# turned the gate into a measurement of absence -- it put Linux at 46% and
+# macOS at 59% against a floor calibrated on macOS alone, so eight matrix
+# cells failed on a number that says nothing about the library.
+#
+# With mcp/ omitted here, the library floor stays exactly where it was before
+# the MCP server existed (60), and `build-mcp` measures mcp/ under the default
+# pyproject config. A developer running plain `pytest` still measures
+# everything, which is the honest full-suite number.
+[run]
+# A plain value, not a TOML list: this is an INI file, and
+# coverage's parser read `["PyMemoryEditor"]` as a directory literally
+# named that. It only appeared to work because CI always passes an
+# explicit --cov=PATH, which overrides `source`; `coverage
+# --rcfile=` or a bare `pytest --cov` measured nothing and reported
+# "No data to report".
+source = PyMemoryEditor
+omit =
+    PyMemoryEditor/app/*
+    PyMemoryEditor/__main__.py
+    PyMemoryEditor/mcp/*
+
+[report]
+show_missing = True
+skip_empty = True

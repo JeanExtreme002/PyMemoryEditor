@@ -276,8 +276,71 @@ def convert_from_byte_array(
         return cast(T, bytes(byte_array).decode("utf-8", errors="replace"))
 
     c_value = get_c_type_of(pytype, length)
+    width = ctypes.sizeof(c_value)
+
+    if width > length:
+        # An unusual width rounds up to a wider C type -- `int` at 3 bytes gets
+        # a `c_int32` -- so `byte_array` is narrower than `from_buffer` needs
+        # and it raised `ValueError: Buffer size too small (3 instead of at
+        # least 4 bytes)`. Nothing surfaced that: `iter_values_for_addresses`
+        # catches ValueError and yields `(address, None)`, so
+        # `search_by_addresses(int, 3, addresses)` reported every address as
+        # unreadable while `read_process_memory(pid, address, int, 3)` returned
+        # the value fine. A silent disagreement between two ways of reading the
+        # same bytes is worse than either behaviour on its own.
+        #
+        # Copying into the front of the zero-initialised value is exactly what
+        # the three backends' read path does (see `read_process_memory`: it
+        # reads `bufflength` bytes into a buffer that `get_c_type_of` may have
+        # sized wider), so the two agree by construction rather than by
+        # coincidence.
+        raw = bytes(byte_array)[:length]
+        ctypes.memmove(ctypes.byref(c_value), raw, len(raw))
+        sign_extend_narrow_int(c_value, pytype, length)
+        return c_value.value
 
     return c_value.__class__.from_buffer(byte_array).value
+
+
+def sign_extend_narrow_int(c_value: Any, pytype: Type, length: int) -> None:
+    """Sign-extend, in place, an ``int`` read into a wider C buffer.
+
+    A width that is not 1, 2, 4 or 8 rounds up to the next C integer type, and
+    the backends read ``length`` bytes into the front of that zero-initialised
+    buffer. The remaining bytes therefore stay zero, which reads every narrow
+    value as unsigned: ``FF FF FF`` at width 3 came back as 16777215.
+
+    A scan disagreed. ``decode_scan_target`` and the unusual-width branch of
+    ``scan_memory`` both pass ``signed=True`` for ``int``, so
+    ``search_by_value(int, 3, value=-1)`` encodes ``FF FF FF``, matches the
+    address, and then every way of reading it reported 16777215 -- the library
+    finding an address for -1 and immediately denying it holds -1.
+
+    Signed is the half that has to win: every C type this library uses for
+    ``int`` is signed (``c_int8`` through ``c_int64``), there is no unsigned
+    ``pytype`` to express the other intent, and the scan is signed on both of
+    its own sides. So the padding is filled with ``FF`` when the value's top
+    bit is set, which is what a wider signed type would have held.
+
+    No-op for anything but a narrow ``int`` -- ``float`` padding is not a sign
+    extension, and widths 1, 2, 4 and 8 have no padding to fill.
+
+    Assumes a little-endian host, as the rest of this design does: reading N
+    bytes into the *front* of a wider buffer only produces the right number
+    there.
+    """
+    if pytype is not int or length < 1:
+        return
+
+    width = ctypes.sizeof(c_value)
+    if width <= length:
+        return
+
+    raw = (ctypes.c_ubyte * width).from_buffer(c_value)
+
+    if raw[length - 1] & 0x80:
+        for index in range(length, width):
+            raw[index] = 0xFF
 
 
 def value_to_bytes(pytype: Type, bufflength: int, value) -> bytes:
@@ -330,28 +393,109 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
     `ctypes._SimpleCData` subclass instance (for numeric types) or a
     `ctypes.Array[c_char]` (for str/bytes), which don't share a common base
     that mypy can reason about.
+
+    A width *smaller* than the chosen C type is fine and intentional — an
+    ``int`` of 3 bytes rounds up to ``c_int32`` and the backend simply reads 3
+    bytes into a 4-byte buffer (then sign-extends the padding, see
+    :func:`sign_extend_narrow_int`). A width *larger* than the type's widest C
+    representation is not: ``length`` is what the callers then hand to
+    ``ReadProcessMemory`` / ``mach_vm_read`` / the ``c_byte * length`` cast in
+    :func:`value_to_bytes`, while the buffer they sized through here saturated
+    at 8 bytes (1 for ``bool``). ``get_c_type_of(bool, 8)`` returning a 1-byte
+    ``c_bool`` meant an 8-byte read wrote 7 bytes past it — heap corruption in
+    the *calling* process, from nothing but a bad width argument.
+
+    So the size is verified against the request rather than assumed. Every
+    buffer in the library is sized through this function, which makes it the
+    one place the invariant can be enforced for all of them.
+
+    :raises ValueError: if ``length`` is negative; if it is zero for anything
+        but ``str`` / ``bytes`` (which are exempt — see below); if it exceeds
+        the widest C representation of ``pytype``; or if it is a ``float``
+        width other than 4 or 8 (IEEE-754 has no form between them).
     """
+    if length < 0:
+        raise ValueError("bufflength must not be negative (got %d)." % length)
+
     if pytype is str or pytype is bytes:
-        return ctypes.create_string_buffer(length)
+        # Zero is allowed here and only here: ``prepare_write(str, None, "")``
+        # yields a length of 0, and writing an empty value has always been a
+        # successful no-op on the public API. Rejecting it outright was a
+        # silent behaviour change on a documented contract.
+        # `create_string_buffer(0)` already returns a zero-length
+        # `c_char_Array_0`, identical to `(c_char * 0)()`, so the conditional
+        # that used to be here had two arms that did the same thing.
+        value: Any = ctypes.create_string_buffer(length)
 
     elif pytype is int:
 
         if length == 1:
-            return ctypes.c_int8()
-        if length == 2:
-            return ctypes.c_int16()
-        if length <= 4:
-            return ctypes.c_int32()
-        return ctypes.c_int64()
+            value = ctypes.c_int8()
+        elif length == 2:
+            value = ctypes.c_int16()
+        elif length <= 4:
+            value = ctypes.c_int32()
+        else:
+            value = ctypes.c_int64()
 
     elif pytype is float:
 
         if length == 4:
-            return ctypes.c_float()
-        return ctypes.c_double()
+            value = ctypes.c_float()
+        else:
+            value = ctypes.c_double()
 
     elif pytype is bool:
-        return ctypes.c_bool()
+        value = ctypes.c_bool()
 
     else:
         raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    # After the dispatch, not inside it. Sitting in the elif chain, this test
+    # ran before the unsupported-type branch could: `get_c_type_of(Foo, 0)`
+    # complained about the width instead of the type, and for a `pytype` with
+    # no `__name__` -- a string, say -- formatting the message raised
+    # AttributeError, which is neither documented nor caught by the
+    # `except ValueError` in the MCP toolset or in any of the three backends.
+    if length < 1 and pytype is not str and pytype is not bytes:
+        # str/bytes are exempt: `prepare_write(str, None, "")` yields a length
+        # of 0 and writing an empty value has always been a successful no-op on
+        # the public API. Moving this check out of the elif chain above (so the
+        # unsupported-type branch is reachable at length 0) briefly took that
+        # exemption with it.
+        raise ValueError(
+            "bufflength must be at least 1 byte for %s (got %d)."
+            % (getattr(pytype, "__name__", pytype), length)
+        )
+
+    size = ctypes.sizeof(value)
+    if size < length:
+        raise ValueError(
+            "bufflength %d is too wide for %s: its widest C representation is "
+            "%d byte%s. Reading or writing %d bytes through a %d-byte buffer "
+            "would corrupt this process's own memory."
+            % (length, pytype.__name__, size, "" if size == 1 else "s",
+               length, size)
+        )
+
+    # After the too-wide check, so `float` at 9 still gets that more precise
+    # message.
+    #
+    # An `int` narrower than its C type is meaningful -- 3 bytes is a real
+    # 24-bit field, and the read sign-extends it. A `float` is not: IEEE-754
+    # has a 4-byte and an 8-byte form and nothing in between, so 3 bytes
+    # padded into a `c_double` is not a narrow float, it is three real bytes
+    # and five zeroes reinterpreted as a mantissa. That yields a plausible
+    # number from bytes nobody read: `convert_from_byte_array(b"\x11" * 3,
+    # float, 3)` came back as 5.52603e-318, and `read_process_memory(.., float,
+    # 3)` did the same. A number that looks like a measurement is worse than
+    # an error, which is the whole reason the MCP layer advertises (4, 8) only.
+    if pytype is float and length not in (4, 8):
+        raise ValueError(
+            "bufflength %d is not a valid width for float: IEEE-754 has a "
+            "4-byte (c_float) and an 8-byte (c_double) representation and "
+            "nothing between them. Use 4 or 8."
+            % length
+        )
+
+    return value

@@ -24,6 +24,10 @@ keywords = [
     "debugging",
     "introspection",
     "ctypes",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "llm-tools",
 ]
 
 classifiers = [
@@ -70,6 +74,15 @@ app = [
   "PySide6>=6.5",
   "psutil>=5.9,<7",
 ]
+# The Model Context Protocol server (PyMemoryEditor.mcp), which lets an AI
+# assistant drive the scan/refine/read loop. Only the protocol layer needs the
+# SDK: PyMemoryEditor.mcp.toolset deliberately imports nothing from `mcp`, so
+# the tools stay testable and the core library stays dependency-free.
+# Pinned to 2.x — the SDK renamed FastMCP to MCPServer and switched its models
+# to snake_case in 2.0, so 1.x cannot run this server.
+mcp = [
+  "mcp>=2,<3",
+]
 # NOTE: NumPy is intentionally NOT listed here. The default test suite must
 # run on the pure-Python scan path so it stays covered. The NumPy fast path
 # (the `speed` extra) is exercised by a dedicated CI job that installs
@@ -88,6 +101,10 @@ dev = [
   # PySide6 and psutil (the latter only in the app, not the core library).
   "PySide6>=6.5",
   "psutil>=5.9,<7",
+  # MCP SDK: the toolset tests run without it, but the server-wiring tests
+  # (tool registration, schemas, the read-only gate) need the real SDK rather
+  # than a mock of it.
+  "mcp>=2,<3",
 ]
 
 [project.scripts]
@@ -95,6 +112,9 @@ dev = [
 # app from a terminal (#76). Library callers should use main() directly, which
 # installs no signal handler.
 pymemoryeditor = "PyMemoryEditor.app.application:main_cli"
+# The MCP server. MCP clients launch this by name (or as
+# `python -m PyMemoryEditor.mcp`) and speak the protocol over stdio.
+pymemoryeditor-mcp = "PyMemoryEditor.mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/JeanExtreme002/PyMemoryEditor"
@@ -143,6 +163,8 @@ packages = ["PyMemoryEditor"]
 exclude = [
     "/.github",
     "/codecov.yml",
+    "/.coveragerc-lib",
+    "/.coveragerc-mcp",
     "/scripts",
 ]
 
@@ -158,7 +180,11 @@ build-backend = "hatchling.build"
 # track regressions against.
 [tool.coverage.run]
 source = ["PyMemoryEditor"]
-omit = ["PyMemoryEditor/app/*", "PyMemoryEditor/__main__.py"]
+omit = [
+    "PyMemoryEditor/app/*",
+    "PyMemoryEditor/__main__.py",
+    "PyMemoryEditor/mcp/__main__.py",
+]
 
 [tool.coverage.report]
 show_missing = true
@@ -171,12 +197,20 @@ skip_empty = true
 #
 # Fast vs slow split:
 #   pytest -m "not slow"        # ~30 s — unit/property/GUI tests only.
-#   pytest                      # ~20 min — everything, including the live
-#                               # self-process integration suite.
+#   pytest                      # everything, including the live self-process
+#                               # integration suite.
+#
+# CI splits by directory rather than by marker: the library/app jobs run
+# `pytest tests --ignore=tests/mcp_server` and `build-mcp` runs
+# `pytest tests/mcp_server`. The MCP suite attaches to the running test
+# process and scans its whole address space, which on macOS is ~390 GiB, so
+# paying that in all ten library cells timed the macOS job out. Locally the
+# two halves are ~60 s and ~22 s.
 # Mark a test (or set ``pytestmark = pytest.mark.slow`` at module scope) to
 # add it to the slow bucket — see tests/test_editor.py for the pattern.
 [tool.pytest.ini_options]
 addopts = "-n auto --dist=loadfile"
 markers = [
     "slow: integration tests that read/scan the current process's whole address space (minutes, not seconds)",
+    "scan_heavy: tests that scan a *live* process's entire address space. Separated from `slow` because the cost is wildly platform-dependent: a macOS process exposes ~390 GiB across ~145 regions and a Windows one is not much better, so on a CI runner each scan is minutes rather than the ~1s it takes on a developer machine. CI runs these on Linux only (see the build-mcp job); the library's own live-scan coverage on the other two platforms comes from the build/build-macos jobs.",
 ]

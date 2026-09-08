@@ -316,6 +316,12 @@ class AbstractProcess(ABC):
             from — only addresses to read. Since ``bufflength`` is optional,
             pass ``addresses`` by keyword when omitting it:
             ``search_by_addresses(int, addresses=[0x1000, 0x1004])``.
+            An unusual ``int`` width rounds up to the next C integer type, as
+            in :meth:`search_by_value`; only the requested bytes are read, and
+            the value is sign-extended — so this method,
+            :meth:`read_process_memory` and a scan for the same bytes all
+            agree. Widths 3, 5, 6 and 7 used to yield ``None`` here while the
+            direct read succeeded.
         :param addresses: the addresses to read. Required.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
@@ -339,9 +345,16 @@ class AbstractProcess(ABC):
         for the provided value, returning the found addresses.
 
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
-            any positive width is accepted (for ``int`` an unusual width such as
-            3 or 6 is rounded up to the next C integer type). Optional — defaults
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. For
+            ``int``, an unusual width such as 3 or 6 is a real narrow field: it
+            rounds up to the next C integer type and the value is
+            sign-extended. For ``float`` only 4 and 8 are accepted — IEEE-754
+            has no form between them, so a narrower width would reinterpret
+            unread bytes as a mantissa and return a plausible-looking number.
+            A width wider than the type's largest C representation (over 8 for
+            ``int``/``float``, over 1 for ``bool``) is rejected with
+            ``ValueError``, because the buffer would be smaller than the
+            read. Optional — defaults
             to ``None``: numeric types (int, float, bool) use their default
             width (int→4, float→8, bool→1) and ``str`` / ``bytes`` infer it from
             the encoded length of ``value``. Since it is optional, pass ``value``
@@ -439,9 +452,14 @@ class AbstractProcess(ABC):
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
-            any positive width is accepted (for ``int`` an unusual width such as
-            3 or 6 is rounded up to the next C integer type). For numeric types
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. For
+            ``int``, an unusual width such as 3 or 6 rounds up to the next C
+            integer type and the value is sign-extended, so it agrees with what
+            a scan for the same bytes finds. For ``float`` only 4 and 8 are
+            accepted (IEEE-754 has no form between them). A width wider than
+            the type's largest C representation (over
+            8 for ``int``/``float``, over 1 for ``bool``) raises ``ValueError``,
+            because the buffer would be smaller than the read. For numeric types
             (int, float, bool) you may omit this; defaults are int→4, float→8,
             bool→1. str and bytes require an explicit size.
 
