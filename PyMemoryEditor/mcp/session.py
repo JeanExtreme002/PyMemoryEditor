@@ -213,6 +213,18 @@ class SessionStore:
             self._sessions[session_id] = session
             return session
 
+    def at_capacity(self) -> bool:
+        """Whether :meth:`open` would refuse right now.
+
+        Lets a caller fail before doing something expensive that the refusal
+        would waste — the protocol layer asks this before prompting the user,
+        since spending an approval on an attach that cannot happen is worse
+        than refusing outright. :meth:`open` stays the authority: this is a
+        hint, and the two can differ under a concurrent open.
+        """
+        with self._lock:
+            return len(self._sessions) >= MAX_OPEN_SESSIONS
+
     def get(self, session_id: str) -> Session:
         """Look up a session, or explain how to obtain a valid id."""
         known = "none"

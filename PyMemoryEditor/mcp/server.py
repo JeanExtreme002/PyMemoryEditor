@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple
 
 from .. import __version__
 from .config import ServerConfig, parse_args
-from .session import SessionError, host_platform
+from .session import MAX_OPEN_SESSIONS, SessionError, host_platform
 from .toolset import MemoryToolset, ToolError
 
 if TYPE_CHECKING:  # pragma: no cover - import cost avoided at runtime
@@ -237,6 +237,18 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
 
         if not _can_elicit(ctx):
             raise SdkToolError(decision.reason)
+
+        # Before the prompt, not after. The cap lives in SessionStore.open,
+        # which runs once the handle is already open -- so without this the
+        # user was asked to approve an attach, approved it, and then got told
+        # the server was full. An approval is the most expensive step here and
+        # the one thing this server must not spend carelessly.
+        if toolset.store.at_capacity():
+            raise SdkToolError(
+                "Not asking to attach to \"%s\" (pid %d): this server already "
+                "has %d processes open, which is the limit. Close one with "
+                "close_process first." % (found_name, found_pid, MAX_OPEN_SESSIONS)
+            )
 
         try:
             answer = await ctx.elicit(

@@ -437,6 +437,44 @@ class TestAttachApproval:
         assert "did not approve" in text
         assert "Do not retry" in text
 
+    def test_a_full_server_refuses_before_spending_an_approval(self):
+        """The cap lives in `SessionStore.open`, which runs after the handle is
+        already open — so the user used to be asked, approve, and only then be
+        told the server was full."""
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        server, toolset, _process = self._build(ServerConfig())
+        for _ in range(MAX_OPEN_SESSIONS):
+            toolset.store.open(FakeProcess(), 4242, "faketarget")
+
+        answerer = Answerer("accept")
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+
+        assert result.is_error is True
+        assert answerer.asked is False, "the user was prompted for an attach that could not happen"
+        assert "close_process" in result.content[0].text
+
+    def test_the_refusal_names_the_target_it_declined(self):
+        """A model reads this and must not conclude the pid was the problem."""
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        server, toolset, _process = self._build(ServerConfig())
+        for _ in range(MAX_OPEN_SESSIONS):
+            toolset.store.open(FakeProcess(), 4242, "faketarget")
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        text = asyncio.run(run()).content[0].text
+        assert "faketarget" in text and "4242" in text
+        assert str(MAX_OPEN_SESSIONS) in text
+
     def test_cancelling_the_dialog_is_not_approval(self):
         result, toolset = self._open(ServerConfig(), Answerer("cancel"))
         assert result.is_error is True

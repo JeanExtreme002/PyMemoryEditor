@@ -650,10 +650,18 @@ class TestTheDocsQuoteTheRealLimits:
     def test_the_open_session_cap_matches_the_constant(self):
         from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
 
-        doc = self._mcp_doc().lower()
-        word = self.WORDS[MAX_OPEN_SESSIONS]
+        # Looked up, not indexed. This test exists to turn a silent doc/code
+        # divergence into an actionable message, and `WORDS[12]` would have
+        # replaced that with `KeyError: 12` — loud, but saying nothing about
+        # what to do.
+        word = self.WORDS.get(MAX_OPEN_SESSIONS)
+        assert word is not None, (
+            "MAX_OPEN_SESSIONS is %d and WORDS has no spelling for it. Add "
+            "one, then update the open_process row in docs/mcp.md to match."
+            % MAX_OPEN_SESSIONS
+        )
 
-        assert "%s targets can be open at once" % word in doc, (
+        assert "%s targets can be open at once" % word in self._mcp_doc().lower(), (
             "docs/mcp.md does not state MAX_OPEN_SESSIONS=%d (%r)"
             % (MAX_OPEN_SESSIONS, word)
         )
