@@ -1,0 +1,177 @@
+# -*- coding: utf-8 -*-
+
+"""
+Argument parsing for the MCP tools.
+
+Every value an MCP client sends arrives as JSON, and a model composes it from
+whatever it read a moment ago — a debugger's hex, a previous tool result, its
+own arithmetic. These tests pin the cases where a forgiving parser would be
+worse than a strict one: an address that silently comes out 4096 bytes off is a
+write into unrelated state.
+"""
+
+import pytest
+
+from PyMemoryEditor.mcp.toolset import (
+    ToolError,
+    format_address,
+    format_value,
+    parse_address,
+    parse_bufflength,
+    parse_scan_type,
+    parse_value,
+    parse_value_type,
+)
+
+
+class TestParseAddress:
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("0x1000", 0x1000),
+            ("0X1000", 0x1000),
+            ("0x7FFD1234", 0x7FFD1234),
+            ("4096", 4096),
+            ("0x0", 0),
+            ("0", 0),
+            (4096, 4096),
+            ("0x1_000", 0x1000),
+            ("  0x1000  ", 0x1000),
+        ],
+    )
+    def test_accepted_forms(self, raw, expected):
+        assert parse_address(raw) == expected
+
+    def test_bare_hex_is_accepted_when_it_cannot_be_decimal(self):
+        # "DEADBEEF" has no decimal reading, so there is nothing to guess at.
+        assert parse_address("DEADBEEF") == 0xDEADBEEF
+
+    def test_ambiguous_bare_digits_are_read_as_decimal(self):
+        # The dangerous case: "1000" is legal hex *and* legal decimal. Choosing
+        # hex would move every such address by a factor of ~4. Decimal matches
+        # int() and is the documented rule.
+        assert parse_address("1000") == 1000
+
+    @pytest.mark.parametrize("raw", ["", "   ", "0x", "nonsense", "12zz", None])
+    def test_unparseable_raises_tool_error(self, raw):
+        with pytest.raises(ToolError):
+            parse_address(raw)
+
+    @pytest.mark.parametrize("raw", ["-1", "-0x10", -5])
+    def test_negative_addresses_rejected(self, raw):
+        with pytest.raises(ToolError, match="negative"):
+            parse_address(raw)
+
+    def test_bool_is_not_an_address(self):
+        # bool is an int subclass, so a naive isinstance check would read
+        # True as address 1.
+        with pytest.raises(ToolError, match="boolean"):
+            parse_address(True)
+
+    def test_error_names_the_field(self):
+        with pytest.raises(ToolError, match="target_address"):
+            parse_address("???", field="target_address")
+
+    def test_round_trips_through_format(self):
+        for address in (0, 0x1000, 0x7FFFFFFFFFFF, 2**63):
+            assert parse_address(format_address(address)) == address
+
+    def test_survives_addresses_above_the_double_precision_limit(self):
+        # The reason addresses are strings: 2**53 + 1 is not representable as a
+        # JSON number in a JS client, and a rounded address is a wrong address.
+        address = 2**53 + 1
+        assert parse_address(format_address(address)) == address
+
+
+class TestParseValue:
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [("100", 100), ("0x64", 100), ("-7", -7), ("-0x7", -7), (100, 100), ("1_000", 1000)],
+    )
+    def test_int_forms(self, raw, expected):
+        assert parse_value(int, raw) == expected
+
+    def test_float(self):
+        assert parse_value(float, "1.5") == 1.5
+        assert parse_value(float, "-0.25") == -0.25
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("1", True), ("yes", True),
+        ("false", False), ("0", False), ("no", False), (True, True),
+    ])
+    def test_bool_forms(self, raw, expected):
+        assert parse_value(bool, raw) is expected
+
+    def test_bool_rejects_junk(self):
+        with pytest.raises(ToolError, match="bool"):
+            parse_value(bool, "maybe")
+
+    def test_str_passes_through(self):
+        assert parse_value(str, "Player1") == "Player1"
+
+    @pytest.mark.parametrize("raw", ["DEADBEEF", "de ad be ef", "0xDEADBEEF", "DE_AD_BE_EF"])
+    def test_bytes_from_hex(self, raw):
+        assert parse_value(bytes, raw) == b"\xde\xad\xbe\xef"
+
+    @pytest.mark.parametrize("raw", ["ABC", "zz", ""])
+    def test_bad_hex_rejected(self, raw):
+        with pytest.raises(ToolError, match="hex"):
+            parse_value(bytes, raw)
+
+    def test_int_rejects_junk_with_actionable_message(self):
+        with pytest.raises(ToolError, match="0x"):
+            parse_value(int, "one hundred")
+
+    def test_none_is_rejected(self):
+        with pytest.raises(ToolError, match="required"):
+            parse_value(int, None)
+
+
+class TestFormatValue:
+    def test_bytes_render_as_uppercase_hex(self):
+        assert format_value(b"\xde\xad") == "DEAD"
+
+    def test_other_values_pass_through(self):
+        assert format_value(100) == 100
+        assert format_value(1.5) == 1.5
+        assert format_value("hi") == "hi"
+        assert format_value(None) is None
+
+
+class TestTypesAndScanTypes:
+    @pytest.mark.parametrize("name", ["int", "float", "bool", "str", "bytes", "INT", " Int "])
+    def test_known_value_types(self, name):
+        assert parse_value_type(name) in (int, float, bool, str, bytes)
+
+    def test_unknown_value_type_lists_the_valid_ones(self):
+        with pytest.raises(ToolError, match="bytes"):
+            parse_value_type("uint64")
+
+    def test_known_scan_types(self):
+        name, enum = parse_scan_type("bigger")
+        assert name == "bigger" and enum.name == "BIGGER_THAN"
+
+    def test_unknown_scan_type_lists_the_valid_ones(self):
+        with pytest.raises(ToolError, match="exact"):
+            parse_scan_type("greater_than")
+
+
+class TestParseBufflength:
+    def test_zero_means_default_for_numbers(self):
+        assert parse_bufflength(0, int, required=True) is None
+
+    def test_zero_is_rejected_for_text_on_a_read(self):
+        # A str/bytes read has only an address; nothing says how far to go.
+        with pytest.raises(ToolError, match="bufflength is required"):
+            parse_bufflength(0, str, required=True)
+
+    def test_zero_is_allowed_for_text_on_a_scan(self):
+        # A scan has the value itself to measure.
+        assert parse_bufflength(0, str, required=False) is None
+
+    def test_explicit_width_passes_through(self):
+        assert parse_bufflength(8, int, required=True) == 8
+
+    def test_negative_width_rejected(self):
+        with pytest.raises(ToolError, match="positive"):
+            parse_bufflength(-4, int, required=True)

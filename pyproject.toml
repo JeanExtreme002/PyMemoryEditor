@@ -24,6 +24,10 @@ keywords = [
     "debugging",
     "introspection",
     "ctypes",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "llm-tools",
 ]
 
 classifiers = [
@@ -70,6 +74,15 @@ app = [
   "PySide6>=6.5",
   "psutil>=5.9,<7",
 ]
+# The Model Context Protocol server (PyMemoryEditor.mcp), which lets an AI
+# assistant drive the scan/refine/read loop. Only the protocol layer needs the
+# SDK: PyMemoryEditor.mcp.toolset deliberately imports nothing from `mcp`, so
+# the tools stay testable and the core library stays dependency-free.
+# Pinned to 2.x — the SDK renamed FastMCP to MCPServer and switched its models
+# to snake_case in 2.0, so 1.x cannot run this server.
+mcp = [
+  "mcp>=2,<3",
+]
 # NOTE: NumPy is intentionally NOT listed here. The default test suite must
 # run on the pure-Python scan path so it stays covered. The NumPy fast path
 # (the `speed` extra) is exercised by a dedicated CI job that installs
@@ -88,6 +101,10 @@ dev = [
   # PySide6 and psutil (the latter only in the app, not the core library).
   "PySide6>=6.5",
   "psutil>=5.9,<7",
+  # MCP SDK: the toolset tests run without it, but the server-wiring tests
+  # (tool registration, schemas, the read-only gate) need the real SDK rather
+  # than a mock of it.
+  "mcp>=2,<3",
 ]
 
 [project.scripts]
@@ -95,6 +112,9 @@ dev = [
 # app from a terminal (#76). Library callers should use main() directly, which
 # installs no signal handler.
 pymemoryeditor = "PyMemoryEditor.app.application:main_cli"
+# The MCP server. MCP clients launch this by name (or as
+# `python -m PyMemoryEditor.mcp`) and speak the protocol over stdio.
+pymemoryeditor-mcp = "PyMemoryEditor.mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/JeanExtreme002/PyMemoryEditor"
@@ -158,7 +178,11 @@ build-backend = "hatchling.build"
 # track regressions against.
 [tool.coverage.run]
 source = ["PyMemoryEditor"]
-omit = ["PyMemoryEditor/app/*", "PyMemoryEditor/__main__.py"]
+omit = [
+    "PyMemoryEditor/app/*",
+    "PyMemoryEditor/__main__.py",
+    "PyMemoryEditor/mcp/__main__.py",
+]
 
 [tool.coverage.report]
 show_missing = true

@@ -57,6 +57,13 @@ selective scans:
 ```bash
 pip install "PyMemoryEditor[speed]"
 ```
+
+To let an AI assistant drive the library over the Model Context Protocol, use
+the `mcp` extra (see [below](#let-an-ai-assistant-do-it-mcp)):
+
+```bash
+pip install "PyMemoryEditor[mcp]"
+```
 📖 Full guide at **[Read the Docs](https://pymemoryeditor.readthedocs.io)**.
 
 ---
@@ -81,6 +88,47 @@ That's it — read, write or scan another process in three lines, the same way o
 
 ---
 
+## Let an AI assistant do it (MCP)
+
+PyMemoryEditor ships a **Model Context Protocol server**, so an AI assistant can run the whole loop itself:
+
+> *"Find the health value in my game — it's 100 right now."*
+>
+> It scans, asks you to take damage, refines the matches, and hands you the address.
+
+```bash
+pip install "PyMemoryEditor[mcp]"
+claude mcp add pymemoryeditor -- pymemoryeditor-mcp
+```
+
+Or in any client that reads `mcpServers` JSON (Claude Desktop, editors, …):
+
+```json
+{
+  "mcpServers": {
+    "pymemoryeditor": {
+      "command": "pymemoryeditor-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Fourteen tools cover the full workflow — `scan_value`, `refine_scan`, `scan_pattern`, `read_value`, `find_pointer_paths` and friends — with scan results kept server-side behind a handle, so a 40 000-hit first scan costs a few tokens instead of your whole context.
+
+**You don't pin it to one process up front.** Attaching to a new target prompts *you* — naming the process and pid, with an option to remember your answer — so one registration covers whatever you end up working on:
+
+```text
+Allow PyMemoryEditor to attach to "game.exe" (pid 4821)?
+  [ ] remember   (Approve)  (Decline)
+```
+
+**And nothing happens unattended.** Both `open_process` and `write_value` are tagged so your client confirms *every* call — even in its most permissive auto-approve mode — and a write returns the previous value so it can be undone. OS and credential processes are refused outright. `--read-only` drops the write tool entirely, `--allow-process NAME` pre-approves a target you already trust, and `--allow-any-process` turns prompting off for scripts.
+
+It runs with your privileges and is **not a sandbox** — read the [MCP guide](docs/mcp.md) before pointing it at anything you care about.
+
+---
+
 ## 📖 Documentation
 
 Full documentation lives at **[pymemoryeditor.readthedocs.io](https://pymemoryeditor.readthedocs.io)** — installation, the Cheat Engine workflow, every method and parameter, the GUI app guide, platform notes and troubleshooting.
@@ -94,6 +142,7 @@ A quick map of where to go:
 <tr><td><a href="docs/guide/pointers.md"><b>Pointers</b></a></td><td>Multi-level pointer chains and the live <code>RemotePointer</code>.</td></tr>
 <tr><td><a href="docs/guide/pointer-scan.md"><b>Pointer scan</b></a></td><td>Find static pointers that survive ASLR.</td></tr>
 <tr><td><a href="docs/app.md"><b>The GUI app</b></a></td><td>The bundled Cheat Engine-style scanner.</td></tr>
+<tr><td><a href="docs/mcp.md"><b>The MCP server</b></a></td><td>Let an AI assistant drive the scan/refine loop.</td></tr>
 <tr><td><a href="docs/api/openprocess.md"><b>API reference</b></a></td><td>Every public class, method and parameter.</td></tr>
 <tr><td><a href="docs/platform-notes.md"><b>Platform notes</b></a></td><td>Permissions and quirks on Windows, Linux and macOS.</td></tr>
 <tr><td><a href="docs/troubleshooting.md"><b>Troubleshooting</b></a></td><td>Common errors and how to fix them.</td></tr>

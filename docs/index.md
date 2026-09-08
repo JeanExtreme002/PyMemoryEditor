@@ -113,6 +113,7 @@ installation
 quickstart
 guide/index
 app
+mcp
 ```
 
 ## API Reference
