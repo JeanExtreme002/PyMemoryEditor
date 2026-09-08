@@ -71,21 +71,39 @@ server, which lets an AI assistant run the scan / refine / read loop itself. The
 pip install "PyMemoryEditor[mcp]"
 ```
 
-That installs the `pymemoryeditor-mcp` console script, which an MCP client
-launches for you:
+That installs a `pymemoryeditor-mcp` console script. You do not run it
+yourself — it speaks the protocol over stdin/stdout, so a client launches it.
+Register it once:
 
 ```bash
-pymemoryeditor-mcp
+claude mcp add pymemoryeditor -- pymemoryeditor-mcp
 ```
+
+Or, in any client that reads `mcpServers` JSON (Claude Desktop, editors, …):
+
+```json
+{
+  "mcpServers": {
+    "pymemoryeditor": {
+      "command": "pymemoryeditor-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+No flags either way. You do not name a target when you register it: the server
+asks for your approval before attaching to a process you have not
+pre-approved, so one registration covers whatever you end up working on, and
+your client confirms every write. Pass `--read-only` to drop the write tool
+entirely.
 
 Only the protocol layer needs the SDK — the tool implementations import
 nothing from it, and the core library stays dependency-free either way.
 
-It needs no flags: it asks for your approval before attaching to a process you
-have not pre-approved — so you do not name a target when you configure the
-client — and your client confirms every write. Pass `--read-only` to drop the
-write tool entirely. See the [MCP Server guide](mcp.md) for client
-configuration, the full tool list and the safety model.
+The server runs with your privileges and is **not a sandbox**. See the
+[MCP Server guide](mcp.md) for the full tool list, the safety model and the
+rest of the options.
 
 ## Install from source
 
