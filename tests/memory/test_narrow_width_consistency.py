@@ -16,6 +16,14 @@ widths 3, 5, 6 and 7 silently returned nothing from a perfectly readable
 address.
 
 Both paths now zero-pad into the wider C type, so they agree by construction.
+
+The padding is then sign-extended. Zero padding read every narrow value as
+unsigned, while a scan is signed on both of its own sides
+(``decode_scan_target`` and the unusual-width branch of ``scan_memory`` both
+pass ``signed=True``), so ``search_by_value(int, 3, value=-1)`` matched an
+address that every read then reported as 16777215. Signed wins: every C type
+this library uses for ``int`` is signed, and there is no unsigned ``pytype``
+to express the other intent.
 """
 
 import ctypes
@@ -57,7 +65,7 @@ def test_search_by_addresses_agrees_with_a_direct_read_at_every_int_width(width)
 
 @pytest.mark.parametrize("width", [3, 5, 6, 7])
 def test_a_narrow_int_read_uses_only_the_bytes_it_was_given(width):
-    """The padding must be zeroes, not whatever follows the value in memory."""
+    """The padding must not be whatever follows the value in memory."""
     buffer = ctypes.create_string_buffer(PAYLOAD, len(PAYLOAD))
     address = ctypes.addressof(buffer)
 
@@ -67,4 +75,59 @@ def test_a_narrow_int_read_uses_only_the_bytes_it_was_given(width):
     finally:
         process.close()
 
-    assert value == int.from_bytes(PAYLOAD[:width], "little")
+    assert value == int.from_bytes(PAYLOAD[:width], "little", signed=True)
+
+
+# The bytes that make the signedness visible: a narrow value with its top bit
+# set. PAYLOAD alone cannot catch a sign bug -- 0x01..0x08 are all below 0x80,
+# so signed and unsigned agree on every prefix of it.
+@pytest.mark.parametrize("raw, width, expected", [
+    (b"\xff\xff\xff", 3, -1),
+    (b"\x00\x00\x80", 3, -(1 << 23)),        # most negative 3-byte value
+    (b"\xff\xff\x7f", 3, (1 << 23) - 1),     # most positive 3-byte value
+    (b"\xff\xff\xff\xff\xff", 5, -1),
+    (b"\xff\xff\xff\xff\xff\xff", 6, -1),
+    (b"\xff\xff\xff\xff\xff\xff\xff", 7, -1),
+])
+def test_a_narrow_int_read_is_signed(raw, width, expected):
+    buffer = ctypes.create_string_buffer(raw + b"\x00", len(raw) + 1)
+    address = ctypes.addressof(buffer)
+
+    process = OpenProcess(pid=os.getpid())
+    try:
+        direct = process.read_process_memory(address, int, width)
+        via_search = dict(process.search_by_addresses(int, width, [address]))[address]
+    finally:
+        process.close()
+
+    assert direct == expected
+    assert via_search == expected
+
+
+@pytest.mark.parametrize("width", [3, 5, 6, 7])
+def test_a_scan_and_a_read_agree_on_a_negative_narrow_value(width):
+    """The asymmetry itself: the scan matched -1 and the read denied it.
+
+    Asserted end to end rather than on the helpers, because the two halves are
+    reached through completely different code (`scan_memory`'s unusual-width
+    fallback against the backend read path) and only agree if both are signed.
+    """
+    raw = b"\xff" * width
+    buffer = ctypes.create_string_buffer(raw + b"\x00", len(raw) + 1)
+    address = ctypes.addressof(buffer)
+
+    process = OpenProcess(pid=os.getpid())
+    try:
+        regions = [
+            region for region in process.snapshot_memory_regions()
+            if region.address <= address < region.address + region.size
+        ]
+        matched = address in set(
+            process.search_by_value(int, width, value=-1, memory_regions=regions)
+        )
+        read_back = process.read_process_memory(address, int, width)
+    finally:
+        process.close()
+
+    assert matched, "the scan must still find the address it always found"
+    assert read_back == -1, "and the read must not contradict it"

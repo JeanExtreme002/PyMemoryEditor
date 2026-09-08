@@ -296,9 +296,51 @@ def convert_from_byte_array(
         # coincidence.
         raw = bytes(byte_array)[:length]
         ctypes.memmove(ctypes.byref(c_value), raw, len(raw))
+        sign_extend_narrow_int(c_value, pytype, length)
         return c_value.value
 
     return c_value.__class__.from_buffer(byte_array).value
+
+
+def sign_extend_narrow_int(c_value: Any, pytype: Type, length: int) -> None:
+    """Sign-extend, in place, an ``int`` read into a wider C buffer.
+
+    A width that is not 1, 2, 4 or 8 rounds up to the next C integer type, and
+    the backends read ``length`` bytes into the front of that zero-initialised
+    buffer. The remaining bytes therefore stay zero, which reads every narrow
+    value as unsigned: ``FF FF FF`` at width 3 came back as 16777215.
+
+    A scan disagreed. ``decode_scan_target`` and the unusual-width branch of
+    ``scan_memory`` both pass ``signed=True`` for ``int``, so
+    ``search_by_value(int, 3, value=-1)`` encodes ``FF FF FF``, matches the
+    address, and then every way of reading it reported 16777215 -- the library
+    finding an address for -1 and immediately denying it holds -1.
+
+    Signed is the half that has to win: every C type this library uses for
+    ``int`` is signed (``c_int8`` through ``c_int64``), there is no unsigned
+    ``pytype`` to express the other intent, and the scan is signed on both of
+    its own sides. So the padding is filled with ``FF`` when the value's top
+    bit is set, which is what a wider signed type would have held.
+
+    No-op for anything but a narrow ``int`` -- ``float`` padding is not a sign
+    extension, and widths 1, 2, 4 and 8 have no padding to fill.
+
+    Assumes a little-endian host, as the rest of this design does: reading N
+    bytes into the *front* of a wider buffer only produces the right number
+    there.
+    """
+    if pytype is not int or length < 1:
+        return
+
+    width = ctypes.sizeof(c_value)
+    if width <= length:
+        return
+
+    raw = (ctypes.c_ubyte * width).from_buffer(c_value)
+
+    if raw[length - 1] & 0x80:
+        for index in range(length, width):
+            raw[index] = 0xFF
 
 
 def value_to_bytes(pytype: Type, bufflength: int, value) -> bytes:
@@ -354,7 +396,8 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
 
     A width *smaller* than the chosen C type is fine and intentional — an
     ``int`` of 3 bytes rounds up to ``c_int32`` and the backend simply reads 3
-    bytes into a 4-byte buffer. A width *larger* than the type's widest C
+    bytes into a 4-byte buffer (then sign-extends the padding, see
+    :func:`sign_extend_narrow_int`). A width *larger* than the type's widest C
     representation is not: ``length`` is what the callers then hand to
     ``ReadProcessMemory`` / ``mach_vm_read`` / the ``c_byte * length`` cast in
     :func:`value_to_bytes`, while the buffer they sized through here saturated

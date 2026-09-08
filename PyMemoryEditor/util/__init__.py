@@ -7,6 +7,7 @@ from .convert import (
     as_writable_c_buffer,
     convert_from_byte_array,
     get_c_type_of,
+    sign_extend_narrow_int,
     prepare_write,
     resolve_bufflength,
     resolve_bufflength_for_value,

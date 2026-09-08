@@ -30,6 +30,7 @@ from ..util import (
     _validate_pytype,
     as_writable_c_buffer,
     get_c_type_of,
+    sign_extend_narrow_int,
     values_to_bytes,
 )
 from ..util.pattern import PatternLike, compile_pattern
@@ -587,6 +588,9 @@ def read_process_memory(
     elif pytype is bytes:
         return bytes(data)
     else:
+        # Narrow widths pad with zeroes, which reads a signed value as
+        # unsigned -- and a scan for the same bytes is signed.
+        sign_extend_narrow_int(data, pytype, bufflength)
         return data.value
 
 
