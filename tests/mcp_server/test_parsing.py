@@ -522,15 +522,25 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
 
     @staticmethod
     def _mede(config_file, caminho):
-        """Would this config measure `caminho`? Source filter, then omit."""
+        """Would this config measure `caminho`? Source filter, then omit.
+
+        `caminho` is normalised to forward slashes first. Coverage's `source`
+        and `omit` patterns are written with `/` regardless of host, so a
+        native Windows path (`PyMemoryEditor\\mcp\\toolset.py`) matched
+        neither the source prefix nor any omit glob — every file came back
+        unmeasured, and the partition tests failed on Windows alone while
+        passing here. See `test_classification_ignores_the_path_separator`.
+        """
         import fnmatch
-        from pathlib import Path
+        from pathlib import Path, PurePath
 
         from coverage import Coverage
 
         root = Path(__file__).resolve().parents[2]
         config = Coverage(config_file=str(root / config_file)).config
         source = config.source[0].rstrip("/")
+
+        caminho = PurePath(caminho).as_posix().replace("\\", "/")
 
         if caminho != source and not caminho.startswith(source + "/"):
             return False
@@ -544,7 +554,7 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
 
         root = Path(__file__).resolve().parents[2]
         arquivos = sorted(
-            str(path.relative_to(root))
+            path.relative_to(root).as_posix()
             for path in root.glob("PyMemoryEditor/**/*.py")
             if "__pycache__" not in str(path)
         )
@@ -568,6 +578,26 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
             )
         }
         return arquivos, ambos, sorted(set(nenhum) - esperado)
+
+    @pytest.mark.parametrize("nativo, posix", [
+        ("PyMemoryEditor\\mcp\\toolset.py", "PyMemoryEditor/mcp/toolset.py"),
+        ("PyMemoryEditor\\app\\main_window.py", "PyMemoryEditor/app/main_window.py"),
+        ("PyMemoryEditor\\linux\\functions.py", "PyMemoryEditor/linux/functions.py"),
+        ("PyMemoryEditor\\__main__.py", "PyMemoryEditor/__main__.py"),
+    ])
+    def test_classification_ignores_the_path_separator(self, nativo, posix):
+        """The bug that made this class fail on Windows and only Windows.
+
+        `str(Path.relative_to(...))` yields backslashes there, and coverage's
+        patterns are always written with forward slashes — so the source filter
+        rejected every file, nothing was measured, and two of the three tests
+        below failed. Asserted on both spellings so the next reader does not
+        have to own a Windows machine to catch it.
+        """
+        for config_file in (".coveragerc-lib", ".coveragerc-mcp"):
+            assert self._mede(config_file, nativo) == self._mede(
+                config_file, posix
+            ), (config_file, nativo)
 
     def test_no_file_is_measured_by_both_jobs(self):
         _arquivos, ambos, _inesperados = self._classificar()
