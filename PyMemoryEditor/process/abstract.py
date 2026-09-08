@@ -345,11 +345,15 @@ class AbstractProcess(ABC):
         for the provided value, returning the found addresses.
 
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. An
-            unusual width such as 3 or 6 is rounded up to the next C integer
-            type; a width wider than the type's largest C representation
-            (over 8 for ``int``/``float``, over 1 for ``bool``) is rejected
-            with ``ValueError``, because the buffer would be smaller than the
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. For
+            ``int``, an unusual width such as 3 or 6 is a real narrow field: it
+            rounds up to the next C integer type and the value is
+            sign-extended. For ``float`` only 4 and 8 are accepted — IEEE-754
+            has no form between them, so a narrower width would reinterpret
+            unread bytes as a mantissa and return a plausible-looking number.
+            A width wider than the type's largest C representation (over 8 for
+            ``int``/``float``, over 1 for ``bool``) is rejected with
+            ``ValueError``, because the buffer would be smaller than the
             read. Optional — defaults
             to ``None``: numeric types (int, float, bool) use their default
             width (int→4, float→8, bool→1) and ``str`` / ``bytes`` infer it from
@@ -448,9 +452,12 @@ class AbstractProcess(ABC):
 
         :param address: target memory address (ex: 0x006A9EC0).
         :param pytype: type of the value to be received (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. An
-            unusual width such as 3 or 6 is rounded up to the next C integer
-            type; a width wider than the type's largest C representation (over
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. For
+            ``int``, an unusual width such as 3 or 6 rounds up to the next C
+            integer type and the value is sign-extended, so it agrees with what
+            a scan for the same bytes finds. For ``float`` only 4 and 8 are
+            accepted (IEEE-754 has no form between them). A width wider than
+            the type's largest C representation (over
             8 for ``int``/``float``, over 1 for ``bool``) raises ``ValueError``,
             because the buffer would be smaller than the read. For numeric types
             (int, float, bool) you may omit this; defaults are int→4, float→8,

@@ -28,6 +28,7 @@ to express the other intent.
 
 import ctypes
 import os
+import struct
 import sys
 
 import pytest
@@ -131,3 +132,70 @@ def test_a_scan_and_a_read_agree_on_a_negative_narrow_value(width):
 
     assert matched, "the scan must still find the address it always found"
     assert read_back == -1, "and the read must not contradict it"
+
+
+# --------------------------------------------------------------------------- #
+# A narrow `float` is not a narrow value at all
+# --------------------------------------------------------------------------- #
+#
+# The sign-extension fix above needed a "the C type is wider than the width"
+# branch, and that branch was not restricted to `int`. `get_c_type_of(float, 3)`
+# is a `c_double`, so three real bytes and five zeroes came back reinterpreted
+# as a mantissa: 5.52603e-318. Before that branch existed, `from_buffer` raised
+# and `iter_values_for_addresses` turned it into an honest `(address, None)`.
+#
+# So the fix traded "this width is not readable" for a number that looks like a
+# measurement -- which is the failure the MCP layer's own VALID_NUMERIC_WIDTHS
+# comment calls out, and worse than the bug it replaced.
+#
+# `int` at 3 bytes is a real 24-bit field. `float` has a 4-byte and an 8-byte
+# IEEE-754 form and nothing between them, so the width is now refused outright
+# and both read paths agree by refusing instead of by both guessing.
+
+@pytest.mark.parametrize("width", [1, 2, 3, 5, 6, 7])
+def test_a_float_width_between_the_two_ieee_forms_is_refused(width):
+    buffer = ctypes.create_string_buffer(b"\x11" * 8, 8)
+    address = ctypes.addressof(buffer)
+
+    process = OpenProcess(pid=os.getpid())
+    try:
+        with pytest.raises(ValueError) as error:
+            process.read_process_memory(address, float, width)
+
+        # And the scan-shaped path reports "not readable" rather than a number.
+        via_search = dict(
+            process.search_by_addresses(float, width, [address])
+        )[address]
+    finally:
+        process.close()
+
+    assert "float" in str(error.value)
+    assert via_search is None
+
+
+@pytest.mark.parametrize("width", [4, 8])
+def test_the_two_real_float_widths_still_work(width):
+    """The guard must not cost the widths that mean something.
+
+    4 bytes is Cheat Engine's default "Float" and 8 is its "Double".
+    """
+    planted = 12.5
+    buffer = ctypes.create_string_buffer(8)
+    ctypes.memmove(
+        buffer,
+        struct.pack("<f" if width == 4 else "<d", planted),
+        width,
+    )
+    address = ctypes.addressof(buffer)
+
+    process = OpenProcess(pid=os.getpid())
+    try:
+        direct = process.read_process_memory(address, float, width)
+        via_search = dict(
+            process.search_by_addresses(float, width, [address])
+        )[address]
+    finally:
+        process.close()
+
+    assert direct == planted
+    assert via_search == planted

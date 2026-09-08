@@ -36,9 +36,10 @@ memory.
    :no-index:
 
    :param Type pytype: ``bool``, ``int``, ``float``, ``str`` or ``bytes``.
-   :param int bufflength: value size in bytes — typically 1, 2, 4 or 8, though
-      any positive width is accepted (for ``int`` an unusual width such as 3 or 6
-      is rounded up to the next C integer type). **Optional** —
+   :param int bufflength: value size in bytes — typically 1, 2, 4 or 8. For
+      ``int`` an unusual width such as 3 or 6 is accepted (rounded up to the
+      next C integer type, and sign-extended on read); for ``float`` only 4 and
+      8 are, since IEEE-754 has no form between them. **Optional** —
       defaults to ``None``: numeric types use their default width and ``str`` /
       ``bytes`` infer it from the encoded length of ``value``. Since it is
       optional, pass ``value`` by keyword when omitting it

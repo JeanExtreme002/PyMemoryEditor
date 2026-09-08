@@ -409,8 +409,9 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
     buffer in the library is sized through this function, which makes it the
     one place the invariant can be enforced for all of them.
 
-    :raises ValueError: if ``length`` is not positive, or exceeds the widest C
-        representation of ``pytype``.
+    :raises ValueError: if ``length`` is not positive, exceeds the widest C
+        representation of ``pytype``, or is a ``float`` width other than 4 or
+        8 (IEEE-754 has no form between them).
     """
     if length < 0:
         raise ValueError("bufflength must not be negative (got %d)." % length)
@@ -473,6 +474,26 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
             "would corrupt this process's own memory."
             % (length, pytype.__name__, size, "" if size == 1 else "s",
                length, size)
+        )
+
+    # After the too-wide check, so `float` at 9 still gets that more precise
+    # message.
+    #
+    # An `int` narrower than its C type is meaningful -- 3 bytes is a real
+    # 24-bit field, and the read sign-extends it. A `float` is not: IEEE-754
+    # has a 4-byte and an 8-byte form and nothing in between, so 3 bytes
+    # padded into a `c_double` is not a narrow float, it is three real bytes
+    # and five zeroes reinterpreted as a mantissa. That yields a plausible
+    # number from bytes nobody read: `convert_from_byte_array(b"\x11" * 3,
+    # float, 3)` came back as 5.52603e-318, and `read_process_memory(.., float,
+    # 3)` did the same. A number that looks like a measurement is worse than
+    # an error, which is the whole reason the MCP layer advertises (4, 8) only.
+    if pytype is float and length not in (4, 8):
+        raise ValueError(
+            "bufflength %d is not a valid width for float: IEEE-754 has a "
+            "4-byte (c_float) and an 8-byte (c_double) representation and "
+            "nothing between them. Use 4 or 8."
+            % length
         )
 
     return value
