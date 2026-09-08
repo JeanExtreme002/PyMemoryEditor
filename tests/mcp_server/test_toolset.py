@@ -9,9 +9,12 @@ same rules a fresh scan would apply, that a partial set stays flagged as
 partial through a whole refine chain, and that the safety gates hold.
 """
 
+from itertools import count
+
 import pytest
 
 from PyMemoryEditor.mcp import ServerConfig
+from PyMemoryEditor.mcp import toolset as toolset_module
 from PyMemoryEditor.mcp.session import SessionError
 from PyMemoryEditor.mcp.toolset import SAMPLE_SIZE, VALUE_TYPES, ToolError
 
@@ -1144,17 +1147,28 @@ class TestThirdReviewRegressions:
     # --- the timeout hint named the wrong phase ------------------------ #
 
     def test_a_pointer_map_timeout_does_not_blame_the_depth(
-        self, make_toolset, fake_process
+        self, make_toolset, fake_process, monkeypatch
     ):
         # scan_pointer_paths maps every pointer before searching for any path,
         # and only that phase reports progress. So a timeout there means zero
         # paths, and max_depth / max_offset — used only by the later search —
         # cannot be the remedy the hint suggests.
-        # 1e-9, not 0.0: `ServerConfig` now rejects a non-positive budget the
-        # way the CLI always did. A nanosecond is just as reliably spent by the
-        # time the progress callback runs -- the deadline is set at scan start,
-        # and reaching the callback costs microseconds of Python at minimum.
-        toolset = make_toolset(config(max_scan_seconds=1e-9))
+        #
+        # The clock is faked rather than the budget squeezed. `0.0` used to
+        # force the timeout, but `ServerConfig` now rejects a non-positive
+        # budget the way the CLI always did -- and the obvious replacement, a
+        # tiny positive one, is not reliably spent everywhere: Windows advances
+        # `monotonic()` in ~15.6 ms ticks, so the deadline and the progress
+        # callback read the *same* instant and `1e-9` never expired. Green on
+        # Linux and macOS, red on Windows.
+        #
+        # A clock that jumps 1000s per reading expires any sane budget on every
+        # platform, so the config keeps its real default and the test asserts
+        # the deadline logic instead of the host's timer granularity.
+        clock = count(0.0, 1000.0)
+        monkeypatch.setattr(toolset_module, "monotonic", lambda: next(clock))
+
+        toolset = make_toolset(config())
 
         def scan(_target, **kwargs):
             callback = kwargs.get("progress_callback")
