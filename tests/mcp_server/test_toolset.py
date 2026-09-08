@@ -1013,6 +1013,70 @@ class TestRefineMatchesAFreshScan:
         assert addresses(refined) == addresses(fresh) == addresses(first)
         assert address in addresses(refined)
 
+    # `_TEXT_SCAN_TYPES` has to be a policy choice, not a correctness crutch.
+    #
+    # `scan_memory` compares `str` big-endian (`is_string = pytype is str`),
+    # and refine_scan decoded with `sys.byteorder`. For exact/not_exact both
+    # sides cancel, so nothing showed -- and exact/not_exact is all the guard
+    # lets through. The equivalence this class asserts therefore held only
+    # because of the guard, and widening it would have inverted
+    # bigger/smaller. `ha` against `ai` is a pair the two orders disagree
+    # about: big-endian 0x6861 > 0x6169, little-endian 0x6168 < 0x6961.
+    @pytest.mark.parametrize("planted, value, scan_type", [
+        ("ha", "ai", "bigger"),
+        ("ai", "ha", "smaller"),
+    ])
+    def test_an_ordered_text_refine_equals_a_fresh_scan(
+        self, make_toolset, fake_process, monkeypatch, planted, value, scan_type
+    ):
+        monkeypatch.setattr(
+            toolset_module,
+            "_TEXT_SCAN_TYPES",
+            frozenset({"exact", "not_exact", "bigger", "smaller"}),
+        )
+        address = fake_process.poke(WRITABLE_BASE + 0x140, str, planted, 2)
+
+        toolset = make_toolset(
+            config(max_scan_results=10**6, max_scan_seconds=600)
+        )
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        first = toolset.scan_value(
+            session_id, "str", value, scan_type=scan_type, bufflength=2
+        )
+        fresh = toolset.scan_value(
+            session_id, "str", value, scan_type=scan_type, bufflength=2
+        )
+        refined = toolset.refine_scan(
+            first["scan_id"], scan_type=scan_type, value=value
+        )
+
+        def addresses(result):
+            return set(toolset.store.find_scan(result["scan_id"])[1].addresses)
+
+        assert address in addresses(fresh), "the fresh scan must match it first"
+        assert addresses(refined) == addresses(fresh)
+
+    def test_a_stray_end_value_is_refused_like_scan_value_refuses_it(
+        self, toolset, session, fake_process
+    ):
+        """Silently dropping it pointed the model away from its own mistake.
+
+        `refine_scan(scan_type="exact", value="90", end_value="100")` became a
+        plain exact-90. When that came back empty, the hint suggested trying
+        another value -- so the one argument that was ignored was the one thing
+        never questioned. `scan_value` has always refused this.
+        """
+        fake_process.poke(WRITABLE_BASE + 0x160, int, 90, 4)
+        scan = toolset.scan_value(session["session_id"], "int", "90", bufflength=4)
+
+        with pytest.raises(ToolError) as error:
+            toolset.refine_scan(
+                scan["scan_id"], scan_type="exact", value="90", end_value="100"
+            )
+
+        assert "end_value" in str(error.value)
+
     def test_a_refine_value_too_wide_for_the_scan_is_explained(
         self, make_toolset, fake_process
     ):

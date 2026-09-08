@@ -87,6 +87,23 @@ def _decode(raw: bytes, pytype: Type, length: int) -> Any:
     return data.value
 
 
+def _scan_byte_order(pytype: Type) -> str:
+    """The byte order a real scan compares in.
+
+    ``scan_memory`` sets ``byte_order = "big" if is_string else sys.byteorder``
+    with ``is_string = pytype is str`` (util/scan.py), because a ``str``
+    compares bytewise left to right while numerics compare in host order.
+
+    The fake used ``sys.byteorder`` for everything, which is the same class of
+    infidelity as the one below and hid the same bug one level up:
+    ``refine_scan`` also decoded text in host order, and with both halves wrong
+    in the same direction the equivalence tests passed. Ordered text refines
+    happen to be blocked by ``_TEXT_SCAN_TYPES``, so nothing failed -- the fake
+    made a guard look like correctness.
+    """
+    return "big" if pytype is str else sys.byteorder
+
+
 def _scan_target(pytype: Type, width: int, value: Any) -> Any:
     """The value a real scan compares against, after the byte round trip.
 
@@ -99,7 +116,7 @@ def _scan_target(pytype: Type, width: int, value: Any) -> Any:
     class of bug this module exists to catch was the one it hid.
     """
     return decode_scan_target(
-        value_to_bytes(pytype, width, value), sys.byteorder, pytype
+        value_to_bytes(pytype, width, value), _scan_byte_order(pytype), pytype
     )
 
 
@@ -250,7 +267,7 @@ class FakeProcess:
         for base, block, size in self._slots(memory_regions, writeable_only):
             for offset in range(0, size - width + 1):
                 raw = bytes(block[offset : offset + width])
-                current = decode_scan_target(raw, sys.byteorder, pytype)
+                current = decode_scan_target(raw, _scan_byte_order(pytype), pytype)
                 try:
                     if predicate(current):
                         yield base + offset
@@ -280,7 +297,7 @@ class FakeProcess:
         for base, block, size in self._slots(memory_regions, writeable_only):
             for offset in range(0, size - width + 1):
                 raw = bytes(block[offset : offset + width])
-                current = decode_scan_target(raw, sys.byteorder, pytype)
+                current = decode_scan_target(raw, _scan_byte_order(pytype), pytype)
                 if predicate(current):
                     yield base + offset
 

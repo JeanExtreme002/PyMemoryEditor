@@ -1049,6 +1049,16 @@ class MemoryToolset:
                 " (excluded)" if scan_name == "not_between" else "",
             )
         else:
+            # Same refusal `scan_value` makes. Ignoring it silently dropped
+            # half of what the caller asked for: refine_scan(scan_type="exact",
+            # value="90", end_value="100") became a plain exact-90, and when
+            # that came back with no matches the hint said to try another
+            # value, pointing away from the actual mistake.
+            if end_value:
+                raise ToolError(
+                    "end_value only applies to scan_type 'between' / "
+                    "'not_between'; scan_type=%r takes value alone." % scan_name
+                )
             description = "%s %s %s" % (
                 previous.value_type, _SCAN_SYMBOLS[scan_name], value
             )
@@ -1086,12 +1096,22 @@ class MemoryToolset:
             # does not fit `width` ("value 70000 does not fit in a 2-byte
             # integer"), which is a likely refine mistake and exactly the kind
             # of message the SDK would otherwise withhold.
+            # The same byte order `scan_memory` picks: `str` compares
+            # big-endian, everything else in host order (util/scan.py, where
+            # `is_string = pytype is str`). Using `sys.byteorder` for `str`
+            # too was harmless only because `_TEXT_SCAN_TYPES` limits text
+            # refines to exact/not_exact, where both sides cancel -- so the
+            # comment above claiming bit-for-bit equivalence with a fresh scan
+            # held only as long as that guard stayed. Widening
+            # `_TEXT_SCAN_TYPES` would have silently inverted bigger/smaller.
+            byte_order = "big" if pytype is str else sys.byteorder
+
             target = decode_scan_target(
-                value_to_bytes(pytype, width, parsed), sys.byteorder, pytype
+                value_to_bytes(pytype, width, parsed), byte_order, pytype
             )
             end_target = (
                 decode_scan_target(
-                    value_to_bytes(pytype, width, parsed_end), sys.byteorder, pytype
+                    value_to_bytes(pytype, width, parsed_end), byte_order, pytype
                 )
                 if scan_name in _RANGE_SCAN_TYPES
                 else target
@@ -1107,7 +1127,7 @@ class MemoryToolset:
                 if raw is None or len(raw) != width:
                     unreadable += 1
                     continue
-                if predicate(decode_scan_target(raw, sys.byteorder, pytype)):
+                if predicate(decode_scan_target(raw, byte_order, pytype)):
                     kept.append(address)
 
             scan = self.store.new_scan(

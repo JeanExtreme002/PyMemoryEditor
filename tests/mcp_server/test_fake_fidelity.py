@@ -24,13 +24,17 @@ bit us most.
 
 import ctypes
 import os
+import sys
 
 import pytest
 
+from PyMemoryEditor.enums import ScanTypesEnum
 from PyMemoryEditor.mcp import MemoryToolset, ServerConfig
 from PyMemoryEditor.mcp.toolset import ToolError
+from PyMemoryEditor.util.convert import value_to_bytes
+from PyMemoryEditor.util.scan import scan_memory
 
-from .conftest import FakeProcess, _toolset_for, config
+from .conftest import FakeProcess, _scan_byte_order, _toolset_for, config
 
 
 class Target:
@@ -688,3 +692,48 @@ def test_a_scalar_offsets_string_is_one_hop_not_one_per_character(target):
     )
     assert len(as_scalar["offsets"]) == 1
     assert as_scalar["address"] == as_list["address"]
+
+
+# --------------------------------------------------------------------------- #
+# The fake's byte order, pinned to the library's
+# --------------------------------------------------------------------------- #
+#
+# `_scan_target` in conftest already carries one scar of this kind: the fake
+# compared the caller's raw value, agreed with a buggy `refine_scan`, and hid
+# the very class of bug the module exists to catch. That fix was half of one.
+# The fake still decoded *every* type in host order, while a real scan orders
+# `str` big-endian — so an ordered text refine and the fake's ordered text scan
+# were wrong in the same direction and matched. `_TEXT_SCAN_TYPES` blocks
+# ordered text at the tool layer, so nothing failed: the fake made a guard look
+# like correctness.
+#
+# The two tests below are deliberately split so neither can restate the other.
+# The first observes the real library's choice through its behaviour (host order
+# would invert the answer); the second pins the fake to it.
+
+@pytest.mark.parametrize("planted, target_text, scan_type, should_match", [
+    # 'ha' is 68 61 and 'ai' is 61 69, a pair the two orders disagree about:
+    # big-endian 0x6861 > 0x6169, host order 0x6168 < 0x6961.
+    ("ha", "ai", ScanTypesEnum.BIGGER_THAN, True),
+    ("ai", "ha", ScanTypesEnum.SMALLER_THAN, True),
+])
+def test_the_real_scan_orders_text_big_endian(
+    planted, target_text, scan_type, should_match
+):
+    buffer = planted.encode()
+    target = value_to_bytes(str, len(buffer), target_text)
+
+    hits = list(
+        scan_memory(buffer, len(buffer), target, len(buffer), scan_type, str)
+    )
+
+    assert (0 in hits) is should_match
+
+
+def test_the_fake_orders_text_the_same_way():
+    assert _scan_byte_order(str) == "big"
+    # And nothing else changes: numerics keep host order, which is what
+    # `scan_memory` uses for them.
+    assert _scan_byte_order(int) == sys.byteorder
+    assert _scan_byte_order(float) == sys.byteorder
+    assert _scan_byte_order(bytes) == sys.byteorder
