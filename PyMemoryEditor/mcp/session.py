@@ -306,7 +306,21 @@ def batch_regions(
     A single region larger than ``batch_bytes`` still gets its own batch — it
     can't be split without splitting a value across the seam — so the budget is
     a target, not a guarantee.
+
+    When ``regions`` is a :class:`MemoryRegionSnapshot`, so is every batch. The
+    batches are contiguous runs taken in order, so a sorted input yields sorted
+    outputs — but the tag does not survive being rebuilt as a plain ``list``,
+    and dropping it undid the very optimization the class exists for: each
+    ``search_by_value(memory_regions=batch)`` re-sorted its batch, once per
+    batch per scan, on input that was already known to be ordered. Rebuilding
+    the tag is only correct because the batching preserves order; any future
+    change here that reorders or filters must stop doing it.
     """
+    sorted_input = isinstance(regions, MemoryRegionSnapshot)
+
+    def finished(batch: List[MemoryRegion]) -> List[MemoryRegion]:
+        return MemoryRegionSnapshot(batch) if sorted_input else batch
+
     batches: List[List[MemoryRegion]] = []
     current: List[MemoryRegion] = []
     current_bytes = 0
@@ -316,12 +330,12 @@ def batch_regions(
         current_bytes += region.size
 
         if current_bytes >= batch_bytes:
-            batches.append(current)
+            batches.append(finished(current))
             current = []
             current_bytes = 0
 
     if current:
-        batches.append(current)
+        batches.append(finished(current))
 
     return batches
 
