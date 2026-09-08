@@ -303,9 +303,13 @@ def batch_regions(
     ``search_by_value(memory_regions=batch)`` call is bounded work, and the
     clock is checked between batches.
 
-    A single region larger than ``batch_bytes`` still gets its own batch — it
-    can't be split without splitting a value across the seam — so the budget is
-    a target, not a guarantee.
+    A region larger than ``batch_bytes`` gets a batch to itself: it can't be
+    split without splitting a value across the seam, so the budget is a target
+    rather than a guarantee, and the batch that exceeds it should at least not
+    be carrying anything else. Without the flush, a run of small regions
+    followed by a large one became a *single* batch — ``[10, 10, 10, 5000]``
+    against a 100-byte budget produced one batch of four — so the deadline was
+    checked once for the whole thing, which is the one job this function has.
 
     Batches come back as plain lists even when ``regions`` is a
     :class:`MemoryRegionSnapshot`, and re-tagging them would buy nothing. The
@@ -323,6 +327,13 @@ def batch_regions(
     current_bytes = 0
 
     for region in regions:
+        # Flush first, so an oversized region does not drag the batch it
+        # happened to land in along with it.
+        if current and region.size >= batch_bytes:
+            batches.append(current)
+            current = []
+            current_bytes = 0
+
         current.append(region)
         current_bytes += region.size
 

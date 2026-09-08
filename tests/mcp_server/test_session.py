@@ -222,9 +222,36 @@ class TestBatchRegions:
 
     def test_a_region_larger_than_the_budget_gets_its_own_batch(self):
         # It cannot be split without splitting a value across the seam, so the
-        # budget is a target rather than a guarantee.
+        # budget is a target rather than a guarantee -- but the batch that
+        # busts it should not be carrying anything else.
+        #
+        # This assertion used to be `[2, 1]`, i.e. the oversized region shared
+        # a batch with the small one before it, under this same name. The name
+        # was right and the assertion pinned the opposite, so the test was
+        # documenting the bug it looked like it was guarding against.
         batches = batch_regions(self._regions([10, 5000, 10]), 100)
-        assert [len(batch) for batch in batches] == [2, 1]
+        assert [[region.size for region in batch] for batch in batches] == [
+            [10], [5000], [10]
+        ]
+
+    def test_a_run_of_small_regions_does_not_ride_along_with_a_large_one(self):
+        """The case that made the deadline check pointless.
+
+        `batch_regions` exists so `_run_batched_scan` gets a chance to look at
+        the clock between batches. Without the flush, every small region before
+        an oversized one joined it: `[10, 10, 10, 5000]` against a 100-byte
+        budget came back as a *single* batch of four, so the deadline was
+        checked once for the whole scan -- the one thing the batching is for.
+        """
+        batches = batch_regions(self._regions([10, 10, 10, 5000]), 100)
+
+        assert len(batches) == 2
+        assert [region.size for region in batches[0]] == [10, 10, 10]
+        assert [region.size for region in batches[1]] == [5000]
+
+    def test_consecutive_oversized_regions_each_get_a_batch(self):
+        batches = batch_regions(self._regions([5000, 5000]), 100)
+        assert [len(batch) for batch in batches] == [1, 1]
 
     def test_no_regions_means_no_batches(self):
         assert batch_regions([], 1000) == []
