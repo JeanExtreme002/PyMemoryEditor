@@ -327,6 +327,37 @@ class TestTheCapHoldsUnderConcurrency:
         with pytest.raises(AssertionError):
             store._refusal_locked(0)
 
+    def test_the_refusal_is_raised_inside_the_critical_section(
+        self, store, all_alive, monkeypatch
+    ):
+        """Deciding under the lock and raising outside it leaves a window.
+
+        Another thread can close a session in that gap, so the caller is turned
+        away with a message that is already false — the store has room by the
+        time it reads it. Probed by recording whether the lock was held at the
+        moment the error was constructed.
+        """
+        for _ in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(), 1, "a")
+
+        held = []
+        original = session_module.SessionError
+
+        class Probe(original):  # type: ignore[misc, valid-type]
+            def __init__(self, *args):
+                held.append(store._lock.locked())
+                super().__init__(*args)
+
+        monkeypatch.setattr(session_module, "SessionError", Probe)
+
+        with pytest.raises(original):
+            store.open(FakeProcess(), 2, "b")
+
+        assert held == [True], (
+            "the refusal was built after the lock was released, so the store "
+            "may already have had room"
+        )
+
     def test_open_judges_and_inserts_under_one_acquisition(self, all_alive):
         """The assertion above is not enough on its own.
 

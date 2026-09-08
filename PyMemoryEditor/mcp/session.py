@@ -226,8 +226,12 @@ class SessionStore:
                     self._sessions[session_id] = session
                     return session
 
-            if reaped:
-                raise SessionError(refusal)
+                if reaped:
+                    # Raised here, not after the block: computing the refusal
+                    # under the lock and raising it outside leaves a window
+                    # where another thread closes a session, and this caller
+                    # is turned away with a message that is already false.
+                    raise SessionError(refusal)
 
             # Outside the lock: reaping closes handles, which takes it again.
             self._reap_dead()
