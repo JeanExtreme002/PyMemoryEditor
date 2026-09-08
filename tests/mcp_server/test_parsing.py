@@ -630,6 +630,47 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
         assert len(lib) + len(mcp) > len(sources) // 2
 
 
+class TestTheDocsQuoteTheRealLimits:
+    """`docs/mcp.md` spells the caps out as words, which a reader wants and a
+    constant change silently invalidates. Same guard as
+    `test_advertised_widths_are_exactly_the_accepted_widths`."""
+
+    WORDS = {
+        1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+        6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+    }
+
+    def _mcp_doc(self):
+        from pathlib import Path
+
+        return (
+            Path(__file__).resolve().parents[2] / "docs" / "mcp.md"
+        ).read_text(encoding="utf-8")
+
+    def test_the_open_session_cap_matches_the_constant(self):
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        doc = self._mcp_doc().lower()
+        word = self.WORDS[MAX_OPEN_SESSIONS]
+
+        assert "%s targets can be open at once" % word in doc, (
+            "docs/mcp.md does not state MAX_OPEN_SESSIONS=%d (%r)"
+            % (MAX_OPEN_SESSIONS, word)
+        )
+
+    def test_the_scan_result_cap_matches_the_default(self):
+        from PyMemoryEditor.mcp.config import DEFAULT_MAX_SCAN_RESULTS
+
+        doc = self._mcp_doc()
+        # The docs group digits, as prose should: "100 000", not "100000".
+        grouped = "{:,}".format(DEFAULT_MAX_SCAN_RESULTS).replace(",", " ")
+
+        assert "Default %s." % grouped in doc, (
+            "docs/mcp.md does not state DEFAULT_MAX_SCAN_RESULTS=%s"
+            % grouped
+        )
+
+
 class TestServerConfigValidatesItsBounds:
     """The three numeric bounds were checked at the CLI only.
 

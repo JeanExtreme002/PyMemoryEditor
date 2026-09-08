@@ -235,19 +235,19 @@ class TestOpenSessionsAreCapped:
                for _ in range(MAX_OPEN_SESSIONS)]
 
         store.close(ids[0])
-        reaberto = store.open(FakeProcess(), 2, "b")
+        reopened = store.open(FakeProcess(), 2, "b")
 
-        assert reaberto.session_id not in ids
+        assert reopened.session_id not in ids
         assert len(store.sessions) == MAX_OPEN_SESSIONS
 
     def test_ids_keep_climbing_after_a_close(self, store):
         """Reusing an id would let a model holding a stale one address a
         different process."""
-        primeiro = store.open(FakeProcess(), 1, "a").session_id
-        store.close(primeiro)
-        segundo = store.open(FakeProcess(), 2, "b").session_id
+        first = store.open(FakeProcess(), 1, "a").session_id
+        store.close(first)
+        second = store.open(FakeProcess(), 2, "b").session_id
 
-        assert primeiro != segundo
+        assert first != second
 
 
 class TestBatchRegions:
