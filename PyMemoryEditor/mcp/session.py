@@ -38,6 +38,12 @@ from ..process.region import MemoryRegion, MemoryRegionSnapshot
 #: Result sets retained per session before the oldest is evicted.
 MAX_SCANS_PER_SESSION = 20
 
+#: Processes one server keeps open at once. Refuses rather than evicting,
+#: unlike the scan cap above: a session owns an OS handle, and closing one out
+#: from under the model is not something it can detect. Bounds handle
+#: exhaustion, since nothing obliges a model to call ``close_process``.
+MAX_OPEN_SESSIONS = 8
+
 
 class SessionError(Exception):
     """An unknown or expired session/scan id.
@@ -178,8 +184,28 @@ class SessionStore:
         self._lock = threading.Lock()
 
     def open(self, process: AbstractProcess, pid: int, name: str) -> Session:
-        """Register an already-opened process and return its session."""
+        """Register an already-opened process and return its session.
+
+        :raises SessionError: if :data:`MAX_OPEN_SESSIONS` are already open.
+            The caller owns the handle it passed in and must close it.
+        """
         with self._lock:
+            if len(self._sessions) >= MAX_OPEN_SESSIONS:
+                raise SessionError(
+                    "This server already has %d processes open, which is the "
+                    "limit. Close one you are done with — close_process(%s) "
+                    "frees the oldest — and attach again. Open sessions: %s."
+                    % (
+                        MAX_OPEN_SESSIONS,
+                        next(iter(self._sessions)),
+                        ", ".join(
+                            "%s (%s, pid %d)"
+                            % (sid, session.name or "?", session.pid)
+                            for sid, session in self._sessions.items()
+                        ),
+                    )
+                )
+
             session_id = "proc-%d" % next(self._session_ids)
             session = Session(
                 session_id=session_id, process=process, pid=pid, name=name
@@ -377,6 +403,7 @@ def host_platform() -> str:
 
 
 __all__ = (
+    "MAX_OPEN_SESSIONS",
     "MAX_SCANS_PER_SESSION",
     "ScanResult",
     "Session",

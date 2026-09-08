@@ -48,8 +48,11 @@ from ..util import (
 )
 from .config import ServerConfig
 from .session import (
+    MAX_OPEN_SESSIONS,
+    MAX_SCANS_PER_SESSION,
     ScanResult,
     Session,
+    SessionError,
     SessionStore,
     batch_regions,
     host_platform,
@@ -599,6 +602,8 @@ class MemoryToolset:
                 # to.
                 "max_address": format_address(MAX_ADDRESS),
                 "max_offset_magnitude": format_address(MAX_OFFSET_MAGNITUDE),
+                "max_open_sessions": MAX_OPEN_SESSIONS,
+                "max_scans_per_session": MAX_SCANS_PER_SESSION,
             },
             "open_sessions": sessions,
         }
@@ -771,7 +776,17 @@ class MemoryToolset:
                 "Could not open pid %d: %s. %s" % (pid, error, _permission_hint())
             ) from None
 
-        session = self.store.open(process, pid, name)
+        try:
+            session = self.store.open(process, pid, name)
+        except SessionError:
+            # The handle already exists and the store's cap is checked after
+            # it does, so refusing without closing leaks the resource the cap
+            # protects.
+            try:
+                process.close()
+            except Exception:  # noqa: BLE001 — target may already be gone
+                pass
+            raise
 
         result: Dict[str, Any] = {
             "opened": True,
@@ -796,6 +811,10 @@ class MemoryToolset:
         ``close_process`` or server shutdown; reuse its id rather than
         reopening the same target, since each open costs a handle and resets
         the cached region map.
+
+        At most ``max_open_sessions`` (see ``server_info``) can be open at
+        once; reaching it is refused, not rotated, so ``close_process`` a
+        target you are done with.
 
         Attaching to a process the operator has not pre-approved requires the
         **user's** approval, asked for at the moment you call this. Say which

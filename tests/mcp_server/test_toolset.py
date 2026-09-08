@@ -1210,6 +1210,34 @@ class TestThirdReviewRegressions:
 
     # --- the one address no parser ever sees --------------------------- #
 
+    def test_a_refused_attach_does_not_leak_the_handle(
+        self, make_toolset, fake_process, monkeypatch
+    ):
+        """`attach` opens the handle and *then* registers the session, so a
+        refusal must close it or the cap leaks what it exists to bound."""
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS
+
+        abertos = []
+
+        def fake_open(**_kwargs):
+            process = FakeProcess()
+            abertos.append(process)
+            return process
+
+        toolset = make_toolset(config())
+        monkeypatch.setattr(toolset, "_open_process", fake_open)
+
+        for _ in range(MAX_OPEN_SESSIONS):
+            toolset.open_process(pid=4242)
+
+        with pytest.raises(SessionError):
+            toolset.open_process(pid=4242)
+
+        # The last one is the refused attach's, and only it should be closed.
+        assert len(abertos) == MAX_OPEN_SESSIONS + 1
+        assert abertos[-1].closed is True
+        assert all(process.closed is False for process in abertos[:-1])
+
     def test_a_chain_resolving_past_64_bits_is_refused_not_returned(
         self, make_toolset, fake_process
     ):

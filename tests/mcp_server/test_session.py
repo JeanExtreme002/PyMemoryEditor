@@ -7,6 +7,7 @@ Handle bookkeeping: sessions, scan result sets, and the region batching.
 import pytest
 
 from PyMemoryEditor.mcp.session import (
+    MAX_OPEN_SESSIONS,
     MAX_SCANS_PER_SESSION,
     SessionError,
     SessionStore,
@@ -201,6 +202,54 @@ class TestRegionSnapshotCaching:
         )
 
 
+class TestOpenSessionsAreCapped:
+    """The store used to accept any number of open processes, each holding an
+    OS handle that only `close_process` releases."""
+
+    def test_the_cap_is_enforced(self, store):
+        for _ in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(), 1, "a")
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(), 1, "a")
+
+        assert str(MAX_OPEN_SESSIONS) in str(error.value)
+
+    def test_the_refusal_says_how_to_recover(self, store):
+        """The model cannot see the store, so the message has to name an id to
+        close and list what is open."""
+        for index in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(pid=100 + index), 100 + index, "target%d" % index)
+
+        with pytest.raises(SessionError) as error:
+            store.open(FakeProcess(), 999, "another")
+
+        message = str(error.value)
+        assert "close_process" in message
+        assert "proc-1" in message          # the id it is told to close
+        assert "target0" in message         # and what is actually open
+        assert "pid 100" in message
+
+    def test_closing_one_frees_a_slot(self, store):
+        ids = [store.open(FakeProcess(), 1, "a").session_id
+               for _ in range(MAX_OPEN_SESSIONS)]
+
+        store.close(ids[0])
+        reaberto = store.open(FakeProcess(), 2, "b")
+
+        assert reaberto.session_id not in ids
+        assert len(store.sessions) == MAX_OPEN_SESSIONS
+
+    def test_ids_keep_climbing_after_a_close(self, store):
+        """Reusing an id would let a model holding a stale one address a
+        different process."""
+        primeiro = store.open(FakeProcess(), 1, "a").session_id
+        store.close(primeiro)
+        segundo = store.open(FakeProcess(), 2, "b").session_id
+
+        assert primeiro != segundo
+
+
 class TestBatchRegions:
     def _regions(self, sizes):
         address = 0x1000
@@ -221,28 +270,18 @@ class TestBatchRegions:
         assert len(batches) == 4  # 3 x 300 bytes, then the 100-byte remainder
 
     def test_a_region_larger_than_the_budget_gets_its_own_batch(self):
-        # It cannot be split without splitting a value across the seam, so the
-        # budget is a target rather than a guarantee -- but the batch that
-        # busts it should not be carrying anything else.
-        #
-        # This assertion used to be `[2, 1]`, i.e. the oversized region shared
-        # a batch with the small one before it, under this same name. The name
-        # was right and the assertion pinned the opposite, so the test was
-        # documenting the bug it looked like it was guarding against.
+        # A region can't be split without splitting a value across the seam,
+        # so the budget is a target -- but the batch that busts it should not
+        # carry anything else. This asserted `[2, 1]` under the same name,
+        # i.e. it pinned the opposite of what the name claims.
         batches = batch_regions(self._regions([10, 5000, 10]), 100)
         assert [[region.size for region in batch] for batch in batches] == [
             [10], [5000], [10]
         ]
 
     def test_a_run_of_small_regions_does_not_ride_along_with_a_large_one(self):
-        """The case that made the deadline check pointless.
-
-        `batch_regions` exists so `_run_batched_scan` gets a chance to look at
-        the clock between batches. Without the flush, every small region before
-        an oversized one joined it: `[10, 10, 10, 5000]` against a 100-byte
-        budget came back as a *single* batch of four, so the deadline was
-        checked once for the whole scan -- the one thing the batching is for.
-        """
+        """Without the flush, `[10, 10, 10, 5000]` on a 100-byte budget was one
+        batch of four, so the deadline was checked once for the whole scan."""
         batches = batch_regions(self._regions([10, 10, 10, 5000]), 100)
 
         assert len(batches) == 2
