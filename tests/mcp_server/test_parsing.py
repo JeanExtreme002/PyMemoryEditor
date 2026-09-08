@@ -175,3 +175,76 @@ class TestParseBufflength:
     def test_negative_width_rejected(self):
         with pytest.raises(ToolError, match="positive"):
             parse_bufflength(-4, int, required=True)
+
+
+class TestAdvertisedLimitsMatchEnforcement:
+    """What the server says about itself must be what it does.
+
+    Both halves have drifted before: the flag table in ``docs/mcp.md`` missed
+    ``--scan-batch-bytes`` entirely, and ``server_info`` advertised a
+    ``max_page_size`` of 100 while ``list_processes`` clamped at 200 — so
+    anything past the first page was unreachable with no way to find out.
+    These are the checks that would have caught both.
+    """
+
+    def test_the_documented_flags_are_exactly_the_real_flags(self):
+        import re
+        from pathlib import Path
+
+        from PyMemoryEditor.mcp import build_parser
+
+        real = {
+            option
+            for action in build_parser()._actions
+            for option in action.option_strings
+            if option.startswith("--") and option != "--help"
+        }
+        guide = Path(__file__).resolve().parents[2] / "docs" / "mcp.md"
+        documented = set(re.findall(r"<code>(--[a-z-]+)", guide.read_text()))
+
+        assert real - documented == set(), "undocumented flags"
+        assert documented - real == set(), "documented flags that do not exist"
+
+    def test_advertised_limits_are_the_configured_ones(self):
+        from PyMemoryEditor.mcp import MemoryToolset, ServerConfig
+        from PyMemoryEditor.mcp.toolset import (
+            MAX_PAGE_SIZE,
+            MAX_TEXT_BYTES,
+        )
+
+        config = ServerConfig(
+            max_scan_results=123, max_scan_seconds=4.5, scan_batch_bytes=8192
+        )
+        limits = MemoryToolset(config).server_info()["limits"]
+
+        assert limits["max_scan_results"] == 123
+        assert limits["max_scan_seconds"] == 4.5
+        assert limits["scan_batch_bytes"] == 8192
+        assert limits["max_page_size"] == MAX_PAGE_SIZE
+        assert limits["max_text_bytes"] == MAX_TEXT_BYTES
+
+    def test_advertised_widths_are_exactly_the_accepted_widths(self):
+        # Advertising a width the validator refuses (or refusing one it
+        # advertises) is worse than not advertising at all: this is the
+        # argument the server's own hints tell the model to guess.
+        from PyMemoryEditor.mcp import MemoryToolset, ServerConfig
+        from PyMemoryEditor.mcp.toolset import ToolError, parse_bufflength
+
+        advertised = MemoryToolset(ServerConfig()).server_info()["limits"][
+            "valid_numeric_widths"
+        ]
+        types = {"int": int, "float": float, "bool": bool}
+
+        for name, widths in advertised.items():
+            for width in range(1, 12):
+                try:
+                    parse_bufflength(width, types[name], required=True)
+                    accepted = True
+                except ToolError:
+                    accepted = False
+                assert accepted is (width in widths), (name, width)
+
+    def test_the_page_size_cap_is_the_advertised_one(self, toolset):
+        # list_processes clamped at 200 while server_info said 100.
+        advertised = toolset.server_info()["limits"]["max_page_size"]
+        assert toolset.list_processes(limit=10**6)["returned"] <= advertised
