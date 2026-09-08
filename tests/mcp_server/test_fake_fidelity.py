@@ -626,17 +626,25 @@ def test_written_reports_what_landed(
 # The cap has to bound the write, not only the read (final review pass)
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("value_type, value, bufflength", [
+# The value is built inside the test, not passed through `parametrize`: a
+# 200 000-character parameter lands verbatim in the test id, and pytest-xdist
+# ships ids to its workers through PYTEST_CURRENT_TEST. Windows caps an
+# environment variable at 32 767 characters, so the id alone raised
+# `ValueError: the environment variable is longer than 32767 characters`
+# before the test body ran. It also cost 20 minutes of CI: the Actions log
+# uploader took ~150s per 400 KB line of failure output.
+@pytest.mark.parametrize("value_type, unit, count, bufflength", [
     # No bufflength at all — the schema default, and what the docstrings
     # recommend. `_write_span` returned len(value) with no ceiling, so this
     # allocated in the server *and* wrote that much into the target.
-    ("bytes", "AA" * 200000, 0),
-    ("str", "x" * 200000, 0),
+    ("bytes", "AA", 200000, 0),
+    ("str", "x", 200000, 0),
     # And a str cap counts characters, so it escaped even when explicit:
     # 65000 CJK characters is 195 000 bytes.
-    ("str", "日" * 65000, 65000),
+    ("str", "日", 65000, 65000),
 ])
-def test_an_oversized_write_is_refused(target, value_type, value, bufflength):
+def test_an_oversized_write_is_refused(target, value_type, unit, count, bufflength):
+    value = unit * count
     address = target.scratch()
     assert _outcome(
         lambda: target.toolset.write_value(

@@ -275,9 +275,14 @@ jobs:
   build-mcp:
     needs: lint
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45  # temporariamente alto: o Windows precisa
-    # terminar para a tabela de --durations imprimir. Baixar assim que a
-    # causa da lentidao estiver identificada.
+    # Hard ceiling, same purpose as build-macos'. The suite itself takes
+    # ~15s of pytest on all three runners; this is generous on purpose.
+    #
+    # It was briefly 45 while this job took 20+ minutes everywhere. The cause
+    # was not scan cost: one test parametrized a 200 000-character value, so
+    # its pytest id was 400 KB, and the Actions log uploader spent ~150s per
+    # such line. Five lines, twenty minutes. Fixed at the test.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
