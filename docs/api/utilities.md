@@ -14,7 +14,9 @@ from PyMemoryEditor.util import (
     values_to_bytes,
     get_c_type_of,
     compile_pattern,
+    decode_scan_target,
     iter_region_chunks,
+    make_predicate,
     scan_memory,
     scan_memory_for_exact_value,
     PatternLike,
@@ -63,6 +65,18 @@ from PyMemoryEditor.util import (
 .. py:function:: get_c_type_of(pytype, length)
 
    Return the underlying ctypes object for the given Python type and width.
+
+   Every buffer in the library is sized through this function, which makes it
+   the one place the "the buffer is at least as large as the read" invariant
+   can be enforced — so it validates ``length`` rather than assuming it.
+
+   :raises ValueError: if ``length`` is negative; if ``length`` is 0 for a
+      numeric type (0 stays legal for ``str`` / ``bytes``, where an empty write
+      is a documented no-op); or if ``length`` exceeds the widest C
+      representation of ``pytype`` — over 8 bytes for ``int`` / ``float``, over
+      1 for ``bool``. That last case used to return a *smaller* buffer than
+      requested, which the Windows and macOS backends then read ``length``
+      bytes into.
 ```
 
 ## Pattern compilation
@@ -127,6 +141,31 @@ print(byte_length)     # 5
    Low-level scan kernels used by the backends. Public for advanced use only —
    the high-level :py:meth:`search_by_value` / :py:meth:`search_by_pattern`
    methods are the recommended API.
+
+.. py:function:: make_predicate(scan_type, target, start, end)
+
+   Return a single-value predicate ``value -> bool`` implementing one of the
+   eight :py:class:`~PyMemoryEditor.ScanTypesEnum` comparisons. The one place
+   those semantics are defined: the three scan loops share it, and so does the
+   MCP server's ``refine_scan``, which narrows an existing result set by
+   re-reading addresses rather than walking memory — and must apply exactly the
+   rules a fresh scan would.
+
+   ``start`` / ``end`` are only consulted by ``VALUE_BETWEEN`` and
+   ``NOT_VALUE_BETWEEN``; pass ``target`` for both with the other six.
+
+.. py:function:: decode_scan_target(target_value, byte_order, pytype)
+
+   Decode a bytes-encoded target into the value a scan actually compares
+   against. Pair it with :py:func:`value_to_bytes` to reproduce a scan's
+   comparison exactly, which is **not** a comparison against your Python value:
+   ``0.1`` narrowed to 4 bytes reads back as ``0.10000000149011612``, and a
+   ``str`` target is compared as the integer view of its NUL-padded buffer.
+
+   Anything that has to agree with a scan without re-walking memory — the MCP
+   server's ``refine_scan`` narrowing a stored result set, for instance — must
+   pass its target through here, or it will reject the very addresses the scan
+   just matched.
 
 .. py:data:: NUMPY_AVAILABLE
 

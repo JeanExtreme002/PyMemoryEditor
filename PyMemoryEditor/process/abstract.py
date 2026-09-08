@@ -339,9 +339,12 @@ class AbstractProcess(ABC):
         for the provided value, returning the found addresses.
 
         :param pytype: type of value to be queried (bool, int, float, str or bytes).
-        :param bufflength: value size in bytes — typically 1, 2, 4 or 8, though
-            any positive width is accepted (for ``int`` an unusual width such as
-            3 or 6 is rounded up to the next C integer type). Optional — defaults
+        :param bufflength: value size in bytes — typically 1, 2, 4 or 8. An
+            unusual width such as 3 or 6 is rounded up to the next C integer
+            type; a width wider than the type's largest C representation
+            (over 8 for ``int``/``float``, over 1 for ``bool``) is rejected
+            with ``ValueError``, because the buffer would be smaller than the
+            read. Optional — defaults
             to ``None``: numeric types (int, float, bool) use their default
             width (int→4, float→8, bool→1) and ``str`` / ``bytes`` infer it from
             the encoded length of ``value``. Since it is optional, pass ``value``

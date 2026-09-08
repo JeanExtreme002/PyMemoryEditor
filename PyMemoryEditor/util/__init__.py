@@ -16,7 +16,9 @@ from .convert import (
 from .pattern import PatternLike, compile_pattern
 from .scan import (
     DEFAULT_MAX_REGION_CHUNK,
+    decode_scan_target,
     iter_region_chunks,
+    make_predicate,
     scan_memory,
     scan_memory_for_exact_value,
 )

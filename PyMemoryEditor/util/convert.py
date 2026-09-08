@@ -330,28 +330,74 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
     `ctypes._SimpleCData` subclass instance (for numeric types) or a
     `ctypes.Array[c_char]` (for str/bytes), which don't share a common base
     that mypy can reason about.
+
+    A width *smaller* than the chosen C type is fine and intentional — an
+    ``int`` of 3 bytes rounds up to ``c_int32`` and the backend simply reads 3
+    bytes into a 4-byte buffer. A width *larger* than the type's widest C
+    representation is not: ``length`` is what the callers then hand to
+    ``ReadProcessMemory`` / ``mach_vm_read`` / the ``c_byte * length`` cast in
+    :func:`value_to_bytes`, while the buffer they sized through here saturated
+    at 8 bytes (1 for ``bool``). ``get_c_type_of(bool, 8)`` returning a 1-byte
+    ``c_bool`` meant an 8-byte read wrote 7 bytes past it — heap corruption in
+    the *calling* process, from nothing but a bad width argument.
+
+    So the size is verified against the request rather than assumed. Every
+    buffer in the library is sized through this function, which makes it the
+    one place the invariant can be enforced for all of them.
+
+    :raises ValueError: if ``length`` is not positive, or exceeds the widest C
+        representation of ``pytype``.
     """
+    if length < 0:
+        raise ValueError("bufflength must not be negative (got %d)." % length)
+
     if pytype is str or pytype is bytes:
-        return ctypes.create_string_buffer(length)
+        # Zero is allowed here and only here: ``prepare_write(str, None, "")``
+        # yields a length of 0, and writing an empty value has always been a
+        # successful no-op on the public API. Rejecting it outright was a
+        # silent behaviour change on a documented contract.
+        value: Any = ctypes.create_string_buffer(length) if length else (
+            ctypes.c_char * 0
+        )()
+
+    elif length < 1:
+        raise ValueError(
+            "bufflength must be at least 1 byte for %s (got %d)."
+            % (pytype.__name__, length)
+        )
 
     elif pytype is int:
 
         if length == 1:
-            return ctypes.c_int8()
-        if length == 2:
-            return ctypes.c_int16()
-        if length <= 4:
-            return ctypes.c_int32()
-        return ctypes.c_int64()
+            value = ctypes.c_int8()
+        elif length == 2:
+            value = ctypes.c_int16()
+        elif length <= 4:
+            value = ctypes.c_int32()
+        else:
+            value = ctypes.c_int64()
 
     elif pytype is float:
 
         if length == 4:
-            return ctypes.c_float()
-        return ctypes.c_double()
+            value = ctypes.c_float()
+        else:
+            value = ctypes.c_double()
 
     elif pytype is bool:
-        return ctypes.c_bool()
+        value = ctypes.c_bool()
 
     else:
         raise ValueError("The type must be bool, int, float, str or bytes.")
+
+    size = ctypes.sizeof(value)
+    if size < length:
+        raise ValueError(
+            "bufflength %d is too wide for %s: its widest C representation is "
+            "%d byte%s. Reading or writing %d bytes through a %d-byte buffer "
+            "would corrupt this process's own memory."
+            % (length, pytype.__name__, size, "" if size == 1 else "s",
+               length, size)
+        )
+
+    return value

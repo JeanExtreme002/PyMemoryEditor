@@ -32,6 +32,25 @@ else:  # pragma: no cover - importing the package already raises on these.
         return False
 
 
+def iter_processes() -> Iterator[Tuple[int, str]]:
+    """
+    Yield ``(pid, name)`` for every process the OS lets this user enumerate.
+
+    The dependency-free counterpart of ``psutil.process_iter()``, backed by the
+    same per-platform primitives the rest of the library uses:
+    ``CreateToolhelp32Snapshot`` on Windows, a ``/proc`` walk on Linux,
+    ``proc_listpids`` + ``proc_name`` on macOS. ``name`` is the executable name
+    only (never a full path or command line), and may be empty for a process
+    whose name this user has no right to read.
+
+    Ordering is whatever the platform reports — do not rely on it. A PID that
+    appears here can already be gone by the time you open it; that race is
+    inherent, so handle ``ProcessIDNotExistsError`` from ``OpenProcess`` rather
+    than pre-checking.
+    """
+    return _iter_processes()
+
+
 def get_process_ids_by_name(
     name: str,
     *,

@@ -132,7 +132,7 @@ def _struct_format(
     return prefix + char
 
 
-def _decode_target(
+def decode_scan_target(
     target_value: bytes, byte_order: _ByteOrder, pytype: Optional[Type]
 ) -> Union[int, float]:
     """
@@ -142,6 +142,14 @@ def _decode_target(
     For ints we honor signed=True; for floats we struct-unpack; otherwise the
     bytewise (unsigned) view is fine since bytes/str scans only compare
     equality and the slow path uses int.from_bytes consistently on both sides.
+
+    This round trip is why a scan's comparison is *not* a comparison against
+    the caller's Python value: ``0.1`` narrowed to 4 bytes and read back is
+    ``0.10000000149011612``, and a ``str`` target is compared as the integer
+    view of its NUL-padded buffer. Anything that must agree with a scan —
+    notably the MCP server's ``refine_scan``, which re-reads a stored result
+    set instead of walking memory — has to pass its target through here too, or
+    it will reject the very addresses the scan just matched.
     """
     if pytype is int:
         return int.from_bytes(target_value, byte_order, signed=True)
@@ -214,7 +222,7 @@ def scan_memory_for_exact_value(
             yield offset
 
 
-def _make_predicate(
+def make_predicate(
     scan_type: ScanTypesEnum,
     target: Union[int, float],
     start: Union[int, float],
@@ -227,8 +235,10 @@ def _make_predicate(
 
     This is the ONE place the eight comparison semantics live. All three scan
     loops call it — the ``struct.iter_unpack`` numeric fast path, the
-    ``int.from_bytes`` fallback, and the ordered-string fast path — so a change
-    to a comparison can't silently diverge between them. (Previously each of
+    ``int.from_bytes`` fallback, and the ordered-string fast path — plus the MCP
+    server's ``refine_scan``, which re-reads a stored result set instead of
+    walking memory but must narrow it by exactly the same rules. A change to a
+    comparison can't silently diverge between them. (Previously each of
     those branches inlined its own copy: sixteen near-identical loop bodies.)
     The closure is built once per ``scan_memory`` call, outside the hot loop, so
     the per-element cost is a single Python call rather than the re-evaluated
@@ -342,14 +352,14 @@ def scan_memory(
     start_first_byte: Optional[int]
     end_first_byte: Optional[int]
     if isinstance(target_value, tuple):
-        start_target_value = _decode_target(target_value[0], byte_order, pytype)
-        end_target_value = _decode_target(target_value[1], byte_order, pytype)
+        start_target_value = decode_scan_target(target_value[0], byte_order, pytype)
+        end_target_value = decode_scan_target(target_value[1], byte_order, pytype)
         target_value_decoded: Union[int, float] = 0
         first_byte = None
         start_first_byte = target_value[0][0] if target_value[0] else None
         end_first_byte = target_value[1][0] if target_value[1] else None
     else:
-        target_value_decoded = _decode_target(target_value, byte_order, pytype)
+        target_value_decoded = decode_scan_target(target_value, byte_order, pytype)
         start_target_value = 0
         end_target_value = 0
         first_byte = target_value[0] if target_value else None
@@ -393,7 +403,7 @@ def scan_memory(
         # so the comparison semantics aren't duplicated per branch. The value
         # production stays inlined (the C-level struct.iter_unpack), keeping the
         # hot loop to a single Python call per element.
-        predicate = _make_predicate(
+        predicate = make_predicate(
             scan_type, target_value_decoded, start_target_value, end_target_value
         )
         unpacker = struct.iter_unpack(fmt, buffer[:total])
@@ -407,7 +417,7 @@ def scan_memory(
 
     # Fallback: strings (byte-by-byte) or numeric with unusual sizes (3/6/7).
     # Numerics here decode through int.from_bytes; the target was already
-    # decoded above with the matching signedness via _decode_target.
+    # decoded above with the matching signedness via decode_scan_target.
     data = _as_bytes(memory_region_data)
     step = 1 if is_string else target_value_size
     end = memory_region_data_size - target_value_size + 1
@@ -422,7 +432,7 @@ def scan_memory(
     # Build the comparison predicate once — shared by the ordered-string fast
     # path below and the byte-by-byte fallback loop, so neither re-inlines the
     # eight scan_type branches.
-    predicate = _make_predicate(
+    predicate = make_predicate(
         scan_type, target_value_decoded, start_target_value, end_target_value
     )
 
