@@ -10,6 +10,7 @@ from PyMemoryEditor.mcp import session as session_module
 from PyMemoryEditor.mcp.session import (
     MAX_OPEN_SESSIONS,
     MAX_SCANS_PER_SESSION,
+    Session,
     SessionError,
     SessionStore,
     batch_regions,
@@ -301,46 +302,103 @@ class TestTheCapHoldsUnderConcurrency:
 
         assert len(store.sessions) == MAX_OPEN_SESSIONS
 
-    def test_the_cap_holds_even_with_the_window_stretched(
-        self, store, all_alive, monkeypatch
-    ):
-        """The same property with the race window made wide enough to lose.
+    def test_capacity_is_judged_while_the_lock_is_held(self, store, all_alive):
+        """The property the timing test could not actually probe.
 
-        Without this, the test above passes on a broken implementation: the
-        gap between check and insert is too narrow for the scheduler to land
-        in reliably.
+        A previous version of this test patched `capacity_refusal` and slept
+        in it to widen the race — but `open` calls `_refusal_locked`, not
+        `capacity_refusal`, so the sleep never fired and the test only
+        duplicated the one above. It passed its mutation check because that
+        mutant happened to reintroduce the `capacity_refusal` call.
+
+        Asserted structurally instead: `_refusal_locked` refuses to judge
+        capacity unless the lock is held, so splitting the check from the
+        insert fails deterministically rather than when the scheduler
+        cooperates.
+        """
+        for _ in range(MAX_OPEN_SESSIONS):
+            store.open(FakeProcess(), 1, "a")
+
+        # Held: this is how `open` calls it, and it answers.
+        with store._lock:
+            assert store._refusal_locked(0) is not None
+
+        # Not held: it refuses to answer at all.
+        with pytest.raises(AssertionError):
+            store._refusal_locked(0)
+
+    def test_open_judges_and_inserts_under_one_acquisition(self, all_alive):
+        """The assertion above is not enough on its own.
+
+        It only proves capacity is judged under *an* acquisition, not that the
+        same one covers the insert — a version that judged under its own lock,
+        released, and then took the lock again to insert passed it, and that is
+        exactly the regression this guards. Counting acquisitions separates
+        them: one for the correct implementation, two for the split.
         """
         import threading
-        import time
 
-        original = type(store).capacity_refusal
+        class CountingLock:
+            def __init__(self):
+                self._real = threading.Lock()
+                self.acquisitions = 0
 
-        def slow(self, pid=0):
-            result = original(self, pid)
-            time.sleep(0.02)
-            return result
+            def __enter__(self):
+                self.acquisitions += 1
+                return self._real.__enter__()
 
-        monkeypatch.setattr(type(store), "capacity_refusal", slow)
+            def __exit__(self, *exc):
+                return self._real.__exit__(*exc)
 
-        start = threading.Barrier(MAX_OPEN_SESSIONS + 4)
+            def locked(self):
+                return self._real.locked()
 
-        def attach():
-            start.wait()
-            try:
-                store.open(FakeProcess(), 1, "a")
-            except SessionError:
-                pass
+        store = SessionStore()
+        lock = CountingLock()
+        store._lock = lock
 
-        threads = [
-            threading.Thread(target=attach)
-            for _ in range(MAX_OPEN_SESSIONS + 4)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        store.open(FakeProcess(), 1, "a")
 
-        assert len(store.sessions) == MAX_OPEN_SESSIONS
+        assert lock.acquisitions == 1, (
+            "capacity and the insert must share one acquisition; %d means the "
+            "check released the lock before inserting" % lock.acquisitions
+        )
+
+    def test_a_dead_session_is_reaped_even_if_the_store_fills_meanwhile(
+        self, store, monkeypatch
+    ):
+        """`open` used to decide whether to reap from a check taken under an
+        earlier acquisition of the lock. If the store filled in between, it
+        refused without anyone having looked for a dead session.
+
+        Simulated by filling the store from inside the first check, which is
+        the same ordering a concurrent open produces.
+        """
+        alive = {4242}
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: pid in alive)
+
+        store.open(FakeProcess(pid=4242), 4242, "live")
+
+        original = type(store)._refusal_locked
+        calls = []
+
+        def fill_once(self, pid):
+            if not calls:
+                calls.append(pid)
+                for index in range(MAX_OPEN_SESSIONS - 1):
+                    session_id = "proc-%d" % next(self._session_ids)
+                    self._sessions[session_id] = Session(
+                        session_id=session_id, process=FakeProcess(pid=700 + index),
+                        pid=700 + index, name="gone%d" % index,
+                    )
+            return original(self, pid)
+
+        monkeypatch.setattr(type(store), "_refusal_locked", fill_once)
+
+        # Full at the moment of the check, but seven of the eight are dead.
+        session = store.open(FakeProcess(pid=4243), 4243, "second")
+
+        assert session.pid == 4243
 
 
 class TestDeadSessionsDoNotHoldSlots:

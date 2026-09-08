@@ -206,24 +206,32 @@ class SessionStore:
         :raises SessionError: if :data:`MAX_OPEN_SESSIONS` are already open.
             The caller owns the handle it passed in and must close it.
         """
-        with self._lock:
-            crowded = len(self._sessions) >= MAX_OPEN_SESSIONS
+        # Loop, rather than deciding to reap from a check taken earlier under
+        # a different acquisition: the store can fill between the two, and then
+        # a slot held by an exited process would be refused without anyone
+        # having looked. At most one reap — a second pass finds nothing new,
+        # and refusing has to terminate.
+        reaped = False
 
-        if crowded:
-            # Outside the lock: reaping closes handles, which takes it again.
-            self._reap_dead()
+        while True:
+            with self._lock:
+                refusal = self._refusal_locked(pid)
 
-        with self._lock:
-            refusal = self._refusal_locked(pid)
-            if refusal is not None:
+                if refusal is None:
+                    session_id = "proc-%d" % next(self._session_ids)
+                    session = Session(
+                        session_id=session_id, process=process,
+                        pid=pid, name=name,
+                    )
+                    self._sessions[session_id] = session
+                    return session
+
+            if reaped:
                 raise SessionError(refusal)
 
-            session_id = "proc-%d" % next(self._session_ids)
-            session = Session(
-                session_id=session_id, process=process, pid=pid, name=name
-            )
-            self._sessions[session_id] = session
-            return session
+            # Outside the lock: reaping closes handles, which takes it again.
+            self._reap_dead()
+            reaped = True
 
     def _reap_dead(self) -> List[str]:
         """Drop sessions whose target no longer exists. Caller holds no lock.
@@ -285,6 +293,12 @@ class SessionStore:
         then every thread inserted. Demonstrated with 12 concurrent opens
         against a cap of 8.
         """
+        # Deterministic, so a refactor that checks capacity outside the lock
+        # fails here instead of in a timing test. That regression happened
+        # once: the check and the insert were split across two acquisitions,
+        # every racing thread saw room, and the cap was exceeded.
+        assert self._lock.locked(), "capacity must be judged under the lock"
+
         if len(self._sessions) < MAX_OPEN_SESSIONS:
             return None
 
