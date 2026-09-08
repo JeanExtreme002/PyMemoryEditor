@@ -352,3 +352,63 @@ class TestCoverageConfigsAreValidIni:
         root = Path(__file__).resolve().parents[2]
         omit = Coverage(config_file=str(root / ".coveragerc-lib")).config.run_omit
         assert any("mcp" in pattern for pattern in omit), omit
+
+
+class TestServerConfigValidatesItsBounds:
+    """The three numeric bounds were checked at the CLI only.
+
+    An embedder building a `ServerConfig` in Python got no error and a server
+    that misbehaved quietly: `scan_batch_bytes=0` makes every region its own
+    scan batch, `max_scan_results=0` makes every scan return nothing while
+    reporting itself partial. The dataclass now mirrors `parse_args`.
+    """
+
+    @pytest.mark.parametrize("field, value", [
+        ("max_scan_results", 0),
+        ("max_scan_results", -1),
+        ("max_scan_seconds", 0),
+        ("max_scan_seconds", 0.0),
+        ("max_scan_seconds", -0.5),
+        ("scan_batch_bytes", 0),
+        ("scan_batch_bytes", -4096),
+    ])
+    def test_a_non_positive_bound_is_rejected(self, field, value):
+        from PyMemoryEditor.mcp import ServerConfig
+
+        with pytest.raises(ValueError) as error:
+            ServerConfig(**{field: value})
+
+        # The message has to name the offending field -- an embedder passing
+        # several bounds at once cannot act on "invalid configuration".
+        assert field in str(error.value)
+
+    def test_the_defaults_are_valid(self):
+        """A guard against a default drifting below its own floor."""
+        from PyMemoryEditor.mcp import ServerConfig
+
+        config = ServerConfig()
+        assert config.max_scan_results >= 1
+        assert config.max_scan_seconds > 0
+        assert config.scan_batch_bytes >= 1
+
+    def test_the_smallest_accepted_values_are_accepted(self):
+        from PyMemoryEditor.mcp import ServerConfig
+
+        config = ServerConfig(
+            max_scan_results=1, max_scan_seconds=1e-9, scan_batch_bytes=1
+        )
+        assert config.max_scan_results == 1
+
+    def test_the_cli_still_reports_its_own_message(self):
+        """`parse_args` must fail as a CLI, not with a raw traceback.
+
+        Its checks run before the dataclass is constructed, so the operator
+        keeps getting `--max-scan-results must be at least 1.` and exit code 2
+        rather than a ValueError escaping through argparse.
+        """
+        from PyMemoryEditor.mcp.config import parse_args
+
+        with pytest.raises(SystemExit) as exit_info:
+            parse_args(["--max-scan-results", "0"])
+
+        assert exit_info.value.code == 2

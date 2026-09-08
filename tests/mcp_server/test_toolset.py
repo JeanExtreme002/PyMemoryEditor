@@ -1150,7 +1150,11 @@ class TestThirdReviewRegressions:
         # and only that phase reports progress. So a timeout there means zero
         # paths, and max_depth / max_offset — used only by the later search —
         # cannot be the remedy the hint suggests.
-        toolset = make_toolset(config(max_scan_seconds=0.0))
+        # 1e-9, not 0.0: `ServerConfig` now rejects a non-positive budget the
+        # way the CLI always did. A nanosecond is just as reliably spent by the
+        # time the progress callback runs -- the deadline is set at scan start,
+        # and reaching the callback costs microseconds of Python at minimum.
+        toolset = make_toolset(config(max_scan_seconds=1e-9))
 
         def scan(_target, **kwargs):
             callback = kwargs.get("progress_callback")

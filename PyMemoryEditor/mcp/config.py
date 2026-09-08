@@ -82,20 +82,20 @@ class ServerConfig:
     :param max_scan_seconds: per-scan wall-clock budget.
     :param scan_batch_bytes: memory covered per deadline check.
 
-    .. note::
-       ``parse_args`` validates these (a non-positive ``max_scan_results``,
-       ``max_scan_seconds`` or ``scan_batch_bytes`` is rejected at launch), but
-       the dataclass itself does not — there is no ``__post_init__``. An
-       embedder constructing this in code can therefore build a config that
-       misbehaves quietly rather than failing: ``scan_batch_bytes=0`` makes
-       every region its own scan batch, and ``max_scan_results=0`` makes every
-       scan return nothing while flagging itself partial.
+    :raises ValueError: if ``max_scan_results``, ``max_scan_seconds`` or
+        ``scan_batch_bytes`` is not positive.
 
-       Known gap, deliberately left: unlike the process allowlist — whose
-       validation *was* moved into :class:`ProcessPolicy` because a bad value
-       there silently disables the consent prompt — a bad number here produces
-       obviously useless output rather than an unsafe server. Worth a
-       ``__post_init__`` mirroring the three CLI checks.
+    .. note::
+       The three numeric bounds are validated here as well as in
+       ``parse_args``, so an embedder constructing this in code gets the same
+       answer the CLI operator gets. They used to be checked only at the CLI,
+       which meant a config built in Python failed quietly instead of loudly:
+       ``scan_batch_bytes=0`` made every region its own scan batch (thousands
+       of generator setups per scan on a desktop target), and
+       ``max_scan_results=0`` made every scan return nothing while flagging
+       itself partial. Neither is unsafe — that is why the process allowlist,
+       where a bad value silently disables the consent prompt, was fixed first
+       — but both are indistinguishable from a broken server.
     """
 
     allow_write: bool = True
@@ -105,6 +105,23 @@ class ServerConfig:
     max_scan_results: int = DEFAULT_MAX_SCAN_RESULTS
     max_scan_seconds: float = DEFAULT_MAX_SCAN_SECONDS
     scan_batch_bytes: int = DEFAULT_SCAN_BATCH_BYTES
+
+    def __post_init__(self) -> None:
+        # Mirrors the three checks in `parse_args`. Kept as ValueError rather
+        # than `parser.error`: this constructor is library API, and the CLI
+        # already reports its own violations before ever reaching here.
+        if self.max_scan_results < 1:
+            raise ValueError(
+                "max_scan_results must be at least 1 (got %r)." % (self.max_scan_results,)
+            )
+        if self.max_scan_seconds <= 0:
+            raise ValueError(
+                "max_scan_seconds must be positive (got %r)." % (self.max_scan_seconds,)
+            )
+        if self.scan_batch_bytes < 1:
+            raise ValueError(
+                "scan_batch_bytes must be at least 1 (got %r)." % (self.scan_batch_bytes,)
+            )
 
     def policy(self) -> ProcessPolicy:
         """Build the :class:`ProcessPolicy` this configuration describes."""
