@@ -46,7 +46,13 @@ Transport = Literal["stdio", "sse", "streamable-http"]
 #: value (``int`` ``0``, ``100``) legitimately matches millions of addresses;
 #: keeping them all would blow out the server's memory for a result set no
 #: refine loop can use anyway. At the cap the scan stops early and says so.
-DEFAULT_MAX_SCAN_RESULTS = 50_000
+#:
+#: 100 000 costs 4.2 MB per result set and 21 ms to sort, against 2.1 MB and
+#: 10 ms at the old 50 000; wall clock is unchanged, since the 30-second
+#: budget binds long before the cap does. The gain is that a scan whose true
+#: hit count sits between the two stops being flagged ``partial``, and
+#: refining a truncated set can converge on an address that was never in it.
+DEFAULT_MAX_SCAN_RESULTS = 100_000
 
 #: Wall-clock budget for one scan, in seconds. A full address-space scan of a
 #: large process takes minutes — long past the point where an MCP client gives

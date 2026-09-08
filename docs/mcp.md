@@ -111,7 +111,7 @@ pymemoryeditor-mcp --allow-any-process        # never asks at all (scripts/CI)
 </tr>
 <tr>
   <td><code>--max-scan-results N</code></td>
-  <td>Addresses one scan may keep. Default 50 000.</td>
+  <td>Addresses one scan may keep. Default 100 000.</td>
 </tr>
 <tr>
   <td><code>--max-scan-seconds S</code></td>
@@ -129,7 +129,7 @@ pymemoryeditor-mcp --allow-any-process        # never asks at all (scripts/CI)
 <tr><th width="30%">Tool</th><th>What it does</th></tr>
 <tr><td><code>server_info</code></td><td>Capabilities, limits, policy and open sessions. The assistant should call this first.</td></tr>
 <tr><td><code>list_processes</code></td><td>Running processes the server is allowed to open.</td></tr>
-<tr><td><code>open_process</code></td><td>Attach by pid or name → a <code>session_id</code>.</td></tr>
+<tr><td><code>open_process</code></td><td>Attach by pid or name → a <code>session_id</code>. Eight targets can be open at once; past that it refuses rather than rotating one out, since a handle the assistant still holds must not vanish under it.</td></tr>
 <tr><td><code>close_process</code></td><td>Detach and drop that session's scan results.</td></tr>
 <tr><td><code>process_info</code></td><td>Bitness, address-space summary, modules and threads.</td></tr>
 <tr><td><code>list_memory_regions</code></td><td>Page through the memory map, filtered by permission or backing file.</td></tr>
