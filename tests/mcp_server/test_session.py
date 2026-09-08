@@ -13,7 +13,7 @@ from PyMemoryEditor.mcp.session import (
     batch_regions,
     region_to_dict,
 )
-from PyMemoryEditor.process.region import MemoryRegion, MemoryRegionSnapshot
+from PyMemoryEditor.process.region import MemoryRegion
 
 from .conftest import FakeProcess
 
@@ -232,51 +232,6 @@ class TestBatchRegions:
     def test_trailing_partial_batch_is_kept(self):
         batches = batch_regions(self._regions([10]), 1000)
         assert len(batches) == 1 and len(batches[0]) == 1
-
-    # --- the snapshot tag has to survive the batching -------------------- #
-    #
-    # `snapshot_regions()` hands `_run_batched_scan` a MemoryRegionSnapshot,
-    # whose whole purpose is to let the scanning helpers skip a defensive
-    # `sorted(...)`. Rebuilding each batch as a plain list threw that away, so
-    # every `search_by_value(memory_regions=batch)` re-sorted an input already
-    # known to be ordered -- once per batch, per scan.
-
-    def test_snapshot_input_yields_snapshot_batches(self):
-        regions = MemoryRegionSnapshot(self._regions([100] * 10))
-        batches = batch_regions(regions, 250)
-
-        assert len(batches) > 1  # otherwise the claim is untested
-        assert all(isinstance(batch, MemoryRegionSnapshot) for batch in batches)
-
-    def test_snapshot_batches_skip_the_defensive_resort(self):
-        """The consequence, not just the type: the helper reuses the batch."""
-        from PyMemoryEditor.process.scanning import _ensure_sorted_by_address
-
-        regions = MemoryRegionSnapshot(self._regions([100] * 10))
-        for batch in batch_regions(regions, 250):
-            assert _ensure_sorted_by_address(batch) is batch
-
-    def test_a_plain_list_stays_plain(self):
-        """The tag is a claim about order, so it is never invented here.
-
-        A caller that filtered or reordered the regions itself gets plain
-        lists, and the helpers keep sorting them defensively.
-        """
-        batches = batch_regions(self._regions([100] * 10), 250)
-        assert not any(isinstance(batch, MemoryRegionSnapshot) for batch in batches)
-
-    def test_snapshot_batches_are_still_in_address_order(self):
-        """What makes rebuilding the tag legitimate.
-
-        The tag asserts sortedness, so batching must preserve order for the
-        claim to be true. Asserted directly, because a future change here
-        would otherwise make every batch lie to the scanning helpers.
-        """
-        regions = MemoryRegionSnapshot(self._regions([100] * 10))
-        flattened = [region for batch in batch_regions(regions, 250) for region in batch]
-
-        assert flattened == list(regions)
-        assert flattened == sorted(flattened, key=lambda region: region.address)
 
 
 class TestRegionRendering:

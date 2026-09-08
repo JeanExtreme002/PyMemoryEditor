@@ -307,20 +307,17 @@ def batch_regions(
     can't be split without splitting a value across the seam — so the budget is
     a target, not a guarantee.
 
-    When ``regions`` is a :class:`MemoryRegionSnapshot`, so is every batch. The
-    batches are contiguous runs taken in order, so a sorted input yields sorted
-    outputs — but the tag does not survive being rebuilt as a plain ``list``,
-    and dropping it undid the very optimization the class exists for: each
-    ``search_by_value(memory_regions=batch)`` re-sorted its batch, once per
-    batch per scan, on input that was already known to be ordered. Rebuilding
-    the tag is only correct because the batching preserves order; any future
-    change here that reorders or filters must stop doing it.
+    Batches come back as plain lists even when ``regions`` is a
+    :class:`MemoryRegionSnapshot`, and re-tagging them would buy nothing. The
+    tag has exactly one reader, ``_ensure_sorted_by_address``, reached only from
+    ``iter_values_for_addresses`` — the ``search_by_addresses`` path, which
+    never receives a batch from here. What batches *are* handed to,
+    ``search_by_value`` / ``search_by_value_between`` / ``search_by_pattern``,
+    rebuilds the regions through a filtering comprehension and then sorts
+    unconditionally, in all three backends. So the sort happens either way and
+    the tag is never consulted. (Tried and reverted; the constraint it imposed
+    on future edits here was the only thing it added.)
     """
-    sorted_input = isinstance(regions, MemoryRegionSnapshot)
-
-    def finished(batch: List[MemoryRegion]) -> List[MemoryRegion]:
-        return MemoryRegionSnapshot(batch) if sorted_input else batch
-
     batches: List[List[MemoryRegion]] = []
     current: List[MemoryRegion] = []
     current_bytes = 0
@@ -330,12 +327,12 @@ def batch_regions(
         current_bytes += region.size
 
         if current_bytes >= batch_bytes:
-            batches.append(finished(current))
+            batches.append(current)
             current = []
             current_bytes = 0
 
     if current:
-        batches.append(finished(current))
+        batches.append(current)
 
     return batches
 
