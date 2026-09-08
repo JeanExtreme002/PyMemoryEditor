@@ -38,7 +38,7 @@ from ..enums import ScanTypesEnum
 from ..process.abstract import AbstractProcess
 from ..process.errors import PyMemoryEditorError
 from ..process.region import MemoryRegion
-from ..process.util import get_process_ids_by_name, iter_processes, pid_exists
+from ..process.util import get_process_ids_by_name, iter_processes
 from ..util import (
     decode_scan_target,
     resolve_bufflength,
@@ -56,6 +56,7 @@ from .session import (
     SessionStore,
     batch_regions,
     host_platform,
+    looks_alive,
     region_to_dict,
 )
 
@@ -567,7 +568,12 @@ class MemoryToolset:
                 "pid": session.pid,
                 "name": session.name,
                 "scan_ids": list(session.scan_ids),
-                "alive": pid_exists(session.pid),
+                # `looks_alive`, not `pid_exists`: the raw call raises
+                # OverflowError for a pid outside the platform's range, and
+                # server_info is the tool the instructions tell the model to
+                # call first — a crash here hides the limits and the policy
+                # too, not just this field.
+                "alive": looks_alive(session.pid),
             }
             for session in self.store.sessions
         ]

@@ -169,7 +169,7 @@ class Session:
         return tuple(self._scan_order)
 
 
-def _looks_alive(pid: int) -> bool:
+def looks_alive(pid: int) -> bool:
     """``pid_exists``, but a pid the OS will not even accept reads as dead.
 
     The reaper runs inside ``open``, so anything raised here escapes as
@@ -206,11 +206,18 @@ class SessionStore:
         :raises SessionError: if :data:`MAX_OPEN_SESSIONS` are already open.
             The caller owns the handle it passed in and must close it.
         """
-        refusal = self.capacity_refusal(pid)
-        if refusal is not None:
-            raise SessionError(refusal)
+        with self._lock:
+            crowded = len(self._sessions) >= MAX_OPEN_SESSIONS
+
+        if crowded:
+            # Outside the lock: reaping closes handles, which takes it again.
+            self._reap_dead()
 
         with self._lock:
+            refusal = self._refusal_locked(pid)
+            if refusal is not None:
+                raise SessionError(refusal)
+
             session_id = "proc-%d" % next(self._session_ids)
             session = Session(
                 session_id=session_id, process=process, pid=pid, name=name
@@ -237,7 +244,7 @@ class SessionStore:
             dead = [
                 session_id
                 for session_id, session in self._sessions.items()
-                if not _looks_alive(session.pid)
+                if not looks_alive(session.pid)
             ]
 
         for session_id in dead:
@@ -246,10 +253,6 @@ class SessionStore:
             except SessionError:  # closed concurrently
                 pass
         return dead
-
-    def is_alive(self, session_id: str) -> bool:
-        """Whether this session's target still exists."""
-        return _looks_alive(self.get(session_id).pid)
 
     def capacity_refusal(self, pid: int = 0) -> Optional[str]:
         """The reason :meth:`open` would refuse right now, or ``None``.
@@ -271,40 +274,51 @@ class SessionStore:
         self._reap_dead()
 
         with self._lock:
-            if len(self._sessions) < MAX_OPEN_SESSIONS:
-                return None
+            return self._refusal_locked(pid)
 
-            # No "close the oldest": the oldest is usually the target the whole
-            # session has been refining, and close_process discards its scan
-            # results too. The list is given instead, so the choice is made on
-            # what each session holds.
-            existing = [
-                sid for sid, session in self._sessions.items()
-                if session.pid == pid
-            ]
-            already = (
-                " Note that pid %d is already open as %s — reuse that id "
-                "rather than attaching again." % (pid, existing[0])
-                if existing
-                else ""
+    def _refusal_locked(self, pid: int) -> Optional[str]:
+        """Render the refusal, or ``None``. **Caller holds** ``self._lock``.
+
+        Separate from :meth:`capacity_refusal` so :meth:`open` can check and
+        insert under one acquisition. When the check released the lock and the
+        insert took it again, the cap could be exceeded: every thread saw room,
+        then every thread inserted. Demonstrated with 12 concurrent opens
+        against a cap of 8.
+        """
+        if len(self._sessions) < MAX_OPEN_SESSIONS:
+            return None
+
+        # No "close the oldest": the oldest is usually the target the whole
+        # session has been refining, and close_process discards its scan
+        # results too. The list is given instead, so the choice is made on
+        # what each session holds.
+        existing = [
+            sid for sid, session in self._sessions.items()
+            if session.pid == pid
+        ]
+        already = (
+            " Note that pid %d is already open as %s — reuse that id "
+            "rather than attaching again." % (pid, existing[0])
+            if existing
+            else ""
+        )
+        return (
+            "This server already has %d processes open, which is the "
+            "limit, and all of them are live. Close whichever you are "
+            "done with (close_process also discards that session's scan "
+            "results) and attach again. Open: %s.%s"
+            % (
+                MAX_OPEN_SESSIONS,
+                ", ".join(
+                    "%s (%s, pid %d, %d scan%s)"
+                    % (sid, session.name or "?", session.pid,
+                       len(session.scan_ids),
+                       "" if len(session.scan_ids) == 1 else "s")
+                    for sid, session in self._sessions.items()
+                ),
+                already,
             )
-            return (
-                "This server already has %d processes open, which is the "
-                "limit, and all of them are live. Close whichever you are "
-                "done with (close_process also discards that session's scan "
-                "results) and attach again. Open: %s.%s"
-                % (
-                    MAX_OPEN_SESSIONS,
-                    ", ".join(
-                        "%s (%s, pid %d, %d scan%s)"
-                        % (sid, session.name or "?", session.pid,
-                           len(session.scan_ids),
-                           "" if len(session.scan_ids) == 1 else "s")
-                        for sid, session in self._sessions.items()
-                    ),
-                    already,
-                )
-            )
+        )
 
     def at_capacity(self) -> bool:
         """Whether :meth:`open` would refuse right now."""
@@ -501,6 +515,7 @@ def host_platform() -> str:
 
 __all__ = (
     "MAX_OPEN_SESSIONS",
+    "looks_alive",
     "MAX_SCANS_PER_SESSION",
     "ScanResult",
     "Session",

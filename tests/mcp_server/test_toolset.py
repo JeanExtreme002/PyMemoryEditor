@@ -1210,6 +1210,27 @@ class TestThirdReviewRegressions:
 
     # --- the one address no parser ever sees --------------------------- #
 
+    def test_server_info_survives_a_session_with_an_impossible_pid(
+        self, make_toolset
+    ):
+        """`server_info` is the tool the model is told to call first.
+
+        It rendered `alive` with a bare `pid_exists`, which raises
+        OverflowError for a pid outside the platform's range — so one odd
+        session took the whole result down, hiding the limits and the policy
+        as well as the session list. The store had already been guarded for
+        the same call; this file had not.
+        """
+        toolset = make_toolset(config())
+        toolset.store.open(FakeProcess(pid=2 ** 31), 2 ** 31, "impossible")
+        toolset.store.open(FakeProcess(pid=1), 1, "ordinary")
+
+        sessions = toolset.server_info()["open_sessions"]
+
+        by_pid = {entry["pid"]: entry["alive"] for entry in sessions}
+        assert by_pid[2 ** 31] is False
+        assert by_pid[1] is True
+
     def test_a_refused_attach_does_not_leak_the_handle(
         self, make_toolset, monkeypatch
     ):

@@ -268,6 +268,81 @@ class TestOpenSessionsAreCapped:
         assert first != second
 
 
+class TestTheCapHoldsUnderConcurrency:
+    """Tool calls run on a thread pool, so `open` races with itself.
+
+    A refactor split the capacity check and the insert across two acquisitions
+    of the store's lock: every thread saw room, then every thread inserted.
+    The window is a few bytecodes wide, so it does not reproduce on its own —
+    hence the injected pause, which makes a structural defect observable
+    instead of waiting for luck.
+    """
+
+    def test_the_cap_is_not_exceeded_when_opens_race(self, store, all_alive):
+        import threading
+
+        start = threading.Barrier(MAX_OPEN_SESSIONS * 2)
+
+        def attach():
+            start.wait()
+            try:
+                store.open(FakeProcess(), 1, "a")
+            except SessionError:
+                pass
+
+        threads = [
+            threading.Thread(target=attach)
+            for _ in range(MAX_OPEN_SESSIONS * 2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(store.sessions) == MAX_OPEN_SESSIONS
+
+    def test_the_cap_holds_even_with_the_window_stretched(
+        self, store, all_alive, monkeypatch
+    ):
+        """The same property with the race window made wide enough to lose.
+
+        Without this, the test above passes on a broken implementation: the
+        gap between check and insert is too narrow for the scheduler to land
+        in reliably.
+        """
+        import threading
+        import time
+
+        original = type(store).capacity_refusal
+
+        def slow(self, pid=0):
+            result = original(self, pid)
+            time.sleep(0.02)
+            return result
+
+        monkeypatch.setattr(type(store), "capacity_refusal", slow)
+
+        start = threading.Barrier(MAX_OPEN_SESSIONS + 4)
+
+        def attach():
+            start.wait()
+            try:
+                store.open(FakeProcess(), 1, "a")
+            except SessionError:
+                pass
+
+        threads = [
+            threading.Thread(target=attach)
+            for _ in range(MAX_OPEN_SESSIONS + 4)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(store.sessions) == MAX_OPEN_SESSIONS
+
+
 class TestDeadSessionsDoNotHoldSlots:
     """The lockout the cap created, and the reason it evicts here but nowhere
     else.
@@ -328,9 +403,9 @@ class TestDeadSessionsDoNotHoldSlots:
         exactly that. Intermittently, because it also needed the store to be
         at capacity at that moment.
         """
-        from PyMemoryEditor.mcp.session import _looks_alive
+        from PyMemoryEditor.mcp.session import looks_alive
 
-        assert _looks_alive(pid) is False
+        assert looks_alive(pid) is False
 
         for index in range(MAX_OPEN_SESSIONS):
             store.open(FakeProcess(pid=pid), pid, "weird%d" % index)
