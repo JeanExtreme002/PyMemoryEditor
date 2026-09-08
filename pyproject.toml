@@ -195,8 +195,15 @@ skip_empty = true
 #
 # Fast vs slow split:
 #   pytest -m "not slow"        # ~30 s — unit/property/GUI tests only.
-#   pytest                      # ~20 min — everything, including the live
-#                               # self-process integration suite.
+#   pytest                      # everything, including the live self-process
+#                               # integration suite.
+#
+# CI splits by directory rather than by marker: the library/app jobs run
+# `pytest tests --ignore=tests/mcp_server` and `build-mcp` runs
+# `pytest tests/mcp_server`. The MCP suite attaches to the running test
+# process and scans its whole address space, which on macOS is ~390 GiB, so
+# paying that in all ten library cells timed the macOS job out. Locally the
+# two halves are ~60 s and ~22 s.
 # Mark a test (or set ``pytestmark = pytest.mark.slow`` at module scope) to
 # add it to the slow bucket — see tests/test_editor.py for the pattern.
 [tool.pytest.ini_options]

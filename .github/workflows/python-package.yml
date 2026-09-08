@@ -109,16 +109,33 @@ jobs:
     - name: Test with pytest
       env:
         QT_QPA_PLATFORM: offscreen
+      # `--ignore=tests/mcp_server`: the MCP server has its own job
+      # (`build-mcp`) so this matrix keeps measuring the library and the app,
+      # at the wall clock it always had. Its tests walk a live process's whole
+      # address space, which on macOS is ~390 GiB (see build-macos below) --
+      # running them in every cell of a 4x2 matrix plus macOS plus speed paid
+      # that cost eight times over, and it pushed build-macos past its
+      # 20-minute budget.
+      #
       # --cov-fail-under is the real, in-repo coverage gate (deterministic and
-      # independent of any external service). It's a conservative floor: the
-      # full suite measures ~87% on a given OS today (coverage.py only counts
-      # the host backend + shared code — the two foreign backends aren't
-      # imported, so they don't drag the number down per-platform). 60 leaves
-      # headroom for a less-covered backend / Python-version variance while
-      # still catching any large regression. Ratchet it up once the per-OS
-      # numbers settle on Codecov.
+      # independent of any external service), and it is deliberately a floor
+      # rather than a target.
+      #
+      # It dropped from 60 to 50 when the MCP suite moved to `build-mcp`, and
+      # that is a change of denominator, not of quality. `source` in pyproject
+      # is the whole package, and coverage has no per-invocation way to drop a
+      # subpackage, so this job now measures `PyMemoryEditor/mcp` — 918
+      # statements, a third of the codebase — as entirely uncovered. Measured:
+      # the full suite is 88%, this job's subset is 59%, and `build-mcp`'s is
+      # 71%. Two floors over two subsets catch strictly more than one floor
+      # over the union did, since a regression in either half used to be able
+      # to hide behind the other.
+      #
+      # (coverage.py only counts the host backend + shared code — the two
+      # foreign backends aren't imported, so they don't drag the number down
+      # per-platform.) Ratchet both up once the numbers settle on Codecov.
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=50
     - name: Upload coverage to Codecov
       # Upload from every matrix cell so Codecov merges each OS's backend
       # coverage into one combined view (each platform exercises a different
@@ -169,7 +186,7 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=50
     - name: Upload coverage to Codecov
       # Flag mirrors the matrix format (`runner.os` is "macOS" here) so Codecov
       # groups this cell alongside the Linux and Windows uploads.
@@ -228,12 +245,73 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=50
     - name: Upload coverage to Codecov
       if: always()
       uses: codecov/codecov-action@v5
       with:
         files: ./coverage.xml
         flags: speed-Linux-py3.12
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+
+  # The MCP server gets its own job rather than a row in the matrix above.
+  #
+  # Its tests are the expensive ones: `test_live.py` and half of
+  # `test_fake_fidelity.py` attach to the running test process and scan its
+  # entire address space, which is exactly the workload the build-macos note
+  # below measures at ~390 GiB. Running them in all ten cells of the other
+  # jobs multiplied that by ten and timed macOS out; running them once per OS
+  # keeps the platform coverage that actually matters and costs a fraction.
+  #
+  # One Python version, three operating systems -- the opposite shape from the
+  # matrix above, and deliberately so. Nothing in this package is
+  # version-sensitive (it is plain 3.10+ typing over the library's own API),
+  # but plenty of it is platform-sensitive: the Windows-only read-only handle,
+  # macOS `task_for_pid`, and the per-platform process enumeration and denylist.
+  # The one Windows-only bug this suite has caught so far was a test reading a
+  # UTF-8 file with the locale's encoding, which only cp1252 could fail on.
+  #
+  # NumPy is installed for the same reason build-macos installs it: without the
+  # vectorized scan path, walking a macOS address space takes ~8x longer.
+  build-mcp:
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install dependencies (MCP SDK + NumPy speed extra)
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev,speed]"
+    - name: Test the MCP server
+      # Same `--cov=PyMemoryEditor` as every other job: `source` in pyproject
+      # is the whole package and wins over a narrower `--cov` path, so scoping
+      # this to `PyMemoryEditor/mcp` would silently measure the library anyway.
+      # What differs is the subset exercised — the MCP suite reaches 71% of the
+      # package on its own (it drives the library through the real backends),
+      # so 60 is the same kind of floor the other jobs carry.
+      run: |
+        pytest tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-report=term --cov-report=xml --cov-fail-under=60
+    - name: Upload coverage to Codecov
+      # Its own flag, so the merged report shows MCP coverage alongside the
+      # library's instead of one overwriting the other.
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        files: ./coverage.xml
+        flags: mcp-${{ runner.os }}-py3.12
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
