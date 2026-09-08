@@ -187,6 +187,37 @@ class TestAnnotations:
         assert annotations.read_only_hint is False
         assert annotations.destructive_hint is True
 
+    def test_close_process_is_not_advertised_as_read_only(self, built):
+        """It drops the handle *and* every scan set in the session.
+
+        It sat in the read-only list, so a client that treats
+        ``read_only_hint`` as licence to auto-approve would discard a refine
+        chain the user spent minutes narrowing, on the model's word alone.
+        Reading the target's memory is what read-only means here; destroying
+        the server's own state is not.
+        """
+        server, _toolset = built(config())
+        annotations = self._annotations(server, "close_process")
+
+        assert annotations.read_only_hint is False
+        assert annotations.destructive_hint is True
+        # Not idempotent: the second call has no session left to close.
+        assert annotations.idempotent_hint is False
+
+    def test_the_read_only_tools_really_only_read(self, built):
+        """The paired half, as a property rather than a list.
+
+        Whatever is advertised read-only must not be able to change state, so a
+        tool added to that list by mistake fails here instead of in a client.
+        """
+        server, _toolset = built(config())
+        by_name = {tool.name: tool.annotations for tool in _run(server.list_tools())}
+
+        state_changing = {"open_process", "close_process", "write_value"}
+        for name, annotations in by_name.items():
+            if annotations.read_only_hint:
+                assert name not in state_changing, name
+
     def test_handle_minting_tools_are_not_idempotent(self, built):
         server, _toolset = built(config())
         assert self._annotations(server, "scan_value").idempotent_hint is False

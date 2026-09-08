@@ -141,16 +141,22 @@ def _surface_errors(method: Callable) -> Callable:
 
 
 def _read_only(toolset: MemoryToolset) -> List[Tuple[Any, bool]]:
-    """The always-registered tools, paired with an idempotency hint.
+    """The always-registered tools that really are read-only, with an
+    idempotency hint.
 
     "Idempotent" here means *calling it twice does the same thing* — true of
-    the pure lookups, false of anything that opens a handle or mints a scan id.
-    Clients use the hint to decide what may be retried silently.
+    the pure lookups, false of anything that mints a scan id. Clients use the
+    hint to decide what may be retried silently.
+
+    ``close_process`` used to be in this list and is not read-only: it drops
+    the handle *and* every scan result set in the session. A client that treats
+    ``read_only_hint`` as licence to auto-approve would throw away a refine
+    chain the user spent minutes building, without asking. It is registered
+    separately below.
     """
     return [
         (toolset.server_info, True),
         (toolset.list_processes, True),
-        (toolset.close_process, False),
         (toolset.process_info, True),
         (toolset.list_memory_regions, True),
         (toolset.scan_value, False),
@@ -397,6 +403,24 @@ def build_server(
                 open_world_hint=True,
             )
         )(_surface_errors(method))
+
+    # Not read-only, and the annotation has to say so. Closing discards every
+    # scan set in the session -- work that took the user real time to narrow --
+    # so a client auto-approving on `read_only_hint` was destroying state on
+    # the model's word alone.
+    #
+    # No `_ALWAYS_ASK`, though: this is the ordinary way to finish, and
+    # prompting on every cleanup teaches the user to click through prompts,
+    # which is what makes the write confirmation worth anything. `destructive`
+    # plus not-idempotent is the honest signal without that cost.
+    server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=True,
+            idempotent_hint=False,
+            open_world_hint=True,
+        )
+    )(_surface_errors(toolset.close_process))
 
     _register_open_process(server, toolset)
 
