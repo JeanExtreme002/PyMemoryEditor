@@ -1398,8 +1398,13 @@ class TestScopedReviewRegressions:
         assert limits["valid_numeric_widths"]["int"] == [1, 2, 4, 8]
         assert limits["valid_numeric_widths"]["float"] == [4, 8]
         assert limits["valid_numeric_widths"]["bool"] == [1]
-        assert limits["max_text_bytes"] >= 1
-        assert limits["scan_batch_bytes"] >= 1
+        # Against what the code enforces, not against 1: comparing to 1 meant
+        # server_info could drift to a stale literal and this test — the one
+        # added to catch exactly that — would stay green.
+        from PyMemoryEditor.mcp.toolset import MAX_TEXT_BYTES
+
+        assert limits["max_text_bytes"] == MAX_TEXT_BYTES
+        assert limits["scan_batch_bytes"] == toolset.config.scan_batch_bytes
 
     def test_bitness_failure_does_not_break_attach(
         self, make_toolset, fake_process, monkeypatch

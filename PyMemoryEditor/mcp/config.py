@@ -81,6 +81,21 @@ class ServerConfig:
     :param max_scan_results: per-scan cap on stored addresses.
     :param max_scan_seconds: per-scan wall-clock budget.
     :param scan_batch_bytes: memory covered per deadline check.
+
+    .. note::
+       ``parse_args`` validates these (a non-positive ``max_scan_results``,
+       ``max_scan_seconds`` or ``scan_batch_bytes`` is rejected at launch), but
+       the dataclass itself does not — there is no ``__post_init__``. An
+       embedder constructing this in code can therefore build a config that
+       misbehaves quietly rather than failing: ``scan_batch_bytes=0`` makes
+       every region its own scan batch, and ``max_scan_results=0`` makes every
+       scan return nothing while flagging itself partial.
+
+       Known gap, deliberately left: unlike the process allowlist — whose
+       validation *was* moved into :class:`ProcessPolicy` because a bad value
+       there silently disables the consent prompt — a bad number here produces
+       obviously useless output rather than an unsafe server. Worth a
+       ``__post_init__`` mirroring the three CLI checks.
     """
 
     allow_write: bool = True

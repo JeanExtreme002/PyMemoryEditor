@@ -589,3 +589,63 @@ def test_written_reports_what_landed(
     # `written` is. As an inline if/else this used to parse as
     # `assert (a == b) if c else True`, making the int row assert nothing.
     assert result["requested"] == requested
+
+
+# --------------------------------------------------------------------------- #
+# The cap has to bound the write, not only the read (final review pass)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("value_type, value, bufflength", [
+    # No bufflength at all — the schema default, and what the docstrings
+    # recommend. `_write_span` returned len(value) with no ceiling, so this
+    # allocated in the server *and* wrote that much into the target.
+    ("bytes", "AA" * 200000, 0),
+    ("str", "x" * 200000, 0),
+    # And a str cap counts characters, so it escaped even when explicit:
+    # 65000 CJK characters is 195 000 bytes.
+    ("str", "日" * 65000, 65000),
+])
+def test_an_oversized_write_is_refused(target, value_type, value, bufflength):
+    address = target.scratch()
+    assert _outcome(
+        lambda: target.toolset.write_value(
+            target.session_id, hex(address), value_type, value, bufflength
+        )
+    ) == "ToolError"
+
+
+@pytest.mark.parametrize("value_type, value", [
+    ("bytes", "DEADBEEF"), ("str", "hp"), ("str", "日本"),
+])
+def test_an_ordinary_write_without_a_width_still_works(target, value_type, value):
+    """The cap must not get in the way of the normal call shape."""
+    address = target.scratch()
+    result = target.toolset.write_value(
+        target.session_id, hex(address), value_type, value
+    )
+    assert result["previous_value_bufflength"] >= 1
+
+
+def test_a_scalar_offsets_string_is_one_hop_not_one_per_character(target):
+    """`offsets="0x108"` must mean one hop, not three.
+
+    A str is a valid sequence of str, so a scalar was consumed character by
+    character — "108" became [1, 0, 8]. Whether that errors or resolves to a
+    plausible wrong address depends on what happens to be mapped in the
+    target, and the address goes straight into read_value or write_value.
+    """
+    address = target.scratch(size=64)
+    # A slot pointing at itself, so a one-hop chain resolves predictably.
+    pointer = ctypes.c_void_p(address)
+    target.toolset.write_value(
+        target.session_id, hex(address), "bytes", bytes(pointer).hex()
+    )
+
+    as_list = target.toolset.resolve_pointer_chain(
+        target.session_id, hex(address), ["0x8"]
+    )
+    as_scalar = target.toolset.resolve_pointer_chain(
+        target.session_id, hex(address), "0x8"
+    )
+    assert len(as_scalar["offsets"]) == 1
+    assert as_scalar["address"] == as_list["address"]

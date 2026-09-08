@@ -1270,7 +1270,15 @@ class MemoryToolset:
             # corrupting the very memory the hint promises to restore. (For
             # multibyte text the widths disagree too: the read counts bytes
             # while a ``str`` write caps characters.)
-            replaced_width = self._write_span(pytype, width, parsed)
+            # Through the same ceiling the scan paths use. `_write_span` on an
+            # omitted bufflength returns len(value), which drove both the undo
+            # read's allocation *in this server* and the write into the target:
+            # a 200 KB `bytes` value wrote 200 KB, 3x the cap the very same
+            # call enforces when the width is explicit and past what
+            # server_info advertises. The str case escaped even with an
+            # explicit width, since that cap counts characters — 65000 of them
+            # in CJK is 195 KB.
+            replaced_width = self._capped_span(pytype, width, parsed)
             undo_type = "bytes" if pytype in (str, bytes) else value_type
 
             previous: Any = None
@@ -1364,6 +1372,17 @@ class MemoryToolset:
         """
         session = self.store.get(session_id)
         base = parse_address(base_address, field="base_address")
+
+        if isinstance(offsets, str):
+            # Same hazard as ProcessPolicy.allowed_names, same fix: a str is a
+            # valid sequence of str, so a scalar was consumed character by
+            # character — "108" became a three-hop chain [1, 0, 8] instead of
+            # one hop of 0x108. Whether that errors or silently resolves to a
+            # plausible-looking wrong address depends on what happens to be
+            # mapped in the target, which nobody controls; and the address goes
+            # straight into read_value or write_value.
+            offsets = [offsets]
+
         parsed_offsets = [
             parse_offset(offset, field="offset") for offset in (offsets or [])
         ]
@@ -1603,6 +1622,25 @@ class MemoryToolset:
                 "if it is still running; otherwise tell the user it is gone."
                 % (action, session.name or "unknown", session.pid, error)
             ) from None
+
+    def _capped_span(self, pytype: Type, width: Optional[int], value: Any) -> int:
+        """:meth:`_write_span`, with the text ceiling applied.
+
+        Separate from ``_write_span`` because that one answers "how many bytes
+        will this write touch?", which callers need even when the answer is too
+        large; this one is the gate.
+        """
+        span = self._write_span(pytype, width, value)
+        if pytype in (str, bytes) and span > MAX_TEXT_BYTES:
+            raise ToolError(
+                "That value would overwrite %d bytes, over the %d-byte limit. "
+                "Writing that much into a live process is almost never what "
+                "you meant — pass a smaller value, or a bufflength that keeps "
+                "the span under the limit. (For a `str`, bufflength counts "
+                "characters, so non-ASCII text needs a smaller number.)"
+                % (span, MAX_TEXT_BYTES)
+            )
+        return span
 
     @staticmethod
     def _write_span(pytype: Type, width: Optional[int], value: Any) -> int:
