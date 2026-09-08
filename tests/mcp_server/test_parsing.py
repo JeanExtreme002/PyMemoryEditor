@@ -510,7 +510,7 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
 
     #: Files no job measures, and why. Anything unmeasured that is not here is
     #: a file someone added and forgot, which is exactly what this catches.
-    OMITIDOS_DE_PROPOSITO = {
+    DELIBERATELY_UNMEASURED = {
         # Qt GUI. Its tests do run (tests/app is not ignored), but widget code
         # is dominated by paths only an interface test reaches, so measuring it
         # alongside the library would distort the floor in both directions.
@@ -521,10 +521,10 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
     }
 
     @staticmethod
-    def _mede(config_file, caminho):
-        """Would this config measure `caminho`? Source filter, then omit.
+    def _measures(config_file, path):
+        """Would this config measure `path`? Source filter, then omit.
 
-        `caminho` is normalised to forward slashes first. Coverage's `source`
+        `path` is normalised to forward slashes first. Coverage's `source`
         and `omit` patterns are written with `/` regardless of host, so a
         native Windows path (`PyMemoryEditor\\mcp\\toolset.py`) matched
         neither the source prefix nor any omit glob — every file came back
@@ -540,52 +540,52 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
         config = Coverage(config_file=str(root / config_file)).config
         source = config.source[0].rstrip("/")
 
-        caminho = PurePath(caminho).as_posix().replace("\\", "/")
+        path = PurePath(path).as_posix().replace("\\", "/")
 
-        if caminho != source and not caminho.startswith(source + "/"):
+        if path != source and not path.startswith(source + "/"):
             return False
         return not any(
-            fnmatch.fnmatch(caminho, pattern) for pattern in config.run_omit
+            fnmatch.fnmatch(path, pattern) for pattern in config.run_omit
         )
 
-    def _classificar(self):
+    def _classify(self):
         import fnmatch
         from pathlib import Path
 
         root = Path(__file__).resolve().parents[2]
-        arquivos = sorted(
-            path.relative_to(root).as_posix()
-            for path in root.glob("PyMemoryEditor/**/*.py")
-            if "__pycache__" not in str(path)
+        sources = sorted(
+            found.relative_to(root).as_posix()
+            for found in root.glob("PyMemoryEditor/**/*.py")
+            if "__pycache__" not in str(found)
         )
-        assert arquivos, "no package sources found — the glob is wrong"
+        assert sources, "no package sources found — the glob is wrong"
 
-        ambos, nenhum = [], []
-        for caminho in arquivos:
-            lib = self._mede(".coveragerc-lib", caminho)
-            mcp = self._mede(".coveragerc-mcp", caminho)
+        both, neither = [], []
+        for path in sources:
+            lib = self._measures(".coveragerc-lib", path)
+            mcp = self._measures(".coveragerc-mcp", path)
             if lib and mcp:
-                ambos.append(caminho)
+                both.append(path)
             elif not lib and not mcp:
-                nenhum.append(caminho)
+                neither.append(path)
 
-        esperado = {
-            caminho
-            for caminho in nenhum
+        expected = {
+            path
+            for path in neither
             if any(
-                fnmatch.fnmatch(caminho, pattern)
-                for pattern in self.OMITIDOS_DE_PROPOSITO
+                fnmatch.fnmatch(path, pattern)
+                for pattern in self.DELIBERATELY_UNMEASURED
             )
         }
-        return arquivos, ambos, sorted(set(nenhum) - esperado)
+        return sources, both, sorted(set(neither) - expected)
 
-    @pytest.mark.parametrize("nativo, posix", [
+    @pytest.mark.parametrize("native, posix", [
         ("PyMemoryEditor\\mcp\\toolset.py", "PyMemoryEditor/mcp/toolset.py"),
         ("PyMemoryEditor\\app\\main_window.py", "PyMemoryEditor/app/main_window.py"),
         ("PyMemoryEditor\\linux\\functions.py", "PyMemoryEditor/linux/functions.py"),
         ("PyMemoryEditor\\__main__.py", "PyMemoryEditor/__main__.py"),
     ])
-    def test_classification_ignores_the_path_separator(self, nativo, posix):
+    def test_classification_ignores_the_path_separator(self, native, posix):
         """The bug that made this class fail on Windows and only Windows.
 
         `str(Path.relative_to(...))` yields backslashes there, and coverage's
@@ -595,23 +595,23 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
         have to own a Windows machine to catch it.
         """
         for config_file in (".coveragerc-lib", ".coveragerc-mcp"):
-            assert self._mede(config_file, nativo) == self._mede(
+            assert self._measures(config_file, native) == self._measures(
                 config_file, posix
-            ), (config_file, nativo)
+            ), (config_file, native)
 
     def test_no_file_is_measured_by_both_jobs(self):
-        _arquivos, ambos, _inesperados = self._classificar()
-        assert ambos == [], (
+        _sources, both, _unexpected = self._classify()
+        assert both == [], (
             "measured twice, so whichever job imports it reports it as its own "
-            "coverage: %s" % ambos
+            "coverage: %s" % both
         )
 
     def test_every_unmeasured_file_is_deliberately_omitted(self):
-        _arquivos, _ambos, inesperados = self._classificar()
-        assert inesperados == [], (
+        _sources, _both, unexpected = self._classify()
+        assert unexpected == [], (
             "no CI job measures these, and they are not in "
-            "OMITIDOS_DE_PROPOSITO — either scope them into a job or record "
-            "why they are exempt: %s" % inesperados
+            "DELIBERATELY_UNMEASURED — either scope them into a job or record "
+            "why they are exempt: %s" % unexpected
         )
 
     def test_the_partition_actually_covers_the_library(self):
@@ -621,13 +621,13 @@ class TestTheTwoCoverageConfigsPartitionThePackage:
         useful half of the invariant is stated too: most of the package is
         measured, and each half owns a real share of it.
         """
-        arquivos, _ambos, _inesperados = self._classificar()
-        lib = [c for c in arquivos if self._mede(".coveragerc-lib", c)]
-        mcp = [c for c in arquivos if self._mede(".coveragerc-mcp", c)]
+        sources, _both, _unexpected = self._classify()
+        lib = [c for c in sources if self._measures(".coveragerc-lib", c)]
+        mcp = [c for c in sources if self._measures(".coveragerc-mcp", c)]
 
         assert len(lib) > 20, lib
         assert len(mcp) > 3, mcp
-        assert len(lib) + len(mcp) > len(arquivos) // 2
+        assert len(lib) + len(mcp) > len(sources) // 2
 
 
 class TestServerConfigValidatesItsBounds:
