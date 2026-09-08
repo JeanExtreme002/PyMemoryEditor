@@ -59,7 +59,7 @@ pip install "PyMemoryEditor[speed]"
 ```
 
 To let an AI assistant drive the library over the Model Context Protocol, use
-the `mcp` extra (see [below](#let-an-ai-assistant-do-it-mcp)):
+the `mcp` extra (see [below](https://github.com/JeanExtreme002/PyMemoryEditor#let-an-ai-assistant-do-it-mcp)):
 
 ```bash
 pip install "PyMemoryEditor[mcp]"
@@ -116,7 +116,7 @@ Or in any client that reads `mcpServers` JSON (Claude Desktop, editors, …):
 
 Fourteen tools cover the full workflow, with scan results kept server-side behind a handle, so a 40 000-hit first scan costs a few tokens instead of your whole context.
 
-Read the [MCP guide](docs/mcp.md) to learn more.
+Read the [MCP guide](https://pymemoryeditor.readthedocs.io/en/latest/mcp.html) to learn more.
 
 ---
 
@@ -127,16 +127,16 @@ Full documentation lives at **[pymemoryeditor.readthedocs.io](https://pymemoryed
 A quick map of where to go:
 
 <table>
-<tr><td><a href="docs/quickstart.md"><b>Quick Start</b></a></td><td>Open a process, read, write and run your first scan.</td></tr>
-<tr><td><a href="docs/guide/searching.md"><b>Searching memory</b></a></td><td>Value scans, ranges, refining results, the Cheat Engine loop.</td></tr>
-<tr><td><a href="docs/guide/pattern-scan.md"><b>Pattern scan</b></a></td><td>Find code/data with byte signatures (AOB) and regex.</td></tr>
-<tr><td><a href="docs/guide/pointers.md"><b>Pointers</b></a></td><td>Multi-level pointer chains and the live <code>RemotePointer</code>.</td></tr>
-<tr><td><a href="docs/guide/pointer-scan.md"><b>Pointer scan</b></a></td><td>Find static pointers that survive ASLR.</td></tr>
-<tr><td><a href="docs/app.md"><b>The GUI app</b></a></td><td>The bundled Cheat Engine-style scanner.</td></tr>
-<tr><td><a href="docs/mcp.md"><b>The MCP server</b></a></td><td>Let an AI assistant drive the scan/refine loop.</td></tr>
-<tr><td><a href="docs/api/openprocess.md"><b>API reference</b></a></td><td>Every public class, method and parameter.</td></tr>
-<tr><td><a href="docs/platform-notes.md"><b>Platform notes</b></a></td><td>Permissions and quirks on Windows, Linux and macOS.</td></tr>
-<tr><td><a href="docs/troubleshooting.md"><b>Troubleshooting</b></a></td><td>Common errors and how to fix them.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/quickstart.html"><b>Quick Start</b></a></td><td>Open a process, read, write and run your first scan.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/guide/searching.html"><b>Searching memory</b></a></td><td>Value scans, ranges, refining results, the Cheat Engine loop.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/guide/pattern-scan.html"><b>Pattern scan</b></a></td><td>Find code/data with byte signatures (AOB) and regex.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/guide/pointers.html"><b>Pointers</b></a></td><td>Multi-level pointer chains and the live <code>RemotePointer</code>.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/guide/pointer-scan.html"><b>Pointer scan</b></a></td><td>Find static pointers that survive ASLR.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/app.html"><b>The GUI app</b></a></td><td>The bundled Cheat Engine-style scanner.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/mcp.html"><b>The MCP server</b></a></td><td>Let an AI assistant drive the scan/refine loop.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/api/openprocess.html"><b>API reference</b></a></td><td>Every public class, method and parameter.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/platform-notes.html"><b>Platform notes</b></a></td><td>Permissions and quirks on Windows, Linux and macOS.</td></tr>
+<tr><td><a href="https://pymemoryeditor.readthedocs.io/en/latest/troubleshooting.html"><b>Troubleshooting</b></a></td><td>Common errors and how to fix them.</td></tr>
 </table>
 
 ---
@@ -158,7 +158,7 @@ A quick map of where to go:
 ## 🤝 Contributing
 
 Pull requests, bug reports and feature ideas are very welcome. Read
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the development setup, test layout and
+[`CONTRIBUTING.md`](https://github.com/JeanExtreme002/PyMemoryEditor/blob/main/CONTRIBUTING.md) for the development setup, test layout and
 the small set of platform-specific quirks to be aware of.
 
 If PyMemoryEditor helped your project, please ⭐ the repo — it's the easiest way to
@@ -168,4 +168,4 @@ support the work and to help others discover the library.
 
 ## License
 
-Released under the [MIT License](LICENSE) — free for personal and commercial use.
+Released under the [MIT License](https://github.com/JeanExtreme002/PyMemoryEditor/blob/main/LICENSE) — free for personal and commercial use.
