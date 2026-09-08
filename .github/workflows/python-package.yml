@@ -323,12 +323,14 @@ jobs:
       # so 60 is the same kind of floor the other jobs carry.
       env:
         PYTEST_ADDOPTS: ${{ matrix.addopts }}
-      # -p no:pytestqt: the dev extra brings pytest-qt, whose plugin imports
-      # QtGui at startup and dies with `ImportError: libEGL.so.1` on a bare
-      # Linux runner. The library jobs apt-install a pile of X libraries for
-      # it; this job runs no Qt tests, so it disables the plugin instead.
+      # -p no:pytest-qt: the dev extra brings pytest-qt, whose plugin imports
+      # QtGui at startup. The name is the entry point's, hyphen included --
+      # `-p no:pytestqt` silently does nothing, which is how this failed twice.
+      # It dies with `ImportError: libEGL.so.1` on a bare Linux runner; the
+      # library jobs apt-install a pile of X libraries for it. This job runs no
+      # Qt tests, so it disables the plugin instead of paying for them.
       run: |
-        pytest tests/mcp_server -p no:pytestqt -v -s -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
+        pytest tests/mcp_server -p no:pytest-qt -v -s -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
     - name: Upload coverage to Codecov
       # Its own flag, so the merged report shows MCP coverage alongside the
       # library's instead of one overwriting the other.
