@@ -488,6 +488,118 @@ class TestCoverageConfigsAreValidIni:
         assert any("mcp" in pattern for pattern in omit), omit
 
 
+class TestTheTwoCoverageConfigsPartitionThePackage:
+    """Together the two CI jobs must measure each file exactly once.
+
+    `--cov-fail-under` is the real gate in this repo (Codecov is
+    informational), and it only means something if each half measures its own
+    scope: the library job runs `pytest tests --ignore=tests/mcp_server` under
+    .coveragerc-lib, `build-mcp` runs `pytest tests/mcp_server` under
+    .coveragerc-mcp.
+
+    Three files now carry an `omit` list -- pyproject.toml for a plain local
+    `pytest --cov`, plus the two rcfiles -- and the failure mode is silent. Add
+    a `PyMemoryEditor/cli/__main__.py`, omit it in pyproject only, and the
+    library gate measures a file the local run does not: the two numbers drift
+    apart and nothing turns red. Measuring a file twice would be the mirror of
+    that, inflating whichever job also happens to import it.
+
+    So the invariant is asserted directly rather than trusted to three lists
+    staying in step.
+    """
+
+    #: Files no job measures, and why. Anything unmeasured that is not here is
+    #: a file someone added and forgot, which is exactly what this catches.
+    OMITIDOS_DE_PROPOSITO = {
+        # Qt GUI. Its tests do run (tests/app is not ignored), but widget code
+        # is dominated by paths only an interface test reaches, so measuring it
+        # alongside the library would distort the floor in both directions.
+        "PyMemoryEditor/app/*",
+        # Entry points: a `python -m` shim each, with nothing to cover.
+        "PyMemoryEditor/__main__.py",
+        "PyMemoryEditor/mcp/__main__.py",
+    }
+
+    @staticmethod
+    def _mede(config_file, caminho):
+        """Would this config measure `caminho`? Source filter, then omit."""
+        import fnmatch
+        from pathlib import Path
+
+        from coverage import Coverage
+
+        root = Path(__file__).resolve().parents[2]
+        config = Coverage(config_file=str(root / config_file)).config
+        source = config.source[0].rstrip("/")
+
+        if caminho != source and not caminho.startswith(source + "/"):
+            return False
+        return not any(
+            fnmatch.fnmatch(caminho, pattern) for pattern in config.run_omit
+        )
+
+    def _classificar(self):
+        import fnmatch
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        arquivos = sorted(
+            str(path.relative_to(root))
+            for path in root.glob("PyMemoryEditor/**/*.py")
+            if "__pycache__" not in str(path)
+        )
+        assert arquivos, "no package sources found — the glob is wrong"
+
+        ambos, nenhum = [], []
+        for caminho in arquivos:
+            lib = self._mede(".coveragerc-lib", caminho)
+            mcp = self._mede(".coveragerc-mcp", caminho)
+            if lib and mcp:
+                ambos.append(caminho)
+            elif not lib and not mcp:
+                nenhum.append(caminho)
+
+        esperado = {
+            caminho
+            for caminho in nenhum
+            if any(
+                fnmatch.fnmatch(caminho, pattern)
+                for pattern in self.OMITIDOS_DE_PROPOSITO
+            )
+        }
+        return arquivos, ambos, sorted(set(nenhum) - esperado)
+
+    def test_no_file_is_measured_by_both_jobs(self):
+        _arquivos, ambos, _inesperados = self._classificar()
+        assert ambos == [], (
+            "measured twice, so whichever job imports it reports it as its own "
+            "coverage: %s" % ambos
+        )
+
+    def test_every_unmeasured_file_is_deliberately_omitted(self):
+        _arquivos, _ambos, inesperados = self._classificar()
+        assert inesperados == [], (
+            "no CI job measures these, and they are not in "
+            "OMITIDOS_DE_PROPOSITO — either scope them into a job or record "
+            "why they are exempt: %s" % inesperados
+        )
+
+    def test_the_partition_actually_covers_the_library(self):
+        """Guard against the two tests above passing by measuring nothing.
+
+        Both would be satisfied by configs that measure zero files, so the
+        useful half of the invariant is stated too: most of the package is
+        measured, and each half owns a real share of it.
+        """
+        arquivos, _ambos, _inesperados = self._classificar()
+        lib = [c for c in arquivos if self._mede(".coveragerc-lib", c)]
+        mcp = [c for c in arquivos if self._mede(".coveragerc-mcp", c)]
+
+        assert len(lib) > 20, lib
+        assert len(mcp) > 3, mcp
+        assert len(lib) + len(mcp) > len(arquivos) // 2
+
+
 class TestServerConfigValidatesItsBounds:
     """The three numeric bounds were checked at the CLI only.
 
