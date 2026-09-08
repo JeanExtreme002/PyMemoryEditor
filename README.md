@@ -59,7 +59,7 @@ pip install "PyMemoryEditor[speed]"
 ```
 
 To let an AI assistant drive the library over the Model Context Protocol, use
-the `mcp` extra (see [below](https://github.com/JeanExtreme002/PyMemoryEditor#let-an-ai-assistant-do-it-mcp)):
+the `mcp` extra (see [below](#let-an-ai-assistant-do-it-mcp)):
 
 ```bash
 pip install "PyMemoryEditor[mcp]"
