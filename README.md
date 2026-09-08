@@ -92,7 +92,7 @@ That's it — read, write or scan another process in three lines, the same way o
 
 PyMemoryEditor ships a **Model Context Protocol server**, so an AI assistant can run the whole loop itself:
 
-> *"Find the health value in my game — it's 100 right now."*
+> *"Find the health value in my game. It's 100 right now."*
 >
 > It scans, asks you to take damage, refines the matches, and hands you the address.
 
@@ -114,16 +114,7 @@ Or in any client that reads `mcpServers` JSON (Claude Desktop, editors, …):
 }
 ```
 
-Fourteen tools cover the full workflow — `scan_value`, `refine_scan`, `scan_pattern`, `read_value`, `find_pointer_paths` and friends — with scan results kept server-side behind a handle, so a 40 000-hit first scan costs a few tokens instead of your whole context.
-
-**You don't pin it to one process up front.** Attaching to a new target prompts *you* — naming the process and pid, with an option to remember your answer — so one registration covers whatever you end up working on:
-
-```text
-Allow PyMemoryEditor to attach to "game.exe" (pid 4821)?
-  [ ] remember   (Approve)  (Decline)
-```
-
-**And nothing happens unattended.** Both `open_process` and `write_value` are tagged so your client confirms *every* call — even in its most permissive auto-approve mode — and a write returns the previous value so it can be undone. OS and credential processes are refused outright. `--read-only` drops the write tool entirely, `--allow-process NAME` pre-approves a target you already trust, and `--allow-any-process` turns prompting off for scripts.
+Fourteen tools cover the full workflow, with scan results kept server-side behind a handle, so a 40 000-hit first scan costs a few tokens instead of your whole context.
 
 It runs with your privileges and is **not a sandbox** — read the [MCP guide](docs/mcp.md) before pointing it at anything you care about.
 

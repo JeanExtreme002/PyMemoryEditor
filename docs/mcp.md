@@ -9,7 +9,7 @@ It is the Cheat Engine workflow — the tedious part of which is a search
 problem with a human in the loop, which is exactly what an assistant is good
 at.
 
-> *"Find the health value in my game — it's 100 right now."*
+> *"Find the health value in my game. It's 100 right now."*
 >
 > The assistant scans, asks you to take damage, refines, and hands you the
 > address.
@@ -69,8 +69,7 @@ MCP clients launch the server from their own environment, which often is not
 the virtualenv you installed into. If the client reports "command not found",
 point it at the interpreter instead — the module entry point is equivalent:
 
-    {"command": "/path/to/venv/bin/python",
-     "args": ["-m", "PyMemoryEditor.mcp"]}
+    {"command": "/path/to/venv/bin/python", "args": ["-m", "PyMemoryEditor.mcp"]}
 ```
 
 ## Run it by hand
@@ -321,11 +320,4 @@ print(scan["count"], "candidates ->", scan["scan_id"])
 # ...after the value changes in the target:
 refined = tools.refine_scan(scan["scan_id"], value="87")
 print(tools.list_scan_results(refined["scan_id"])["results"])
-```
-
-```{admonition} Enjoying PyMemoryEditor?
-:class: tip
-
-If the library saved you time, please **[⭐ star it on GitHub](https://github.com/JeanExtreme002/PyMemoryEditor)** —
-it's the single easiest way to support the project and help others discover it.
 ```
