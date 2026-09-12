@@ -23,7 +23,7 @@ copyright = f"{datetime.now().year}, {author}"
 try:
     from PyMemoryEditor import __version__ as release
 except Exception:  # pragma: no cover - docs can build without the package installed
-    release = "2.0.0"
+    release = "3.0.1"
 
 version = ".".join(release.split(".")[:2])
 
