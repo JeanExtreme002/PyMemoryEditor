@@ -31,7 +31,8 @@ scans, freezing values) to a small, friendly API that works **identically on
 Windows, Linux and macOS**.
 
 Get going with the [Installation](installation.md) and [Quick Start](quickstart.md)
-pages, then dig into the [User Guide](guide/index.md) for the in-depth walkthroughs.
+pages, then work through the guide itself, starting at
+[Opening a process](guide/opening-process.md).
 Prefer to click rather than type? The bundled [GUI app](app.md) gives you a
 Cheat Engine-style interface for free.
 
@@ -100,48 +101,87 @@ explore, scan and freeze values by clicking.
 </tr>
 </table>
 
-## User's Guide
+## Documentation
 
-This part of the documentation walks you through every workflow, from opening a
-process to following multi-level pointer chains, plus the bundled GUI app.
+Every workflow is covered, from opening a process to following multi-level
+pointer chains — plus the bundled GUI app, the MCP server for AI assistants,
+and the reference for every public symbol. Each group below stands on its own,
+so you can start wherever your question is.
 
 ```{toctree}
-:maxdepth: 2
+:maxdepth: 1
+:caption: Getting Started
 
 why
 installation
 quickstart
-guide/index
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Core Workflow
+
+guide/opening-process
+guide/read-write
+guide/searching
+guide/pattern-scan
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Inspecting the Process
+
+guide/memory-regions
+guide/modules-threads
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Pointers
+
+guide/pointers
+guide/pointer-scan
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Memory Allocation
+
+guide/allocate-free
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Tools
+
 app
 mcp
 ```
 
-## API Reference
-
-If you are looking for information on a specific class, method or parameter,
-this part of the documentation is for you.
-
 ```{toctree}
 :maxdepth: 2
+:caption: API Reference
 
 api/index
 ```
 
-## Additional Notes
-
-Platform-specific behaviour, troubleshooting, logging, a glossary of the terms
-used throughout these docs, plus how to contribute and the project's license.
-
 ```{toctree}
 :maxdepth: 1
+:caption: Additional Notes
 
 platform-notes
 troubleshooting
 guide/logging
+glossary
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Project
+
 contributing
 funding
 license
-glossary
 ```
 
 ## Project links

@@ -18,7 +18,7 @@ any platform.
 pip install PyMemoryEditor
 ```
 
-## Install with the bundled GUI app
+## Install with the bundled GUI (`app`)
 
 The library ships an optional Cheat Engine-style GUI built on **PySide6
 (Qt for Python)**. To install it, use the `app` extra:

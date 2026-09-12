@@ -229,7 +229,7 @@ security:
 	@echo "$(GREEN)Security audit completed!$(NC)"
 
 # Install the dependencies needed to build the documentation (Sphinx + MyST +
-# Furo + extensions, listed in docs/requirements.txt). Also installs the
+# the Read the Docs theme + extensions, listed in docs/requirements.txt). Also installs the
 # package itself in editable mode so autodoc can import it.
 .PHONY: install-docs
 install-docs:
