@@ -1,7 +1,8 @@
 # API Reference
 
 Every public class, method and helper PyMemoryEditor exposes. For
-task-oriented walkthroughs, see the [User Guide](../guide/index.md).
+task-oriented walkthroughs, start at
+[Opening a process](../guide/opening-process.md).
 
 ## At a glance
 
@@ -20,14 +21,27 @@ task-oriented walkthroughs, see the [User Guide](../guide/index.md).
 
 ```{toctree}
 :maxdepth: 1
+:caption: The Entry Point
 
 openprocess
 enums
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Objects You Get Back
+
 memory-region
 remote-pointer
 pointer-path
 module-info
 thread-info
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Errors and Helpers
+
 errors
 utilities
 ```
