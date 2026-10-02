@@ -166,6 +166,7 @@ exclude = [
     "/.coveragerc-lib",
     "/.coveragerc-mcp",
     "/scripts",
+    "/server.json",
 ]
 
 # hatchling>=1.27 is required for PEP 639 metadata: the SPDX ``license = "MIT"``
