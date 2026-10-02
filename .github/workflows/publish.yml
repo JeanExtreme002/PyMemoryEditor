@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Publish to PyPI and the MCP Registry
 
 on:
   release:
@@ -26,3 +26,47 @@ jobs:
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
+
+  # The MCP Registry checks the package on PyPI (the README's mcp-name marker,
+  # the pinned version), so this runs only once the upload above succeeded.
+  mcp-registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # mcp-publisher logs in with the workflow's OIDC token
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check the release matches server.json
+      run: |
+        listed=$(jq -r .version server.json)
+        if [ "v$listed" != "$GITHUB_REF_NAME" ]; then
+          echo "::error::release $GITHUB_REF_NAME but server.json lists $listed"
+          exit 1
+        fi
+        echo "VERSION=$listed" >> "$GITHUB_ENV"
+
+    - name: Wait for PyPI to serve the release
+      run: |
+        # PyPI's JSON API can lag the upload by a few minutes.
+        for _ in $(seq 1 30); do
+          if curl -fsS "https://pypi.org/pypi/pymemoryeditor/$VERSION/json" \
+              | jq -e --arg name "$(jq -r .name server.json)" \
+                  '.info.description | contains("mcp-name: " + $name)' > /dev/null; then
+            exit 0
+          fi
+          sleep 20
+        done
+        echo "::error::PyPI does not serve $VERSION with the mcp-name marker yet"
+        exit 1
+
+    - name: Install mcp-publisher
+      run: |
+        curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" \
+          | tar xz mcp-publisher
+
+    - name: Publish to the MCP Registry
+      run: |
+        ./mcp-publisher login github-oidc
+        ./mcp-publisher publish
