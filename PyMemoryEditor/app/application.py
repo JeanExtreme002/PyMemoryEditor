@@ -559,7 +559,20 @@ def main_cli(argv=None):
 
     Kept separate from :func:`main` so that process-wide change only happens
     when the app *is* the process, never when it is embedded in someone else's.
+
+    ``pymemoryeditor mcp [flags]`` runs the MCP server instead, the same as
+    ``pymemoryeditor-mcp [flags]``. MCP registries launch a PyPI package by its
+    project name (``uvx --from "PyMemoryEditor[mcp]" pymemoryeditor mcp``), so
+    this is the only command they can reach. It never touches Qt, and the
+    server keeps its own signal handling.
     """
+    if argv is None:
+        argv = sys.argv
+    if len(argv) > 1 and argv[1].strip() == "mcp":
+        from PyMemoryEditor.mcp.server import main as mcp_main
+
+        return mcp_main(argv[2:])
+
     with _scoped_signal_handler(signal.SIGINT, signal.SIG_DFL):
         return main(argv)
 

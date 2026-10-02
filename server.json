@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.JeanExtreme002/PyMemoryEditor",
+  "title": "PyMemoryEditor",
+  "description": "Read, write and scan process memory, Cheat Engine style, on Windows, Linux and macOS.",
+  "repository": {
+    "url": "https://github.com/JeanExtreme002/PyMemoryEditor",
+    "source": "github"
+  },
+  "websiteUrl": "https://pymemoryeditor.readthedocs.io/en/latest/mcp.html",
+  "version": "3.0.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "pymemoryeditor",
+      "version": "3.0.1",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "PyMemoryEditor[mcp]==3.0.1",
+          "description": "Install the MCP extra, pinned to this release."
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

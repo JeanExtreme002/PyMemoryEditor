@@ -1,5 +1,7 @@
 # PyMemoryEditor
 
+<!-- mcp-name: io.github.JeanExtreme002/PyMemoryEditor -->
+
 A pure-Python library (built on [ctypes](https://docs.python.org/3/library/ctypes.html)) that lets you **inspect, modify and search the memory of any running process in a few lines of Python** — Cheat Engine workflows on Windows, Linux and macOS!
 
 ---

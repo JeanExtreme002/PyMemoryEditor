@@ -85,6 +85,9 @@ pymemoryeditor-mcp --allow-process game.exe   # never asks for game.exe
 pymemoryeditor-mcp --allow-any-process        # never asks at all (scripts/CI)
 ```
 
+`pymemoryeditor mcp` is the same command, flags included: it is how clients
+that install from the MCP Registry start the server.
+
 ## Flags
 
 <table>
