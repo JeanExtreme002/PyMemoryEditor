@@ -85,6 +85,11 @@ def _reap_detached_worker(worker: QThread) -> None:
     worker.deleteLater()
 
 
+def detached_workers_running() -> bool:
+    """Whether any worker that outlived its owner is still running."""
+    return any(worker.isRunning() for worker in _DETACHED_WORKERS)
+
+
 def run_after_detached_workers(callback: Callable[[], None]) -> None:
     """Run ``callback`` once every currently detached worker has finished.
 

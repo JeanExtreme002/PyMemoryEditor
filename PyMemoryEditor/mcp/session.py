@@ -357,7 +357,10 @@ class SessionStore:
 
         for session_id in dead:
             try:
-                self.close(session_id)
+                # No wait: this runs inside open_process, and an operation
+                # still running on a dead target releases its handle (and its
+                # slot) by itself as soon as it notices.
+                self.close(session_id, wait=0.0)
             except SessionError:  # closed concurrently
                 pass
         return dead

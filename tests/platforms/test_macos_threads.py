@@ -126,3 +126,17 @@ def test_thread_ids_are_stable_across_calls_and_the_main_thread_is_the_oldest():
 
     assert first == second
     assert main is not None and main.tid == main_native_id
+
+
+def test_a_thread_whose_id_cannot_be_read_is_left_out(monkeypatch):
+    """A thread that exits between task_threads and thread_info has no id to
+    report; it is skipped rather than listed under its port name, which lives
+    in another id space and would pose as the smallest (main) thread."""
+    from PyMemoryEditor.macos import functions as mac
+
+    monkeypatch.setattr(mac, "_thread_id", lambda _port: None)
+    process = OpenProcess(pid=os.getpid())
+    try:
+        assert list(process.get_threads()) == []
+    finally:
+        process.close()

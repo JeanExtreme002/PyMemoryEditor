@@ -2357,6 +2357,68 @@ class TestClosingABusySession:
             for holder in holders:
                 holder.join(5)
 
+    def test_reaping_a_busy_dead_session_does_not_block_open(self):
+        """open_process reaps sessions whose target exited. A dead session
+        still held by a running operation must not make that wait."""
+        import os
+        import threading
+        import time
+
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS, SessionStore
+
+        live = os.getpid()
+        dead_pid = 2 ** 22 + 12345  # above every default pid_max: never alive
+        store = SessionStore()
+        dead = store.open(FakeProcess(pid=dead_pid), dead_pid, "gone")
+        for _ in range(MAX_OPEN_SESSIONS - 1):
+            store.open(FakeProcess(pid=live), live, "other")
+
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with dead.lock:
+                held.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        assert held.wait(5)
+        try:
+            started = time.monotonic()
+            store.capacity_refusal(live)
+            assert time.monotonic() - started < 1.0, "the reaper waited on the lock"
+            assert dead.closing.is_set()
+        finally:
+            release.set()
+            holder.join(5)
+        assert dead.handle_closed is True
+        assert store.capacity_refusal(live) is None
+
+    def test_a_close_stops_a_refine_while_it_reads(self, make_toolset):
+        toolset = make_toolset(config())
+        process = FakeProcess()
+        toolset._open_process = lambda **_kwargs: process
+        session_id = toolset.open_process(pid=4242)["session_id"]
+        process.poke(WRITABLE_BASE + 0x40, int, 1234567, 4)
+        scan = toolset.scan_value(session_id, "int", "1234567", bufflength=4)
+        session = toolset.store.get(session_id)
+
+        reads_after_close = []
+        real_read = toolset._read_addresses
+
+        def close_first(*args, **kwargs):
+            session.closing.set()
+            for item in real_read(*args, **kwargs):
+                reads_after_close.append(item)
+                yield item
+
+        toolset._read_addresses = close_first
+
+        with pytest.raises(SessionError, match="refine_scan"):
+            toolset.refine_scan(scan["scan_id"], "exact", "1234567")
+        # Stopped at the first check, not after reading the whole set.
+        assert len(reads_after_close) == 1
+
     def test_a_refine_on_a_session_closed_meanwhile_stores_nothing(self, make_toolset):
         toolset = make_toolset(config())
         process = FakeProcess()

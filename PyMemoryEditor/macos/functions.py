@@ -845,10 +845,12 @@ def search_addresses_by_value(
     )
 
 
-def _thread_id(port: int) -> int:
-    """System-wide id of the thread behind ``port``; the port name itself if
-    the kernel refuses the lookup (the thread exited between task_threads and
-    here), so a listing never fails over one thread."""
+def _thread_id(port: int) -> Optional[int]:
+    """System-wide id of the thread behind ``port``, or ``None`` when the
+    kernel refuses the lookup — the thread exited between task_threads and
+    here. Such a thread is left out rather than reported under its port name,
+    which lives in another id space and would break "smallest tid is the main
+    thread"."""
     info = thread_identifier_info_data_t()
     info_count = mach_msg_type_number_t(THREAD_IDENTIFIER_INFO_COUNT)
     kr = libsystem.thread_info(
@@ -856,10 +858,10 @@ def _thread_id(port: int) -> int:
     )
     if kr != KERN_SUCCESS:
         _logger.debug(
-            "get_threads: thread_info(%d) failed: %s (kr=%d); using the port name",
+            "get_threads: thread_info(%d) failed: %s (kr=%d); thread skipped",
             port, mach_error_message(kr), kr,
         )
-        return port
+        return None
     return int(info.thread_id)
 
 
@@ -888,7 +890,7 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
     # Copy the port names out and release everything *before* yielding, so an
     # abandoned or slowly-consumed generator can't hold kernel resources.
     ports: List[int] = []
-    thread_ids: List[int] = []
+    thread_ids: List[Optional[int]] = []
     try:
         ports = [int(port) for port in thread_list[: count.value]]
         # Resolve each thread's id while we still hold its send right: the
@@ -922,6 +924,8 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
             )
 
     for port, thread_id in zip(ports, thread_ids):
+        if thread_id is None:
+            continue
         yield ThreadInfo(
             tid=thread_id,
             start_address=None,

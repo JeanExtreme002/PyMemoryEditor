@@ -1383,17 +1383,21 @@ class MemoryToolset:
             kept: List[int] = []
             unreadable = 0
 
-            for address, raw in self._read_addresses(
-                session, previous.addresses, bytes, width
+            for index, (address, raw) in enumerate(
+                self._read_addresses(session, previous.addresses, bytes, width)
             ):
+                # The same close check point _run_batched_scan has, so a close
+                # stops a refine of a large set instead of waiting it out.
+                if index % _REFINE_CLOSE_CHECK_EVERY == 0 and session.closing.is_set():
+                    raise _closed_mid_operation(session, "refine_scan")
                 if raw is None or len(raw) != width:
                     unreadable += 1
                     continue
                 if predicate(decode_scan_target(raw, byte_order, pytype)):
                     kept.append(address)
 
-            # A close that arrived while the addresses were read is refused
-            # by new_scan, so no scan id points at a session the model can no
+            # A close that arrived after the last check is refused by
+            # new_scan, so no scan id points at a session the model can no
             # longer use.
             scan = self.store.new_scan(
                 session,
@@ -2302,6 +2306,10 @@ def _clamp_pointer_arg(name: str, value: Any) -> int:
     low, high = POINTER_SCAN_LIMITS[name]
     resolved = parse_int_arg(value, name, default=POINTER_SCAN_DEFAULTS[name])
     return min(max(resolved, low), high)
+
+
+#: How many addresses `refine_scan` re-reads between two checks for a close.
+_REFINE_CLOSE_CHECK_EVERY = 4096
 
 
 def _pointer_path_row(path: Any) -> Dict[str, Any]:

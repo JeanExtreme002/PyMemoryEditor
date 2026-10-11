@@ -220,3 +220,29 @@ def test_run_after_detached_workers_waits_for_a_wedged_worker(qapp):
         # an early failure leaves a running thread to wait for.
         if not joined:
             worker.wait(5000)
+
+
+def test_detached_workers_running_reports_a_wedged_worker(qapp):
+    """The app-exit path leaves the handle to the OS while this is true."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    from PyMemoryEditor.app._widgets import detach_worker, detached_workers_running
+
+    release = threading.Event()
+
+    class _Wedged(QThread):
+        def run(self):
+            release.wait(5)
+
+    assert detached_workers_running() is False
+    worker = _Wedged()
+    worker.start()
+    detach_worker(worker)
+    try:
+        assert detached_workers_running() is True
+    finally:
+        release.set()
+        worker.wait(5000)
+    assert detached_workers_running() is False
