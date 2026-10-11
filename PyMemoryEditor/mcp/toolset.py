@@ -843,7 +843,14 @@ class MemoryToolset:
         # this user cannot read was approved as such, and there is nothing to
         # compare.
         if name:
-            current = self._name_for_pid(pid)
+            try:
+                current = self._name_for_pid(pid)
+            except ToolError:
+                # Enumeration failed (transient on Windows). The handle is
+                # already open and nothing else will close it: do so before
+                # reporting, or every retry leaks one.
+                _close_quietly(process)
+                raise
             if current and current.casefold() != name.casefold():
                 _close_quietly(process)
                 raise ToolError(
@@ -1777,8 +1784,10 @@ class MemoryToolset:
         try:
             resolved = resolve_bufflength_for_value(pytype, width, *values)
         except ValueError as error:
-            # The library refuses, say, an empty text target. Its message is
-            # the right advice, but only a ToolError's text reaches the model.
+            # Defensive: the library's width validation raises ValueError for
+            # an unsupported type, which parse_value already rules out. (An
+            # empty text target is rejected by the scan itself and surfaces
+            # through _target_errors.) Only a ToolError's text reaches the model.
             raise ToolError(
                 "Could not size a %s value: %s" % (pytype.__name__, error)
             ) from None

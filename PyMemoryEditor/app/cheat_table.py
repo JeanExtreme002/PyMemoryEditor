@@ -237,8 +237,16 @@ class CheatTable(QWidget):
         # rather than at each of those call sites. (The AOB pattern spec is the
         # one whose declared length is 0 — the scanner derives its real width
         # from the pattern.) The ceiling is the same one every other width
-        # field enforces (MAX_ENTRY_LENGTH); a JSON import can carry any number.
-        entry.length = max(1, min(int(entry.length), MAX_ENTRY_LENGTH))
+        # field enforces (MAX_ENTRY_LENGTH); only a JSON import can carry more,
+        # and silently resizing its entry would alter what the user exports
+        # next, so that is refused -- the import loop reports and skips it.
+        length = int(entry.length)
+        if length > MAX_ENTRY_LENGTH:
+            raise ValueError(
+                "entry at 0x%X has length %d, over the %d-byte maximum"
+                % (entry.address, length, MAX_ENTRY_LENGTH)
+            )
+        entry.length = max(1, length)
 
         # If the address already exists, just refresh its description/type.
         for existing in self._entries:

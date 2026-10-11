@@ -34,6 +34,7 @@ from .functions import (
     SearchValuesByAddresses,
     WriteProcessMemory,
     _detect_process_64bit,
+    _process_has_exited,
 )
 
 
@@ -205,6 +206,16 @@ class WindowsProcess(AbstractProcess):
         except Exception:
             # __del__ must not raise; the interpreter may be shutting down.
             pass
+
+    def _target_alive(self) -> bool:
+        # An open handle keeps the pid reserved after the process exits, so a
+        # pid probe would say "alive" forever; GetExitCodeProcess asks the
+        # handle itself. None means the handle lacks the query right -- fall
+        # back to the pid probe rather than guess.
+        exited = _process_has_exited(self.__process_handle)
+        if exited is None:
+            return super()._target_alive()
+        return not exited
 
     def _detect_is_64bit(self) -> Optional[bool]:
         self.__require_open()

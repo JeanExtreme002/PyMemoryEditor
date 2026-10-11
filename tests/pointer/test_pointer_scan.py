@@ -502,6 +502,57 @@ def test_rescan_pointer_paths_propagates_a_closed_process():
         handle.rescan_pointer_paths([path], 0x2000)
 
 
+def _one_writable_region(process):
+    for region in process.get_memory_regions():
+        if region.is_writable and region.size >= 0x1000:
+            return [region]
+    pytest.skip("no writable region to scan")
+
+
+def test_scan_pointer_paths_reports_a_target_that_exited(process, monkeypatch):
+    """Backends report a read on a dead target as a plain ``OSError``, the
+    same type a page that vanished mid-scan produces. The scan must ask
+    whether the target is still there before writing the failure off as a
+    skippable page -- otherwise a dead target yields an empty map that is
+    indistinguishable from "no pointers found"."""
+    regions = _one_writable_region(process)
+
+    def dead_read(address, pytype, bufflength=None, *args, **kwargs):
+        raise OSError(3, "No such process")
+
+    monkeypatch.setattr(process, "read_process_memory", dead_read)
+    monkeypatch.setattr(process, "_target_alive", lambda: False)
+
+    with pytest.raises(ProcessIDNotExistsError):
+        list(process.scan_pointer_paths(0x1000, max_depth=1, memory_regions=regions))
+
+
+def test_scan_pointer_paths_still_skips_a_vanished_page(process, monkeypatch):
+    """The other half of the contract: the same ``OSError`` on a target that
+    is alive is a page that went away, and the scan walks past it."""
+    regions = _one_writable_region(process)
+
+    def gone_page(address, pytype, bufflength=None, *args, **kwargs):
+        raise OSError(14, "Bad address")
+
+    monkeypatch.setattr(process, "read_process_memory", gone_page)
+    monkeypatch.setattr(process, "_target_alive", lambda: True)
+
+    assert list(process.scan_pointer_paths(0x1000, max_depth=1, memory_regions=regions)) == []
+
+
+def test_rescan_pointer_paths_reports_a_target_that_exited(process, monkeypatch):
+    path = PointerPath(0x1000, (0x10,), ptr_size=ctypes.sizeof(ctypes.c_void_p))
+    monkeypatch.setattr(
+        process, "read_process_memory",
+        lambda *a, **k: (_ for _ in ()).throw(OSError(3, "No such process")),
+    )
+    monkeypatch.setattr(process, "_target_alive", lambda: False)
+
+    with pytest.raises(ProcessIDNotExistsError):
+        process.rescan_pointer_paths([path], 0x2000)
+
+
 def test_compare_pointer_scans_needs_a_source(process):
     with pytest.raises(ValueError, match="at least one source"):
         process.compare_pointer_scans()

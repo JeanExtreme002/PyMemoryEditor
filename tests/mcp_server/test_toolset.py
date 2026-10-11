@@ -1741,6 +1741,26 @@ class TestAttachRechecksTheTargetsIdentity:
         assert toolset.store.sessions == ()
         assert fake_process.closed is True
 
+    def test_a_failed_identity_check_closes_the_handle(self, make_toolset, fake_process):
+        """``_name_for_pid`` raises ToolError when enumeration fails. By then
+        the handle is open and nothing else will close it."""
+        toolset = make_toolset(config())
+        calls = []
+
+        def name_for_pid(pid):
+            calls.append(pid)
+            if len(calls) == 1:
+                return "faketarget"  # resolve_target's lookup
+            raise ToolError("Could not enumerate processes to identify pid %d" % pid)
+
+        toolset._name_for_pid = name_for_pid
+
+        with pytest.raises(ToolError, match="Could not enumerate"):
+            toolset.open_process(pid=4242)
+
+        assert toolset.store.sessions == ()
+        assert fake_process.closed is True
+
     def test_the_same_name_attaches(self, make_toolset, fake_process):
         toolset = make_toolset(config())
         calls = []

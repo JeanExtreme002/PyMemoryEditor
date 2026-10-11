@@ -495,7 +495,9 @@ def test_add_entry_caps_the_width_at_max_entry_length():
     The floor (1) was enforced at the door; the ceiling was not, so a JSON
     import carrying ``"length": 10**9`` had the poll worker allocating a
     gigabyte ten times a second. Every width field in the UI already stops
-    at MAX_ENTRY_LENGTH; the entry point now agrees.
+    at MAX_ENTRY_LENGTH; the entry point refuses anything past it (the
+    import loop reports and skips the row) rather than silently resizing a
+    value the user would later export.
     """
     pytest.importorskip("PySide6")
 
@@ -508,6 +510,11 @@ def test_add_entry_caps_the_width_at_max_entry_length():
         {"address": "0x1000", "spec_label": "String (UTF-8)", "length": 10**9}
     )
     table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
+    with pytest.raises(ValueError, match=str(MAX_ENTRY_LENGTH)):
+        CheatTable.add_entry(table, entry)
+    assert table._entries == []
+
+    entry.length = MAX_ENTRY_LENGTH
     CheatTable.add_entry(table, entry)
     assert table._entries[0].length == MAX_ENTRY_LENGTH
 

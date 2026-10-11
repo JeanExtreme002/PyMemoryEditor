@@ -76,9 +76,11 @@ class _LinuxPartialIOError(OSError):
 
 
 _PTRACE_SCOPE_HINT = (
-    "The kernel refused ptrace-level access to the target (Yama "
-    "ptrace_scope). Run as root, make the target a child of this process, or "
-    "relax the policy with `sudo sysctl kernel.yama.ptrace_scope=0`."
+    "The kernel refused ptrace-level access to the target: either Yama "
+    "ptrace_scope restricts it (the usual cause for a process you own; relax "
+    "it with `sudo sysctl kernel.yama.ptrace_scope=0` or make the target a "
+    "child of this process), or the target belongs to another user / is not "
+    "dumpable (setuid), which only root can read. Running as root covers both."
 )
 
 

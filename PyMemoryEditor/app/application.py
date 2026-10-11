@@ -508,7 +508,7 @@ def _qt_excepthook(exc_type, exc_value, exc_tb) -> None:
         # exception escaping a QThread.run() through this same hook, from
         # that worker thread, so a dialog there would be undefined behaviour.
         # The log line above is the whole report in that case.
-        if app is None or QThread.currentThread() is not app.thread():
+        if app is None or QThread.currentThread() != app.thread():
             return
         QMessageBox.critical(
             None,

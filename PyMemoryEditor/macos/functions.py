@@ -732,6 +732,7 @@ def search_addresses_by_value(
     writeable_only: bool = False,
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every readable, non-shared region of the task and yield addresses
@@ -745,7 +746,7 @@ def search_addresses_by_value(
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
-        memory_regions if memory_regions is not None else get_memory_regions(task)
+        memory_regions if memory_regions is not None else get_memory_regions(task, pid)
     )
 
     filtered_regions = [
@@ -1102,6 +1103,7 @@ def search_addresses_by_pattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target task. See
@@ -1110,7 +1112,7 @@ def search_addresses_by_pattern(
     compiled, length = compile_pattern(pattern, byte_length=byte_length)
 
     source_regions = (
-        memory_regions if memory_regions is not None else get_memory_regions(task)
+        memory_regions if memory_regions is not None else get_memory_regions(task, pid)
     )
 
     filtered_regions = [
@@ -1136,6 +1138,7 @@ def search_values_by_addresses(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
+    pid: int = 0,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """
     Read values at the provided addresses, grouped by region for syscall efficiency.
@@ -1153,7 +1156,7 @@ def search_values_by_addresses(
     # the caller pre-filtered to zero regions.
     if memory_regions is None:
         memory_regions = [
-            region for region in get_memory_regions(task) if default_address_filter(region)
+            region for region in get_memory_regions(task, pid) if default_address_filter(region)
         ]
     else:
         memory_regions = list(memory_regions)

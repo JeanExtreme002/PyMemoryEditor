@@ -21,11 +21,12 @@ from typing import (
 from ..enums import ScanTypesEnum
 from ..util import UNSET, _check_int_fits
 from ..util.pattern import PatternLike
-from .errors import BitnessDetectionError, PyMemoryEditorError
+from .errors import BitnessDetectionError, ProcessIDNotExistsError, PyMemoryEditorError
 from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .region import MemoryRegion, MemoryRegionSnapshot
 from .thread_info import ThreadInfo
+from .util import pid_exists
 
 if TYPE_CHECKING:
     from .pointer_scan import PointerPath
@@ -107,6 +108,25 @@ class AbstractProcess(ABC):
     @property
     def pid(self) -> int:
         return self._process_info.pid
+
+    def _target_alive(self) -> bool:
+        """
+        Whether the target process still exists. The default asks the OS by
+        pid; a backend whose handle keeps the pid reserved after the process
+        exits (Windows) overrides it with a handle-level check.
+        """
+        return pid_exists(self.pid)
+
+    def _raise_if_target_exited(self) -> None:
+        """
+        Turn a read failure on a target that has exited into
+        :class:`~PyMemoryEditor.ProcessIDNotExistsError`. Backends report that
+        read as a plain ``OSError``, the same type a page that vanished
+        mid-scan produces; the scan helpers call this before deciding a
+        failure is skippable so a dead target is never mistaken for one.
+        """
+        if not self._target_alive():
+            raise ProcessIDNotExistsError(self.pid)
 
     @abstractmethod
     def _detect_is_64bit(self) -> Optional[bool]:
@@ -1083,8 +1103,12 @@ class AbstractProcess(ABC):
             try:
                 return self.read_process_memory(address, bytes, size)
             except PyMemoryEditorError:
-                raise  # closed / vanished process: not a skippable page
-            except Exception:  # noqa: BLE001 — unreadable page mid-scan; skip it
+                raise  # closed process: not a skippable page
+            except Exception:  # noqa: BLE001 — backend read errors vary
+                # A page that vanished mid-scan is skippable; a target that
+                # exited is not (every backend reports that read as a plain
+                # OSError, indistinguishable from a bad page without this).
+                self._raise_if_target_exited()
                 return None
 
         values, addresses = build_pointer_map(
@@ -1248,8 +1272,9 @@ class AbstractProcess(ABC):
                 if live.resolve(self) == target_address:
                     survivors.append(live)
             except PyMemoryEditorError:
-                raise  # closed / vanished process: every path would "fail"
+                raise  # closed process: every path would "fail"
             except Exception:  # noqa: BLE001 — broken chain / unreadable page: drop it
+                self._raise_if_target_exited()
                 continue
 
         return survivors

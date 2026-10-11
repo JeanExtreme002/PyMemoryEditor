@@ -224,6 +224,10 @@ def scan_memory_for_exact_value(
 
     The 6th argument accepts either a ``pytype`` (the value type) or a plain
     ``is_string`` boolean for backward compatibility with the previous API.
+    The boolean form cannot tell a ``float`` from an ``int`` of the same
+    width, so it compares floats by their bytes (``-0.0`` and ``0.0`` differ,
+    ``NaN`` equals itself); pass ``float`` as the ``pytype`` for IEEE-754
+    value semantics. The library's own scans always pass the type.
 
     :raises ValueError: if ``target_value`` is empty.
     """

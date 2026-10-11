@@ -636,9 +636,11 @@ class _Win32FatalReadError(OSError):
     handle lacks ``PROCESS_VM_READ`` / is invalid, or the target has exited.
 
     Distinct from :class:`_Win32ChunkReadError` (a page that vanished
-    mid-scan, which the scan loops are allowed to walk past) so that
-    ``search_by_addresses``' transient classification keeps letting this one
-    through even with ``raise_error=False``.
+    mid-scan, which the scan loops are allowed to walk past): the value and
+    pattern scans re-raise it instead of skipping the chunk, and
+    ``search_by_addresses`` treats it like every other non-transient error --
+    raised with ``raise_error=True``, logged and reported as ``None`` values
+    otherwise, exactly as on Linux and macOS.
     """
 
     def __init__(self, address: int, size: int, code: int, reason: str):
@@ -839,8 +841,9 @@ def SearchValuesByAddresses(
     # ReadProcessMemory returning 0 during scanning typically means the page
     # was unmapped / made inaccessible mid-scan — transient. The user can still
     # force propagation via raise_error=True. `_Win32FatalReadError` (handle
-    # lacks PROCESS_VM_READ, target exited) is deliberately *not* transient:
-    # it propagates regardless of `raise_error`, as on Linux and macOS.
+    # lacks PROCESS_VM_READ, target exited) is deliberately *not* transient,
+    # so `raise_error=True` surfaces it; with the default `raise_error=False`
+    # it is logged and the chunk's addresses read as None, as on Linux/macOS.
     def is_transient(exc: BaseException) -> bool:
         return isinstance(exc, _Win32ChunkReadError)
 
