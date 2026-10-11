@@ -67,25 +67,6 @@ name or PID.
 - Save / load scans as JSON
 - Rescan and compare to narrow results down
 
-**⌨️ Keyboard shortcuts**
-
-| Action | Shortcut |
-|---|---|
-| Change process… | `Ctrl+O` |
-| Export results… | `Ctrl+E` |
-| Memory Map… | `Ctrl+R` |
-| Hex Viewer… | `Ctrl+Shift+H` |
-| Threads… | `Ctrl+T` |
-| Modules… | `Ctrl+Shift+M` |
-| Pointer Chain… | `Ctrl+Shift+P` |
-| Pointer Scan… | `Ctrl+Shift+S` |
-| Log Console… | `Ctrl+L` |
-| Add selected results to the cheat table | `Enter` (or double-click) |
-| Remove selected cheat-table rows | `Delete` |
-
-On macOS `Ctrl` is `⌘`. The Memory Map and Hex Viewer shortcuts deliberately
-avoid `⌘M` and `⌘H`, which macOS reserves for *Minimize* and *Hide*.
-
 ```{admonition} Cross-platform dark theme
 :class: tip
 
