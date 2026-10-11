@@ -37,17 +37,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, MemoryRegion, MemoryRegionSnapshot
 
 from ._auto_refresh_dialog import AutoRefreshTableDialog
-from ._widgets import MONOSPACE_FAMILY, NumericItem
-
-
-def _format_size(size: int) -> str:
-    units = ["B", "KB", "MB", "GB", "TB"]
-    s = float(size)
-    for unit in units:
-        if s < 1024 or unit == units[-1]:
-            return f"{s:,.1f} {unit}" if unit != "B" else f"{int(s):,} B"
-        s /= 1024
-    return f"{size:,} B"
+from ._widgets import MONOSPACE_FAMILY, NumericItem, format_size
 
 
 # Unit multipliers for the allocate size selector (binary, 1 KB = 1024 B).
@@ -396,7 +386,7 @@ class MemoryMapDialog(AutoRefreshTableDialog):
             addr_item.setFont(mono_font)
             addr_item.setData(addr, Qt.UserRole)
 
-            size_item = NumericItem(_format_size(size))
+            size_item = NumericItem(format_size(size))
             size_item.setData(size, Qt.UserRole)
             size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -416,12 +406,12 @@ class MemoryMapDialog(AutoRefreshTableDialog):
         if needle:
             count_text = (
                 f"{shown:,} of {total:,} regions shown · "
-                f"{_format_size(total_bytes)} mapped"
+                f"{format_size(total_bytes)} mapped"
             )
         else:
             count_text = (
                 f"{total:,} regions · "
-                f"{_format_size(total_bytes)} of virtual address space mapped"
+                f"{format_size(total_bytes)} of virtual address space mapped"
             )
         # A filter keystroke rebuilds this line long after the poll gave up.
         if self._polling_gave_up:

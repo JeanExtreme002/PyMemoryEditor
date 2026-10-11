@@ -25,8 +25,10 @@ A clear and concise description of what you expected to happen.
 If applicable, add screenshots to help explain your problem.
 
 **System (please complete the following information):**
- - OS: [e.g. Windows]
- - Python Version [e.g. 1.10]
+ - OS and architecture: [e.g. Windows 11 x64, Ubuntu 22.04 x64, macOS 14 arm64]
+ - Python version (`python --version`): [e.g. 3.12.4]
+ - PyMemoryEditor version (`pip show PyMemoryEditor`): [e.g. 3.0.2]
+ - Linux only: value of `/proc/sys/kernel/yama/ptrace_scope`: [0 or 1]
 
 **Additional context**
 Add any other context about the problem here.

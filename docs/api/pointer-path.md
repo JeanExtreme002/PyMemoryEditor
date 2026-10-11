@@ -91,7 +91,10 @@ hashable.
 .. py:classmethod:: from_dict(data)
 
    Rebuild a :py:class:`PointerPath` from :py:meth:`to_dict` output. Numeric
-   fields accept either hex strings (``"0x158"``) or plain ints.
+   fields accept plain ints, ``0x``-prefixed hex strings (``"0x158"``, as
+   written by :py:meth:`to_dict`) or decimal strings (``"344"``); a bare hex
+   string without the prefix is rejected with ``ValueError`` rather than
+   guessed at, as is a missing ``base_address``.
 ```
 
 ### Comparison & display

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import ctypes
+import logging
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..util import (
@@ -37,6 +38,8 @@ from .functions import (
 
 
 T = TypeVar("T")
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 _PROCESS_ALL_ACCESS = ProcessOperationsEnum.PROCESS_ALL_ACCESS.value
 _PROCESS_VM_READ = ProcessOperationsEnum.PROCESS_VM_READ.value
@@ -161,6 +164,7 @@ class WindowsProcess(AbstractProcess):
         if self.__closed:
             return True
 
+        ctypes.set_last_error(0)
         result = CloseProcessHandle(self.__process_handle)
         # Mark closed regardless of CloseHandle's return value — leaving
         # `__closed=False` after a failed close means the *next* `close()`
@@ -169,16 +173,38 @@ class WindowsProcess(AbstractProcess):
         # made the object's state ambiguous.
         self.__closed = True
         if result == 0:
-            # Surface the underlying Win32 error code via OSError so the
-            # caller knows something went wrong, instead of the previous
-            # silent `return False`. Callers using the `with` context manager
-            # will see the exception; callers checking the return value of
-            # close() now get a strict pass/fail (True only on success).
-            last_error = ctypes.get_last_error()
-            if last_error:
-                raise ctypes.WinError(last_error, "CloseHandle failed.")
-            raise OSError("CloseHandle failed.")
+            # A failed CloseHandle leaks the handle until the interpreter
+            # exits; it cannot be retried and nothing the caller does fixes
+            # it. Log it (the Linux and macOS backends never raise from
+            # `close()` either, and `__exit__` / `__del__` must not raise) and
+            # report it through the return value.
+            _logger.warning(
+                "CloseHandle failed for process %d (err=%d); the handle is leaked.",
+                self.pid,
+                ctypes.get_last_error(),
+            )
+            return False
         return True
+
+    def __del__(self) -> None:
+        """
+        Best-effort safety net for callers who forget to ``close()`` / use
+        the context manager, mirroring the macOS backend: the process handle
+        stays open — and keeps the target's pid and kernel object alive after
+        it exits — until ``CloseHandle`` runs.
+
+        ``__del__`` is not guaranteed to run (cyclic GC, interpreter
+        teardown), so this is only a fallback.
+        """
+        # Avoid touching anything if construction failed before the handle
+        # was set.
+        if getattr(self, "_WindowsProcess__closed", True):
+            return
+        try:
+            self.close()
+        except Exception:
+            # __del__ must not raise; the interpreter may be shutting down.
+            pass
 
     def _detect_is_64bit(self) -> Optional[bool]:
         self.__require_open()
@@ -186,7 +212,7 @@ class WindowsProcess(AbstractProcess):
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()
-        return GetMemoryRegions(self.__process_handle)
+        return GetMemoryRegions(self.__process_handle, self.pid)
 
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         self.__require_open()
@@ -218,6 +244,7 @@ class WindowsProcess(AbstractProcess):
             addresses,
             memory_regions=memory_regions,
             raise_error=raise_error,
+            pid=self.pid,
         )
 
     def search_by_value(
@@ -248,6 +275,7 @@ class WindowsProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            pid=self.pid,
         )
 
     def search_by_pattern(
@@ -266,6 +294,7 @@ class WindowsProcess(AbstractProcess):
             byte_length=byte_length,
             progress_information=progress_information,
             memory_regions=memory_regions,
+            pid=self.pid,
         )
 
     def search_by_value_between(
@@ -297,6 +326,7 @@ class WindowsProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            pid=self.pid,
         )
 
     def read_process_memory(

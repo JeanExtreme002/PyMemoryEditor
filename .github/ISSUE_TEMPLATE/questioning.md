@@ -28,8 +28,8 @@ If applicable, add screenshots to help explain your problem.
 **System**
 If applicable, please complete the following information:
 
-1. OS: [e.g. Windows]
-2. Python Version [e.g. 1.10]
+1. OS and architecture: [e.g. Windows 11 x64]
+2. Python version (`python --version`): [e.g. 3.12.4]
 
 **Additional context**
 Add any other context about the problem here.

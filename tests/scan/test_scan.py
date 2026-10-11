@@ -486,3 +486,131 @@ def test_scan_string_regex_special_bytes_as_bounds():
     #   '-'(0x2d=off2), '\\'(0x5c=off3), '['(0x5b=off4), 'A'(0x41=off5).
     results = _scan_str(data, b"\x5d", 1, ScanTypesEnum.SMALLER_THAN)
     assert results == [2, 3, 4, 5]
+
+
+# --------------------------------------------------------------------------- #
+# Stepping policy: numeric values align to their width, text does not
+# --------------------------------------------------------------------------- #
+
+# ``00 01 00 00 | 00 00 00 00 | 01 00 00 00`` — the value 1 as a 4-byte int
+# sits at the aligned offset 8; the bytes 01 00 00 00 also appear *unaligned*
+# at offset 1, straddling the first two slots (which hold 256 and 0).
+_UNALIGNED_DECOY = bytes([0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0])
+
+
+def test_exact_numeric_scan_only_reports_aligned_slots():
+    """Regression: EXACT used ``bytes.find`` with no alignment, so it reported
+    offset 1 here while every other numeric scan (ordered, NumPy, refine)
+    decoded slots 0 / 4 / 8 and never saw a 1 at offset 1."""
+    target = _pack(1)
+    exact = list(
+        scan_memory_for_exact_value(
+            _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4, ScanTypesEnum.EXACT_VALUE, int
+        )
+    )
+    ordered = list(
+        scan_memory(
+            _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4,
+            ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE, int,
+        )
+    )
+    assert exact == [8]
+    assert exact == list(
+        scan_memory(_UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4, ScanTypesEnum.EXACT_VALUE, int)
+    )
+    # Every EXACT hit is also a >= hit (0 holds 256, so it is >= 1 as well).
+    assert set(exact) <= set(ordered)
+    assert ordered == [0, 8]
+
+
+def test_not_exact_numeric_scan_is_the_complement_of_exact():
+    """NOT_EXACT used to suppress aligned slots whose window merely *overlapped*
+    an unaligned byte match, so slots 0 and 4 (holding 256 and 0) vanished."""
+    target = _pack(1)
+    not_exact = list(
+        scan_memory_for_exact_value(
+            _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4, ScanTypesEnum.NOT_EXACT_VALUE, int
+        )
+    )
+    assert not_exact == [0, 4]
+
+
+def test_exact_bytes_scan_still_matches_at_any_byte():
+    """A ``bytes`` target is an array of bytes, not a number: it has no
+    alignment, so the unaligned occurrence counts."""
+    target = _pack(1)
+    found = list(
+        scan_memory_for_exact_value(
+            _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4, ScanTypesEnum.EXACT_VALUE, bytes
+        )
+    )
+    assert found == [1, 8]
+
+
+def test_not_exact_bytes_scan_steps_byte_by_byte_like_str():
+    """``bytes`` NOT_EXACT shares the text semantics: every window that
+    overlaps an exact match is suppressed, at every byte offset."""
+    data = b"abcd" + b"XXXXXX" + b"abcd" + b"YYYY"
+    as_bytes = list(
+        scan_memory_for_exact_value(data, len(data), b"abcd", 4, ScanTypesEnum.NOT_EXACT_VALUE, bytes)
+    )
+    as_str = list(
+        scan_memory_for_exact_value(data, len(data), b"abcd", 4, ScanTypesEnum.NOT_EXACT_VALUE, str)
+    )
+    assert as_bytes == as_str == [4, 5, 6, 14]
+
+
+@pytest.mark.parametrize("width", [3, 5, 6, 7])
+def test_unusual_int_width_matches_at_any_byte(width):
+    """A 3/5/6/7-byte field has no natural alignment: ``int`` at those widths
+    is found wherever it sits, and NOT_EXACT reports every other window."""
+    raw = b"\xff" * width
+    data = b"\x00" + raw + b"\x00"
+    exact = list(
+        scan_memory_for_exact_value(data, len(data), raw, width, ScanTypesEnum.EXACT_VALUE, int)
+    )
+    not_exact = list(
+        scan_memory_for_exact_value(data, len(data), raw, width, ScanTypesEnum.NOT_EXACT_VALUE, int)
+    )
+    assert exact == [1]
+    assert not_exact == [0, 2]
+    # The ordered fallback steps the same way, so EXACT ⊆ SMALLER_THAN_OR_EXACT(-1).
+    ordered = list(
+        scan_memory(data, len(data), raw, width, ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE, int)
+    )
+    assert 1 in ordered
+
+
+def test_exact_float_scan_uses_value_semantics():
+    """``-0.0 == 0.0`` for the EXACT path exactly as for ``scan_memory``
+    (byte equality would miss the negative zero)."""
+    data = struct.pack("<ff", -0.0, 0.0)
+    target = struct.pack("<f", 0.0)
+    exact = list(scan_memory_for_exact_value(data, len(data), target, 4, ScanTypesEnum.EXACT_VALUE, float))
+    assert exact == [0, 4]
+    assert exact == list(scan_memory(data, len(data), target, 4, ScanTypesEnum.EXACT_VALUE, float))
+
+
+def test_exact_scan_skips_unaligned_decoys_efficiently_in_zeroed_memory():
+    """A zero target over zeroed memory matches at *every* byte; only the
+    aligned ones may be reported, and NOT_EXACT is empty."""
+    data = bytes(64)
+    target = _pack(0)
+    assert list(
+        scan_memory_for_exact_value(data, len(data), target, 4, ScanTypesEnum.EXACT_VALUE, int)
+    ) == list(range(0, 64, 4))
+    assert list(
+        scan_memory_for_exact_value(data, len(data), target, 4, ScanTypesEnum.NOT_EXACT_VALUE, int)
+    ) == []
+
+
+@pytest.mark.parametrize("pytype", [str, bytes, int])
+def test_empty_target_is_rejected_by_both_scan_kernels(pytype):
+    """A zero-width target used to match at every offset — including one past
+    the end of the buffer — instead of being an error."""
+    with pytest.raises(ValueError, match="must not be empty"):
+        list(scan_memory_for_exact_value(b"abcdef", 6, b"", 0, ScanTypesEnum.EXACT_VALUE, pytype))
+    with pytest.raises(ValueError, match="must not be empty"):
+        list(scan_memory(b"abcdef", 6, b"", 0, ScanTypesEnum.BIGGER_THAN, pytype))
+    with pytest.raises(ValueError, match="must not be empty"):
+        list(scan_memory(b"abcdef", 6, (b"", b"a"), 1, ScanTypesEnum.VALUE_BETWEEN, pytype))

@@ -28,6 +28,7 @@ mistakes for a complete one is the one bug in this server that produces
 confident, wrong answers, so every tool that returns one repeats the warning.
 """
 
+import math
 import sys
 from contextlib import contextmanager
 from time import monotonic
@@ -74,22 +75,11 @@ SAMPLE_SIZE = 10
 MAX_TEXT_BYTES = 0x10000
 
 #: The numeric widths this server offers a model. Deliberately narrower than
-#: what the library now accepts, and the reasons it was *first* written down
-#: no longer apply — both were fixed in this same PR, so the justification is
-#: recorded honestly rather than left to rot:
-#:
-#: * ``int`` at 3, 5, 6 or 7 used to come back ``None`` from
-#:   ``search_by_addresses`` while ``read_process_memory`` returned a value.
-#:   Both paths now agree and sign-extend, so these widths work — measured,
-#:   width 3 reads ``1118481``, not ``None``.
-#: * ``float`` at anything but 4 or 8 used to decode garbage that read like a
-#:   real measurement. ``get_c_type_of`` now refuses those widths outright.
-#:
-#: What remains is a product decision, not a workaround: a model is told to
-#: guess widths, and an unusual one is far more often a guess gone wrong than
-#: a genuine 24-bit field. Offering 1, 2, 4 and 8 keeps the guess space the
-#: size of the answer space. A caller who really wants a 3-byte field has the
-#: library API, which no longer half-supports it.
+#: what the library accepts (it reads 3-, 5-, 6- and 7-byte integers fine): a
+#: model is told to guess widths, and an unusual one is far more often a guess
+#: gone wrong than a genuine 24-bit field. Offering 1, 2, 4 and 8 keeps the
+#: guess space the size of the answer space; a caller who really wants a
+#: 3-byte field has the library API.
 VALID_NUMERIC_WIDTHS = {int: (1, 2, 4, 8), float: (4, 8), bool: (1,)}
 
 #: Modules listed inline by ``process_info``. A desktop app loads hundreds of
@@ -413,9 +403,18 @@ def _parse_signed_int(raw: Any, field: str) -> int:
 
 
 def format_value(value: Any) -> Any:
-    """Render a value read from memory for a JSON result."""
+    """Render a value read from memory for a JSON result.
+
+    A non-finite float goes out as the string ``"nan"`` / ``"inf"`` /
+    ``"-inf"``: JSON has no spelling for them, and the SDK's encoder emits the
+    bare tokens ``NaN`` / ``Infinity``, which strict parsers reject — so a
+    single uninitialised float in a result page could make the whole reply
+    unparseable on the client.
+    """
     if isinstance(value, (bytes, bytearray)):
         return bytes(value).hex().upper()
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
     return value
 
 
@@ -455,6 +454,56 @@ def parse_int_arg(raw: Any, field: str, *, default: Optional[int] = None) -> int
         ) from None
 
 
+def parse_page_args(limit: Any, offset: Any, *, default: int) -> Tuple[int, int]:
+    """Clamp a tool's ``limit`` / ``offset`` paging arguments.
+
+    ``limit`` is at least 1 and at most :data:`MAX_PAGE_SIZE`; ``offset`` is at
+    least 0. ``0`` / ``None`` for either means the tool's default.
+    """
+    limit = max(1, min(parse_int_arg(limit or default, "limit"), MAX_PAGE_SIZE))
+    offset = max(0, parse_int_arg(offset or 0, "offset"))
+    return limit, offset
+
+
+def parse_scan_bounds(
+    pytype: Type, scan_name: str, value: Any, end_value: Any, label: str
+) -> Tuple[Any, Any, str]:
+    """Parse ``value`` / ``end_value`` for a comparison, the same way for a
+    first scan and a refine.
+
+    :returns: ``(parsed, parsed_end, description)``. ``parsed_end`` equals
+        ``parsed`` for the single-value comparisons. ``description`` captions
+        the result set (``"int == 100"``, ``"float in [1.5, 2.5]"``).
+    :raises ToolError: when a range comparison lacks ``end_value``, or a
+        single-value comparison is given one — silently ignoring the latter
+        turned ``exact, 90..100`` into a plain exact-90 whose empty result
+        pointed the caller away from the real mistake.
+    """
+    parsed = parse_value(pytype, value)
+
+    if scan_name in _RANGE_SCAN_TYPES:
+        if end_value == "" or end_value is None:
+            raise ToolError(
+                "scan_type=%r needs end_value as well as value (the range "
+                "bounds)." % scan_name
+            )
+        parsed_end = parse_value(pytype, end_value, field="end_value")
+        description = "%s in [%s, %s]%s" % (
+            label,
+            value,
+            end_value,
+            " (excluded)" if scan_name == "not_between" else "",
+        )
+        return parsed, parsed_end, description
+
+    if end_value:
+        raise ToolError(
+            "end_value only applies to scan_type 'between' / 'not_between'; "
+            "scan_type=%r takes value alone." % scan_name
+        )
+    return parsed, parsed, "%s %s %s" % (label, _SCAN_SYMBOLS[scan_name], value)
+
+
 def parse_bufflength(raw: int, pytype: Type, *, required: bool) -> Optional[int]:
     """Turn the ``bufflength=0`` sentinel into the library's ``None``.
 
@@ -470,11 +519,10 @@ def parse_bufflength(raw: int, pytype: Type, *, required: bool) -> Optional[int]
             "bufflength must be a number, not a boolean (got %r)." % raw
         )
 
-    if raw and parse_int_arg(raw, "bufflength") < 0:
-        raise ToolError("bufflength must be positive (got %r)." % raw)
-
     if raw:
         width = parse_int_arg(raw, "bufflength")
+        if width < 0:
+            raise ToolError("bufflength must be positive (got %r)." % raw)
 
         # This is the one argument every tool funnels a size through, so it is
         # where both width failures get stopped: a numeric width the read, scan
@@ -640,8 +688,7 @@ class MemoryToolset:
         distinguishable from it not running.
         """
         needle = (name_filter or "").strip().casefold()
-        limit = max(1, min(parse_int_arg(limit or 50, "limit"), MAX_PAGE_SIZE))
-        offset = max(0, parse_int_arg(offset or 0, "offset"))
+        limit, offset = parse_page_args(limit, offset, default=50)
 
         # Guarded: iter_processes() is a generator that raises on first
         # iteration when the OS refuses to enumerate (Windows
@@ -788,16 +835,32 @@ class MemoryToolset:
                 "Could not open pid %d: %s. %s" % (pid, error, _permission_hint())
             ) from None
 
+        # The policy approved a *name*, possibly minutes ago while the user
+        # read the prompt; the open above was by *pid*, and pids are recycled.
+        # Now that the handle pins the pid, re-read the name it currently
+        # carries and refuse the handle if it is not the one that was
+        # approved. Only when both names are readable: a target whose name
+        # this user cannot read was approved as such, and there is nothing to
+        # compare.
+        if name:
+            current = self._name_for_pid(pid)
+            if current and current.casefold() != name.casefold():
+                _close_quietly(process)
+                raise ToolError(
+                    'Pid %d now belongs to "%s", not to the approved "%s": the '
+                    "pid was reused by another process between approval and "
+                    "attach. Nothing was opened. Call open_process again, by "
+                    "name, so the new target gets its own approval."
+                    % (pid, current, name)
+                )
+
         try:
             session = self.store.open(process, pid, name)
         except SessionError:
             # The handle already exists and the store's cap is checked after
             # it does, so refusing without closing leaks the resource the cap
             # protects.
-            try:
-                process.close()
-            except Exception:  # noqa: BLE001 — target may already be gone
-                pass
+            _close_quietly(process)
             raise
 
         result: Dict[str, Any] = {
@@ -946,8 +1009,7 @@ class MemoryToolset:
         :param offset: rows to skip, for paging.
         """
         session = self.store.get(session_id)
-        limit = max(1, min(parse_int_arg(limit or 40, "limit"), MAX_PAGE_SIZE))
-        offset = max(0, parse_int_arg(offset or 0, "offset"))
+        limit, offset = parse_page_args(limit, offset, default=40)
         needle = (path_filter or "").strip().casefold()
 
         with session.lock, self._target_errors(session, "list_memory_regions"):
@@ -1024,24 +1086,13 @@ class MemoryToolset:
         session = self.store.get(session_id)
         pytype = parse_value_type(value_type)
         scan_name, scan_enum = parse_scan_type(scan_type)
-
-        parsed = parse_value(pytype, value)
+        parsed, parsed_end, description = parse_scan_bounds(
+            pytype, scan_name, value, end_value, value_type
+        )
+        width = parse_bufflength(bufflength, pytype, required=False)
 
         if scan_name in _RANGE_SCAN_TYPES:
-            if end_value == "" or end_value is None:
-                raise ToolError(
-                    "scan_type=%r needs end_value as well as value (the range "
-                    "bounds)." % scan_name
-                )
-            parsed_end = parse_value(pytype, end_value, field="end_value")
-            width = parse_bufflength(bufflength, pytype, required=False)
             width = self._resolved_width(pytype, width, parsed, parsed_end)
-            description = "%s in [%s, %s]%s" % (
-                value_type,
-                value,
-                end_value,
-                " (excluded)" if scan_name == "not_between" else "",
-            )
 
             def make_scan(batch: Sequence[MemoryRegion]) -> Generator:
                 return session.process.search_by_value_between(
@@ -1055,14 +1106,7 @@ class MemoryToolset:
                 )
 
         else:
-            if end_value:
-                raise ToolError(
-                    "end_value only applies to scan_type 'between' / "
-                    "'not_between' (got scan_type=%r)." % scan_name
-                )
-            width = parse_bufflength(bufflength, pytype, required=False)
             width = self._resolved_width(pytype, width, parsed)
-            description = "%s %s %s" % (value_type, _SCAN_SYMBOLS[scan_name], value)
 
             def make_scan(batch: Sequence[MemoryRegion]) -> Generator:
                 return session.process.search_by_value(
@@ -1192,69 +1236,30 @@ class MemoryToolset:
                 % (scan_name, previous.value_type)
             )
 
-        parsed = parse_value(pytype, value)
-        parsed_end: Any = parsed
+        parsed, parsed_end, description = parse_scan_bounds(
+            pytype, scan_name, value, end_value, previous.value_type
+        )
 
-        if scan_name in _RANGE_SCAN_TYPES:
-            if end_value == "" or end_value is None:
-                raise ToolError(
-                    "scan_type=%r needs end_value as well as value." % scan_name
-                )
-            parsed_end = parse_value(pytype, end_value, field="end_value")
-            description = "%s in [%s, %s]%s" % (
-                previous.value_type,
-                value,
-                end_value,
-                " (excluded)" if scan_name == "not_between" else "",
-            )
-        else:
-            # Same refusal `scan_value` makes. Ignoring it silently dropped
-            # half of what the caller asked for: refine_scan(scan_type="exact",
-            # value="90", end_value="100") became a plain exact-90, and when
-            # that came back with no matches the hint said to try another
-            # value, pointing away from the actual mistake.
-            if end_value:
-                raise ToolError(
-                    "end_value only applies to scan_type 'between' / "
-                    "'not_between'; scan_type=%r takes value alone." % scan_name
-                )
-            description = "%s %s %s" % (
-                previous.value_type, _SCAN_SYMBOLS[scan_name], value
-            )
-
-        # A refine must keep exactly the addresses a fresh scan would, so it has
-        # to compare the way a scan does — and a scan does NOT compare against
-        # the caller's Python value. The target is encoded to bytes at the scan
-        # width and decoded back (`decode_scan_target`), which is the identity
-        # for `int` and 8-byte `float` and emphatically not for the rest:
+        # A refine keeps exactly the addresses a fresh scan would, so it
+        # compares the way a scan does: the target is encoded to bytes at the
+        # scan width and decoded back (`decode_scan_target`), and each address
+        # is re-read as raw bytes and decoded through the same helper. That
+        # round trip is the identity for `int` and 8-byte `float` but not for
+        # 4-byte floats (0.1 becomes 0.10000000149011612) or for `str` /
+        # `bytes` (compared as the integer view of a NUL-padded buffer), so
+        # comparing against the caller's Python value would silently drop
+        # every match of those types.
         #
-        #   * `float` at 4 bytes — Cheat Engine's default "Float" — turns 0.1
-        #     into 0.10000000149011612, so comparing against the double 0.1
-        #     rejected every address the scan had just matched;
-        #   * `str` / `bytes` are compared as the integer view of their
-        #     NUL-padded buffer, so any value shorter than `bufflength` missed.
+        # One deliberate difference from a fresh scan: for ``not_exact`` on
+        # ``str`` / ``bytes`` a scan suppresses offsets whose window overlaps an
+        # exact match, so byte-wise stepping does not report a match's
+        # neighbours as hits. A refine reads only the addresses it was handed
+        # and has no view of their neighbours, so it keeps such an address —
+        # the right answer to "does this address still not hold X".
         #
-        # Both failed silently and only for those types, which is why the whole
-        # loop looked fine on ints. Values are therefore re-read as raw bytes
-        # and decoded through the same helper, so the comparison a refine
-        # applies is the one a fresh scan applies.
-        #
-        # One deliberate difference, since "equivalent to a fresh scan" was
-        # written here unqualified and is not true in general: for
-        # ``not_exact`` on ``str`` / ``bytes`` a fresh scan also drops any
-        # offset whose window *overlaps* an exact match (the bisect_left
-        # window in ``scan_memory_for_exact_value``), so that byte-by-byte
-        # stepping does not report the bytes beside a match as independent
-        # hits. A refine cannot reproduce that and should not: it was handed
-        # specific addresses and reads only those, with no view of the
-        # neighbours the window is computed from. So a refine can keep an
-        # address a fresh scan would have suppressed as adjacent. That is the
-        # right answer for "does this address still not hold X", which is what
-        # the caller asked.
-        # Always concrete: scan_value resolves the width before storing it, and
-        # the only result sets without one are byte-pattern scans, rejected
-        # above. Re-deriving it from the *refine* value would be actively wrong
-        # for str/bytes, where the width came from the original value.
+        # The width is always the one recorded at scan time: re-deriving it
+        # from the refine value would be wrong for str/bytes, whose width came
+        # from the original value.
         width = previous.bufflength
         if not width:
             raise ToolError(
@@ -1268,14 +1273,11 @@ class MemoryToolset:
             # does not fit `width` ("value 70000 does not fit in a 2-byte
             # integer"), which is a likely refine mistake and exactly the kind
             # of message the SDK would otherwise withhold.
+            #
             # The same byte order `scan_memory` picks: `str` compares
-            # big-endian, everything else in host order (util/scan.py, where
-            # `is_string = pytype is str`). Using `sys.byteorder` for `str`
-            # too was harmless only because `_TEXT_SCAN_TYPES` limits text
-            # refines to exact/not_exact, where both sides cancel -- so the
-            # comment above claiming bit-for-bit equivalence with a fresh scan
-            # held only as long as that guard stayed. Widening
-            # `_TEXT_SCAN_TYPES` would have silently inverted bigger/smaller.
+            # big-endian, everything else in host order. It matters for the
+            # ordered comparisons, which `_TEXT_SCAN_TYPES` currently keeps
+            # away from text — keep the two in step if that guard ever widens.
             byte_order = "big" if pytype is str else sys.byteorder
 
             target = decode_scan_target(
@@ -1348,8 +1350,7 @@ class MemoryToolset:
         :param offset: rows to skip.
         """
         session, scan = self.store.find_scan(scan_id)
-        limit = max(1, min(parse_int_arg(limit or 20, "limit"), MAX_PAGE_SIZE))
-        offset = max(0, parse_int_arg(offset or 0, "offset"))
+        limit, offset = parse_page_args(limit, offset, default=20)
 
         page = scan.addresses[offset : offset + limit]
 
@@ -1397,22 +1398,10 @@ class MemoryToolset:
         pytype = parse_value_type(value_type)
         width = parse_bufflength(bufflength, pytype, required=True)
 
-        with session.lock:
-            try:
-                value = session.process.read_process_memory(target, pytype, width)
-            except OSError as error:
-                raise ToolError(
-                    "Could not read %s as %s: %s. The page may have been freed, "
-                    "or the range crosses into unmapped memory."
-                    % (format_address(target), value_type, error)
-                ) from None
-            except MemoryError as error:
-                raise ToolError(
-                    "Ran out of memory reading %s: %s. Ask for a smaller "
-                    "bufflength." % (format_address(target), error)
-                ) from None
-            except (ValueError, PyMemoryEditorError) as error:
-                raise ToolError("Read failed at %s: %s" % (format_address(target), error)) from None
+        with session.lock, self._target_errors(
+            session, "read_value at %s" % format_address(target), hint=_READ_HINT
+        ):
+            value = session.process.read_process_memory(target, pytype, width)
 
         return {
             "session_id": session.session_id,
@@ -1498,24 +1487,10 @@ class MemoryToolset:
                 # address is still legitimate. The caller just loses the undo.
                 previous = None
 
-            try:
+            with self._target_errors(
+                session, "write_value at %s" % format_address(target), hint=_WRITE_HINT
+            ):
                 session.process.write_process_memory(target, pytype, width, parsed)
-            except OSError as error:
-                raise ToolError(
-                    "Write to %s failed: %s. The region may be read-only or "
-                    "freed — check list_memory_regions for a writable region "
-                    "covering that address."
-                    % (format_address(target), error)
-                ) from None
-            except MemoryError as error:
-                raise ToolError(
-                    "Ran out of memory writing to %s: %s. Ask for a smaller "
-                    "value or bufflength." % (format_address(target), error)
-                ) from None
-            except (ValueError, PyMemoryEditorError) as error:
-                raise ToolError(
-                    "Write to %s rejected: %s" % (format_address(target), error)
-                ) from None
 
         return {
             "session_id": session.session_id,
@@ -1592,18 +1567,12 @@ class MemoryToolset:
             parse_offset(offset, field="offset") for offset in (offsets or [])
         ]
 
-        with session.lock:
-            try:
-                final = session.process.resolve_pointer_chain(base, parsed_offsets)
-            except OSError as error:
-                raise ToolError(
-                    "Pointer chain from %s broke: %s. One of the hops pointed "
-                    "into unmapped memory — the chain is stale (the object moved "
-                    "or was freed), or an offset is wrong."
-                    % (format_address(base), error)
-                ) from None
-            except (MemoryError, ValueError, PyMemoryEditorError) as error:
-                raise ToolError("Could not resolve the chain: %s" % error) from None
+        with session.lock, self._target_errors(
+            session,
+            "resolve_pointer_chain from %s" % format_address(base),
+            hint=_CHAIN_HINT,
+        ):
+            final = session.process.resolve_pointer_chain(base, parsed_offsets)
 
         # The one address here the argument parsers never saw: it comes out of
         # the target's own memory plus the offsets. Handing back something that
@@ -1805,7 +1774,14 @@ class MemoryToolset:
         That reopened the allocation path the cap exists to close, and the
         inferred width is then stored on the scan and reused by every refine.
         """
-        resolved = resolve_bufflength_for_value(pytype, width, *values)
+        try:
+            resolved = resolve_bufflength_for_value(pytype, width, *values)
+        except ValueError as error:
+            # The library refuses, say, an empty text target. Its message is
+            # the right advice, but only a ToolError's text reaches the model.
+            raise ToolError(
+                "Could not size a %s value: %s" % (pytype.__name__, error)
+            ) from None
         if pytype in (str, bytes) and resolved > MAX_TEXT_BYTES:
             raise ToolError(
                 "The value is %d bytes, over the %d-byte limit for a %s scan. "
@@ -1816,8 +1792,14 @@ class MemoryToolset:
         return resolved
 
     @contextmanager
-    def _target_errors(self, session: Session, action: str):
+    def _target_errors(self, session: Session, action: str, *, hint: str = ""):
         """Translate a backend failure into a message the model can act on.
+
+        :param hint: what to say after an ``OSError`` / library error, in place
+            of the default "the target has most likely exited". A read of an
+            unmapped page on a live target has a different likely cause from a
+            region walk failing, and one wording for both misdirected the
+            model.
 
         ``_surface_errors`` in the protocol layer only forwards our own
         ``ToolError``; anything else the SDK wraps in ``UnexpectedToolError``,
@@ -1854,10 +1836,9 @@ class MemoryToolset:
             ) from None
         except (OSError, PyMemoryEditorError) as error:
             raise ToolError(
-                '%s failed on "%s" (pid %d): %s. The target has most likely '
-                "exited or freed that memory. Call close_process and reopen it "
-                "if it is still running; otherwise tell the user it is gone."
-                % (action, session.name or "unknown", session.pid, error)
+                '%s failed on "%s" (pid %d): %s. %s'
+                % (action, session.name or "unknown", session.pid, error,
+                   hint or _TARGET_GONE_HINT)
             ) from None
 
     def _capped_span(self, pytype: Type, width: Optional[int], value: Any) -> int:
@@ -2060,8 +2041,13 @@ class MemoryToolset:
             )
         except (OSError, PyMemoryEditorError):
             # The target died or the region vanished mid-page. The addresses are
-            # still worth returning; the values are not.
-            return [{"address": format_address(address)} for address in addresses]
+            # still worth returning; the values are not — and the rows say so
+            # in the same shape as a single unreadable address, so the model
+            # sees "unreadable" rather than a value that silently went missing.
+            return [
+                {"address": format_address(address), "value": None, "readable": False}
+                for address in addresses
+            ]
 
         # Emitted in the order asked for — ``search_by_addresses`` sorts
         # internally, and re-deriving the order from its output would silently
@@ -2181,6 +2167,40 @@ class _ScanDeadline(Exception):
     """Internal: unwinds a pointer scan that ran past its time budget."""
 
 
+def _close_quietly(process: AbstractProcess) -> None:
+    """Release a handle that will not be registered; the target may be gone."""
+    try:
+        process.close()
+    except Exception:  # noqa: BLE001 — target may already be gone
+        pass
+
+
+#: What `_target_errors` says after a backend failure when the tool gives no
+#: more specific hint: the region-walking tools, where the realistic cause is
+#: the target exiting.
+_TARGET_GONE_HINT = (
+    "The target has most likely exited or freed that memory. Call "
+    "close_process and reopen it if it is still running; otherwise tell the "
+    "user it is gone."
+)
+
+_READ_HINT = (
+    "The page may have been freed, or the range crosses into unmapped memory. "
+    "If the target has exited, call close_process and reopen it."
+)
+
+_WRITE_HINT = (
+    "The region may be read-only or freed — check list_memory_regions for a "
+    "writable region covering that address. If the target has exited, call "
+    "close_process and reopen it."
+)
+
+_CHAIN_HINT = (
+    "One of the hops pointed into unmapped memory — the chain is stale (the "
+    "object moved or was freed), or an offset is wrong."
+)
+
+
 #: Human-readable operator per scan type, for result descriptions.
 _SCAN_SYMBOLS = {
     "exact": "==",
@@ -2218,14 +2238,26 @@ def _permission_hint() -> str:
 
 
 __all__ = (
+    "MAX_ADDRESS",
+    "MAX_OFFSET_MAGNITUDE",
     "MAX_PAGE_SIZE",
+    "MAX_TEXT_BYTES",
     "SAMPLE_SIZE",
     "SCAN_TYPES",
+    "VALID_NUMERIC_WIDTHS",
     "VALUE_TYPES",
     "MemoryToolset",
     "ToolError",
     "format_address",
+    "format_offset",
     "format_value",
     "parse_address",
+    "parse_bufflength",
+    "parse_int_arg",
+    "parse_offset",
+    "parse_page_args",
+    "parse_scan_bounds",
+    "parse_scan_type",
     "parse_value",
+    "parse_value_type",
 )

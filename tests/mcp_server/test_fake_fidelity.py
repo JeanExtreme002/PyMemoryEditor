@@ -122,7 +122,7 @@ def target(request):
         return
 
     toolset = MemoryToolset(
-        ServerConfig(allow_any_process=True, max_scan_seconds=180)
+        ServerConfig(allow_any_process=True, max_scan_seconds=180, protect_self=False)
     )
     session_id = toolset.open_process(pid=os.getpid())["session_id"]
     yield RealTarget("real", toolset, session_id)

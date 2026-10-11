@@ -12,6 +12,7 @@ write into unrelated state.
 
 import pytest
 
+from .conftest import WRITABLE_BASE
 from PyMemoryEditor.mcp.toolset import (
     ToolError,
     format_address,
@@ -737,3 +738,144 @@ class TestServerConfigValidatesItsBounds:
             parse_args(["--max-scan-results", "0"])
 
         assert exit_info.value.code == 2
+
+
+class TestNonFiniteFloatsAreRenderedAsStrings:
+    """JSON has no NaN. The SDK's encoder emits the bare token ``NaN`` /
+    ``Infinity`` (``pydantic_core.to_json``), which strict parsers reject, so
+    one uninitialised float in a page could make the whole reply
+    unparseable on the client."""
+
+    @pytest.mark.parametrize("value, rendered", [
+        (float("nan"), "nan"),
+        (float("inf"), "inf"),
+        (float("-inf"), "-inf"),
+    ])
+    def test_rendered_as_text(self, value, rendered):
+        assert format_value(value) == rendered
+
+    def test_finite_floats_stay_numbers(self):
+        assert format_value(2.5) == 2.5
+        assert format_value(0.0) == 0.0
+
+    def test_a_nan_read_serialises_as_strict_json(self, toolset, session, fake_process):
+        import json
+
+        from pydantic_core import to_json
+
+        address = fake_process.poke(WRITABLE_BASE + 0x40, float, float("nan"), 8)
+        result = toolset.read_value(session["session_id"], hex(address), "float", 8)
+
+        assert result["value"] == "nan"
+        # The exact path the SDK takes, then a strict decoder.
+        assert json.loads(to_json(result).decode())["value"] == "nan"
+
+
+class TestPageArgs:
+    def test_defaults_and_clamps(self):
+        from PyMemoryEditor.mcp.toolset import MAX_PAGE_SIZE, parse_page_args
+
+        assert parse_page_args(0, 0, default=20) == (20, 0)
+        assert parse_page_args(None, None, default=40) == (40, 0)
+        assert parse_page_args(10**6, -5, default=20) == (MAX_PAGE_SIZE, 0)
+        assert parse_page_args("5", "0x10", default=20) == (5, 16)
+
+    def test_a_non_numeric_limit_is_a_tool_error(self):
+        from PyMemoryEditor.mcp.toolset import parse_page_args
+
+        with pytest.raises(ToolError, match="limit"):
+            parse_page_args("dez", 0, default=20)
+
+
+class TestScanBounds:
+    """One parser for ``scan_value`` and ``refine_scan``, so the two cannot
+    disagree about ``end_value`` again."""
+
+    def test_a_single_value_comparison(self):
+        from PyMemoryEditor.mcp.toolset import parse_scan_bounds
+
+        parsed, end, description = parse_scan_bounds(int, "exact", "100", "", "int")
+        assert (parsed, end) == (100, 100)
+        assert description == "int == 100"
+
+    def test_a_range_comparison(self):
+        from PyMemoryEditor.mcp.toolset import parse_scan_bounds
+
+        parsed, end, description = parse_scan_bounds(
+            float, "not_between", "1.5", "2.5", "float"
+        )
+        assert (parsed, end) == (1.5, 2.5)
+        assert description == "float in [1.5, 2.5] (excluded)"
+
+    def test_a_range_without_end_value_is_refused(self):
+        from PyMemoryEditor.mcp.toolset import parse_scan_bounds
+
+        with pytest.raises(ToolError, match="end_value"):
+            parse_scan_bounds(int, "between", "1", "", "int")
+
+    def test_an_end_value_on_a_single_comparison_is_refused(self):
+        from PyMemoryEditor.mcp.toolset import parse_scan_bounds
+
+        with pytest.raises(ToolError, match="end_value only applies"):
+            parse_scan_bounds(int, "exact", "90", "100", "int")
+
+
+class TestHttpTransportsRefuseWritesByDefault:
+    """An HTTP transport has no authentication, so a writable server must be
+    asked for by name."""
+
+    @pytest.mark.parametrize("transport", ["sse", "streamable-http"])
+    def test_a_writable_server_does_not_start(self, transport):
+        from PyMemoryEditor.mcp.config import parse_args
+
+        with pytest.raises(SystemExit) as exit_info:
+            parse_args(["--transport", transport])
+        assert exit_info.value.code == 2
+
+    @pytest.mark.parametrize("transport", ["sse", "streamable-http"])
+    def test_read_only_starts(self, transport):
+        from PyMemoryEditor.mcp.config import parse_args
+
+        config, parsed = parse_args(["--transport", transport, "--read-only"])
+        assert parsed == transport
+        assert config.allow_write is False
+
+    @pytest.mark.parametrize("transport", ["sse", "streamable-http"])
+    def test_the_opt_in_flag_starts_writable(self, transport):
+        from PyMemoryEditor.mcp.config import parse_args
+
+        config, parsed = parse_args(["--transport", transport, "--allow-remote-write"])
+        assert parsed == transport
+        assert config.allow_write is True
+
+    def test_stdio_is_unaffected(self):
+        from PyMemoryEditor.mcp.config import parse_args
+
+        config, transport = parse_args([])
+        assert transport == "stdio"
+        assert config.allow_write is True
+
+    def test_the_help_text_carries_no_changelog(self):
+        # `--help` is operator-facing; a sentence about what an earlier
+        # version lacked belongs in git history, not there.
+        from PyMemoryEditor.mcp import build_parser
+
+        assert "existed and was honoured" not in build_parser().format_help()
+
+
+class TestServerConfigProtectsItself:
+    def test_default_policy_refuses_the_server_pid(self):
+        import os
+
+        from PyMemoryEditor.mcp import ServerConfig
+
+        policy = ServerConfig(allow_any_process=True).policy()
+        assert policy.check(os.getpid(), "python").allowed is False
+
+    def test_an_embedder_can_opt_out(self):
+        import os
+
+        from PyMemoryEditor.mcp import ServerConfig
+
+        policy = ServerConfig(allow_any_process=True, protect_self=False).policy()
+        assert policy.check(os.getpid(), "python").allowed is True

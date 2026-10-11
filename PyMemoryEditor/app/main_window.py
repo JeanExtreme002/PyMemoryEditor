@@ -78,11 +78,19 @@ class MainWindow(QMainWindow):
 
     closing = Signal()
 
+    # Ask before closing a window whose cheat table has entries. Tests that
+    # build and tear down windows set this to False on the class.
+    confirm_close_with_entries = True
+
     def __init__(self, process: AbstractProcess):
         super().__init__()
         self._process = process
         self._worker: Optional[Union[FirstScanWorker, RefineScanWorker]] = None
         self._region_snapshot: Optional[list] = None
+        # Set by the heartbeat once the target is gone. Everything that would
+        # re-enable the scanner (a worker finishing, in particular) checks it,
+        # so the lock _check_process_alive takes holds until Change Process.
+        self._target_dead = False
         self._memory_map: Optional[MemoryMapDialog] = None
         self._hex_viewers: List[MemoryViewerDialog] = []
 
@@ -242,12 +250,14 @@ class MainWindow(QMainWindow):
 
         tools_menu = menu_bar.addMenu("&Tools")
         memory_map_action = QAction("Memory Map…", self)
-        memory_map_action.setShortcut(QKeySequence("Ctrl+M"))
+        # Not Ctrl+M / Ctrl+H: Qt maps Ctrl to Cmd on macOS, where those are
+        # the system-wide Minimize and Hide shortcuts.
+        memory_map_action.setShortcut(QKeySequence("Ctrl+R"))
         memory_map_action.triggered.connect(self._open_memory_map)
         tools_menu.addAction(memory_map_action)
 
         hex_viewer_action = QAction("Hex Viewer…", self)
-        hex_viewer_action.setShortcut(QKeySequence("Ctrl+H"))
+        hex_viewer_action.setShortcut(QKeySequence("Ctrl+Shift+H"))
         hex_viewer_action.triggered.connect(lambda: self._open_hex_viewer(0))
         tools_menu.addAction(hex_viewer_action)
 
@@ -520,7 +530,11 @@ class MainWindow(QMainWindow):
 
     def _cleanup_worker(self) -> None:
         self._worker = None
-        self._set_busy(False)
+        # A scan that was running when the target exited finishes (with an
+        # error) after the heartbeat locked the scanner; releasing the lock
+        # here would hand the controls back against a dead handle.
+        if not self._target_dead:
+            self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
         self._scanner.set_busy(busy)
@@ -609,6 +623,12 @@ class MainWindow(QMainWindow):
         self, address: int, spec_label: str, length: int
     ) -> None:
         """Promote a resolved pointer-chain address into the cheat table."""
+        self._promote_resolved_address(address, spec_label, length, "pointer chain")
+
+    def _promote_resolved_address(
+        self, address: int, spec_label: str, length: int, source: str
+    ) -> None:
+        """Add an address resolved by a pointer tool to the cheat table."""
         entry = CheatEntry(
             description="",
             address=int(address),
@@ -617,7 +637,7 @@ class MainWindow(QMainWindow):
         )
         self._cheat.add_entry(entry)
         self._status.showMessage(
-            f"Added 0x{address:X} to cheat table (from pointer chain)."
+            f"Added 0x{address:X} to cheat table (from {source})."
         )
 
     def _open_pointer_scan_dialog(self, address: int = 0) -> None:
@@ -651,16 +671,7 @@ class MainWindow(QMainWindow):
         self, address: int, spec_label: str, length: int
     ) -> None:
         """Promote a resolved pointer-scan path's address into the cheat table."""
-        entry = CheatEntry(
-            description="",
-            address=int(address),
-            spec_label=spec_label,
-            length=int(length),
-        )
-        self._cheat.add_entry(entry)
-        self._status.showMessage(
-            f"Added 0x{address:X} to cheat table (from pointer scan)."
-        )
+        self._promote_resolved_address(address, spec_label, length, "pointer scan")
 
     def _open_log_console(self) -> None:
         if self._log_console_dialog is None:
@@ -809,7 +820,11 @@ class MainWindow(QMainWindow):
     def _check_process_alive(self) -> None:
         if not self._target_is_alive():
             self._heartbeat.stop()
+            self._target_dead = True
             self._scanner.set_busy(True)
+            # The cheat poller would otherwise keep reading (and, for frozen
+            # rows, writing) the dead handle ten times a second.
+            self._cheat.set_polling_paused(True)
             self._status.showMessage("Target process exited — operations disabled.")
             QMessageBox.warning(
                 self,
@@ -845,6 +860,7 @@ class MainWindow(QMainWindow):
         # If the previous target exited, _check_process_alive locked the scanner
         # via set_busy(True). Switching to a live process must release that lock,
         # otherwise the scan controls stay disabled against the new target.
+        self._target_dead = False
         self._scanner.set_busy(False)
 
         # Tear down auxiliary dialogs that hold a reference to the old
@@ -904,6 +920,10 @@ class MainWindow(QMainWindow):
         self._status.showMessage(f"Now targeting PID {self._process.pid}.")
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_discard_cheat_table():
+            event.ignore()
+            return
+
         # Stop the heartbeat *first*: _shutdown_worker pumps the event loop
         # below, and a heartbeat firing during that pump could pop a modal
         # dialog mid-teardown.
@@ -942,6 +962,26 @@ class MainWindow(QMainWindow):
 
         self.closing.emit()
         super().closeEvent(event)
+
+    def _confirm_discard_cheat_table(self) -> bool:
+        """Ask before quitting with unsaved cheat entries. True = go ahead.
+
+        The table is not persisted between runs (Export… is the way to keep
+        it), so a stray Cmd+Q / window close used to throw away every saved
+        address silently.
+        """
+        count = self._cheat.entry_count()
+        if count == 0 or not self.confirm_close_with_entries:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Quit",
+            f"The cheat table has {count} entr{'y' if count == 1 else 'ies'} "
+            "that will be lost (use Export… to keep them).\n\nQuit anyway?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Discard
 
     def _shutdown_worker(self) -> None:
         """

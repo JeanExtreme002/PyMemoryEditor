@@ -325,6 +325,9 @@ identical on every platform.
 .. py:method:: load_pointer_paths(file)
 
    Load pointer paths previously saved with :py:meth:`save_pointer_paths`.
+   Raises ``ValueError`` (naming the file and the field) when the file is not
+   such an export — wrong ``format``, unsupported ``version``, or a missing /
+   malformed ``paths`` entry.
 
 .. py:method:: rescan_pointer_paths(paths, target_address)
 
@@ -333,6 +336,8 @@ identical on every platform.
 .. py:method:: compare_pointer_scans(*sources)
 
    Intersect several saved scans — return the paths present in *every* one.
+   Takes one or more sources (``ValueError`` with none); a single source
+   returns its module-backed paths unchanged.
 ```
 
 ### Allocation

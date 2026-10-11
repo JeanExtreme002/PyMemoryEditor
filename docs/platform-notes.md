@@ -95,7 +95,8 @@ Access depends on:
 - **`ptrace_scope`** — the kernel's policy for non-child targets.
 
 If the target is **not** a child of the caller and `ptrace_scope=1` (the
-common default), you'll see a `PermissionError`. Fixes:
+common default), you'll see a `PermissionError` (`EPERM`) from the first
+read, write or scan. Fixes:
 
 ```bash
 # Run as root (easiest):
@@ -107,6 +108,20 @@ sudo sysctl kernel.yama.ptrace_scope=0
 # Persist it across reboots:
 echo "kernel.yama.ptrace_scope=0" | sudo tee /etc/sysctl.d/10-ptrace.conf
 ```
+
+A `PermissionError` raised while *opening* the process (reading
+`/proc/<pid>/maps`) is a different problem: that file is not gated by
+`ptrace_scope`, so the denial means the target belongs to another user or is
+not dumpable (setuid binaries, `prctl(PR_SET_DUMPABLE, 0)`). Run as root or
+as the target's owner.
+
+### Writes to read-only pages
+
+`process_vm_writev` honours page protection and Linux has no way to change
+another process's page protection from outside, so `write_process_memory`
+on a **read-only page** fails with `OSError` (`EFAULT`) — the same error an
+unmapped address gives. Windows and macOS elevate the page protection for
+the write instead; see the [macOS write side effect](#macos-write-side-effect).
 
 ### Memory allocation — not supported
 
@@ -170,8 +185,10 @@ permissive than it started. Treat the warning as a signal to investigate.
 ```
 
 This side effect is unique to macOS — the Win32 and Linux backends do not
-share it. Protection elevation is opt-in on Windows (`PROCESS_VM_OPERATION`),
-and Linux doesn't need protection changes for `process_vm_writev`.
+share it. On Windows, `WriteProcessMemory` changes the page protection
+itself (which is why the handle needs `PROCESS_VM_OPERATION`), and Linux
+cannot change it at all: writing to a read-only page there fails with
+`OSError` (`EFAULT`) — see [Linux → Writes to read-only pages](#writes-to-read-only-pages).
 
 ### `ModuleInfo.size` quirk
 

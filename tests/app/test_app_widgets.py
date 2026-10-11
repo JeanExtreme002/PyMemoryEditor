@@ -85,3 +85,71 @@ def test_pyside_widget_regressions(qapp):
     model.sort(0, Qt.AscendingOrder)
     order = [model.item(row, 0).data(Qt.DisplayRole) for row in range(model.rowCount())]
     assert order.index('8 MB') < order.index('120 MB')
+
+
+# --- hex parsing ---------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    (
+        ("0x1000", 0x1000),
+        ("1000", 0x1000),
+        ("  0X7FFE  ", 0x7FFE),
+        ("deadBEEF", 0xDEADBEEF),
+    ),
+)
+def test_parse_hex_address_accepts_plain_and_prefixed_hex(text, expected):
+    from PyMemoryEditor.app._widgets import parse_hex_address
+
+    assert parse_hex_address(text) == expected
+
+
+@pytest.mark.parametrize("text", ("", "   ", "0x", "zz", "-10", "+10", "1_0", "0x-1", "1 0"))
+def test_parse_hex_address_rejects_what_is_not_an_unsigned_hex_number(text):
+    """
+    Addresses are unsigned. ``int(text, 16)`` alone also took a leading sign
+    and underscore separators, so a manual cheat entry could end up with a
+    negative address.
+    """
+    from PyMemoryEditor.app._widgets import parse_hex_address
+
+    assert parse_hex_address(text) is None
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    (("0x10", 0x10), ("-0x10", -0x10), ("-10", -0x10), ("+8", 8), ("0", 0)),
+)
+def test_parse_hex_offset_allows_a_sign(text, expected):
+    from PyMemoryEditor.app._widgets import parse_hex_offset
+
+    assert parse_hex_offset(text) == expected
+
+
+@pytest.mark.parametrize("text", ("", "-", "--10", "1_0", "zz"))
+def test_parse_hex_offset_rejects_garbage(text):
+    from PyMemoryEditor.app._widgets import parse_hex_offset
+
+    assert parse_hex_offset(text) is None
+
+
+# --- size formatting ------------------------------------------------------ #
+
+
+@pytest.mark.parametrize(
+    "size, expected",
+    (
+        (0, "0 B"),
+        (1023, "1,023 B"),
+        (1024, "1.0 KB"),
+        (1536, "1.5 KB"),
+        (3 * 1024 ** 2, "3.0 MB"),
+        (1024 ** 5, "1,024.0 TB"),
+    ),
+)
+def test_format_size_uses_binary_units(size, expected):
+    """One formatter for the Memory Map, Modules and Open Process tables."""
+    from PyMemoryEditor.app._widgets import format_size
+
+    assert format_size(size) == expected

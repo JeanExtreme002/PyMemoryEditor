@@ -78,6 +78,11 @@ KERN_NO_ACCESS = 8
 KERN_MEMORY_FAILURE = 9
 KERN_MEMORY_ERROR = 10
 
+# mach/message.h: the MIG call could not be delivered because the destination
+# port is a dead name. This is what every Mach VM call returns once the task
+# behind the port has exited — the port stays valid, the task does not.
+MACH_SEND_INVALID_DEST = 0x10000003
+
 
 class vm_region_basic_info_64(Structure):
     """Layout of struct vm_region_basic_info_64 from <mach/vm_region.h>."""

@@ -288,3 +288,44 @@ def test_value_between_signed_int_matches_reference(payload):
             slow.append(offset)
 
     assert fast == slow
+
+
+# --------------------------------------------------------------------------- #
+# EXACT / NOT_EXACT (scan_memory_for_exact_value) vs the ordered kernel
+# --------------------------------------------------------------------------- #
+
+from PyMemoryEditor.util.scan import scan_memory_for_exact_value  # noqa: E402
+
+
+@settings(
+    suppress_health_check=[HealthCheck.too_slow],
+    deadline=None,
+    max_examples=200,
+)
+@given(payload=st.one_of(_int_payload(), _float_payload()), pytype_is_int=st.booleans())
+def test_exact_kernel_agrees_with_ordered_kernel(payload, pytype_is_int):
+    """The EXACT fast path (``bytes.find``) must report exactly the slots the
+    ordered kernel reports for ``value == target``, and NOT_EXACT must be its
+    complement over the same aligned slots — so a refine never drops an
+    address the first scan found."""
+    size, data, target = payload
+    # _int_payload and _float_payload are distinguishable by target width only
+    # for size 4/8; pick the interpretation from the strategy that produced it.
+    pytype = int if (size in (1, 2) or pytype_is_int) else float
+    if pytype is float and size not in _FLOAT_SIZES:
+        pytype = int
+
+    exact = list(scan_memory_for_exact_value(data, len(data), target, size, ScanTypesEnum.EXACT_VALUE, pytype))
+    not_exact = list(
+        scan_memory_for_exact_value(data, len(data), target, size, ScanTypesEnum.NOT_EXACT_VALUE, pytype)
+    )
+    via_ordered = list(scan_memory(data, len(data), target, size, ScanTypesEnum.EXACT_VALUE, pytype))
+    at_least = list(
+        scan_memory(data, len(data), target, size, ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE, pytype)
+    )
+
+    assert exact == via_ordered
+    assert set(exact) <= set(at_least)
+    slots = list(range(0, len(data) - size + 1, size))
+    assert sorted(exact + not_exact) == slots
+    assert not set(exact) & set(not_exact)

@@ -1718,3 +1718,111 @@ class TestPointerScanArgumentDefaults:
         signature = inspect.signature(MemoryToolset.find_pointer_paths)
         for name, default in POINTER_SCAN_DEFAULTS.items():
             assert signature.parameters[name].default == default, name
+
+
+class TestAttachRechecksTheTargetsIdentity:
+    """Approval is by name; the open is by pid; pids are recycled.
+
+    Between ``resolve_target`` (which names the target and runs the policy)
+    and ``attach`` (which opens by pid) the user may spend minutes on the
+    approval prompt. If the approved process exits in that window and the OS
+    hands its pid to something else, the handle would be on a process nobody
+    approved. ``attach`` re-reads the name once it holds the handle.
+    """
+
+    def test_a_recycled_pid_is_refused_and_closed(self, make_toolset, fake_process):
+        toolset = make_toolset(config())
+        names = iter(["faketarget", "impostor"])
+        toolset._name_for_pid = lambda pid: next(names)
+
+        with pytest.raises(ToolError, match="reused by another process"):
+            toolset.open_process(pid=4242)
+
+        assert toolset.store.sessions == ()
+        assert fake_process.closed is True
+
+    def test_the_same_name_attaches(self, make_toolset, fake_process):
+        toolset = make_toolset(config())
+        calls = []
+
+        def name_for_pid(pid):
+            calls.append(pid)
+            return "faketarget"
+
+        toolset._name_for_pid = name_for_pid
+        assert toolset.open_process(pid=4242)["opened"] is True
+        # Resolved once before the policy check, once after the open.
+        assert calls == [4242, 4242]
+
+    def test_case_differences_are_not_a_recycle(self, make_toolset):
+        toolset = make_toolset(config())
+        names = iter(["FakeTarget", "faketarget"])
+        toolset._name_for_pid = lambda pid: next(names)
+        assert toolset.open_process(pid=4242)["opened"] is True
+
+    def test_a_target_whose_name_cannot_be_read_is_not_refused(self, make_toolset):
+        # Nothing to compare: the approval was for "a process whose name this
+        # user cannot read", and that is still what the handle is on.
+        toolset = make_toolset(config())
+        names = iter(["faketarget", ""])
+        toolset._name_for_pid = lambda pid: next(names)
+        assert toolset.open_process(pid=4242)["opened"] is True
+
+    def test_the_server_refuses_its_own_pid(self, make_toolset):
+        import os
+
+        # Even with prompting off: the self/parent refusal sits above the
+        # consent gates, and no config flag reaches it.
+        toolset = make_toolset(config(allow_any_process=True, allow_system_processes=True))
+        with pytest.raises(ToolError, match="server's own process"):
+            toolset.open_process(pid=os.getpid())
+        assert toolset.store.sessions == ()
+
+
+class TestTargetErrorsCarryAHintPerTool:
+    """The read/write/chain tools used to hand-roll their own exception
+    ladders, whose wording drifted from ``_target_errors``. They now share it,
+    each with the hint that fits its failure."""
+
+    def test_an_unmapped_read_names_the_page(self, toolset, session):
+        with pytest.raises(ToolError) as error:
+            toolset.read_value(session["session_id"], "0x10", "int", 4)
+        text = str(error.value)
+        assert "read_value at 0x10" in text
+        assert "unmapped memory" in text
+
+    def test_a_write_to_a_read_only_region_says_so(self, toolset, session):
+
+        with pytest.raises(ToolError) as error:
+            toolset.write_value(session["session_id"], hex(READONLY_BASE), "int", "1", 4)
+        text = str(error.value)
+        assert "write_value at" in text
+        assert "read-only" in text
+
+    def test_a_broken_chain_is_called_stale(self, toolset, session):
+        with pytest.raises(ToolError, match="stale"):
+            toolset.resolve_pointer_chain(session["session_id"], "0x10", ["0x0"])
+
+    def test_a_value_that_does_not_fit_is_still_reported(self, toolset, session):
+
+        with pytest.raises(ToolError, match="does not fit"):
+            toolset.write_value(
+                session["session_id"], hex(WRITABLE_BASE), "int", "70000", 2
+            )
+
+
+class TestAPageWhoseReadFailsSaysSo:
+    def test_rows_are_marked_unreadable_not_valueless(self, toolset, session, fake_process):
+
+        fake_process.poke(WRITABLE_BASE + 0x20, int, 77)
+        scan = toolset.scan_value(session["session_id"], "int", "77", bufflength=4)
+
+        def die(*_args, **_kwargs):
+            raise OSError(2, "No such file or directory: /proc/4242/maps")
+
+        fake_process.search_by_addresses = die
+        rows = toolset.list_scan_results(scan["scan_id"])["results"]
+
+        assert rows, "the addresses are still worth returning"
+        assert all(row["readable"] is False for row in rows)
+        assert all(row["value"] is None for row in rows)

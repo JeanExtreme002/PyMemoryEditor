@@ -34,10 +34,15 @@ def live() -> MemoryToolset:
     not the approval gate: the server's default *ask* mode has no channel to
     prompt from a bare toolset. The gate itself is covered by
     ``test_server.py::TestAttachApproval`` and by
-    ``TestLiveSafety`` below.
+    ``TestLiveSafety`` below. ``protect_self`` is off for the same reason:
+    the server refuses its own pid by default, and this process *is* the
+    server here.
     """
     toolset = MemoryToolset(
-        ServerConfig(allow_write=True, allow_any_process=True, max_scan_seconds=120)
+        ServerConfig(
+            allow_write=True, allow_any_process=True, max_scan_seconds=120,
+            protect_self=False,
+        )
     )
     yield toolset
     toolset.store.close_all()
@@ -175,7 +180,7 @@ class TestLivePointers:
 class TestLiveSafety:
     def test_read_only_mode_refuses_to_write(self):
         toolset = MemoryToolset(
-            ServerConfig(allow_write=False, allow_any_process=True)
+            ServerConfig(allow_write=False, allow_any_process=True, protect_self=False)
         )
         try:
             session_id = toolset.open_process(pid=os.getpid())["session_id"]
@@ -191,7 +196,9 @@ class TestLiveSafety:
     def test_an_unapproved_target_is_not_opened(self):
         # Even this process, even with a matching pid: without a channel to ask
         # the user, the default mode refuses rather than attaching.
-        toolset = MemoryToolset(ServerConfig(allowed_processes=("no-such-target",)))
+        toolset = MemoryToolset(
+            ServerConfig(allowed_processes=("no-such-target",), protect_self=False)
+        )
         try:
             with pytest.raises(ToolError, match="approval"):
                 toolset.open_process(pid=os.getpid())
@@ -201,7 +208,7 @@ class TestLiveSafety:
 
     def test_a_remembered_approval_opens_the_real_process(self):
         # The runtime grant path, end to end against a live target.
-        toolset = MemoryToolset(ServerConfig())
+        toolset = MemoryToolset(ServerConfig(protect_self=False))
         try:
             with pytest.raises(ToolError, match="approval"):
                 toolset.open_process(pid=os.getpid())
@@ -215,7 +222,7 @@ class TestLiveSafety:
         # A budget too small for a full scan must return a flagged partial set
         # rather than run to completion or hang.
         toolset = MemoryToolset(
-            ServerConfig(max_scan_seconds=0.001, allow_any_process=True)
+            ServerConfig(max_scan_seconds=0.001, allow_any_process=True, protect_self=False)
         )
         try:
             session_id = toolset.open_process(pid=os.getpid())["session_id"]
@@ -226,7 +233,7 @@ class TestLiveSafety:
             toolset.store.close_all()
 
     def test_handles_are_closed_on_shutdown(self):
-        toolset = MemoryToolset(ServerConfig(allow_any_process=True))
+        toolset = MemoryToolset(ServerConfig(allow_any_process=True, protect_self=False))
         toolset.open_process(pid=os.getpid())
         assert toolset.store.close_all() == 1
         assert toolset.store.sessions == ()

@@ -488,3 +488,85 @@ def test_an_entry_width_is_bounded_by_what_a_poll_tick_can_read():
 
     # Far above any value a scan produces, far below a problem allocation.
     assert 1024 < MAX_ENTRY_LENGTH <= 16 * 1024 * 1024
+
+
+def test_add_entry_caps_the_width_at_max_entry_length():
+    """
+    The floor (1) was enforced at the door; the ceiling was not, so a JSON
+    import carrying ``"length": 10**9`` had the poll worker allocating a
+    gigabyte ten times a second. Every width field in the UI already stops
+    at MAX_ENTRY_LENGTH; the entry point now agrees.
+    """
+    pytest.importorskip("PySide6")
+
+    from types import SimpleNamespace
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import MAX_ENTRY_LENGTH, CheatTable
+
+    entry = CheatEntry.from_dict(
+        {"address": "0x1000", "spec_label": "String (UTF-8)", "length": 10**9}
+    )
+    table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
+    CheatTable.add_entry(table, entry)
+    assert table._entries[0].length == MAX_ENTRY_LENGTH
+
+
+def test_bulk_edit_writes_go_through_the_poll_worker(qapp, monkeypatch):
+    """
+    Edit Selected… used to call ``write_process_memory`` on the UI thread for
+    every targeted row — the one write path that bypassed the poll worker the
+    inline edit uses, so a slow target froze the interface per row.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app import cheat_table as cheat_table_module
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import CheatTable, _BulkEditPlan
+
+    class _Process:
+        pid = 1
+        writes = []
+
+        def read_process_memory(self, *args):
+            return 0
+
+        def write_process_memory(self, address, pytype, length, value):
+            self.writes.append((address, value))
+            return value
+
+        def search_by_addresses(self, *args):
+            return iter(())
+
+    class _Dialog:
+        Accepted = 1
+
+        def __init__(self, entries, parent=None):
+            pass
+
+        def exec(self):
+            return 1
+
+        def result_plan(self):
+            return _BulkEditPlan(description=None, spec=None, value_text="7")
+
+    monkeypatch.setattr(cheat_table_module, "_BulkEditDialog", _Dialog)
+
+    process = _Process()
+    table = CheatTable(process)
+    try:
+        for address in (0x1000, 0x2000):
+            entry = CheatEntry(
+                description="", address=address, spec_label="4 Bytes (Int32)", length=4
+            )
+            entry.frozen = True  # Active rows are targeted by the bulk edit
+            table.add_entry(entry)
+
+        table._on_edit_selected()
+
+        queued = [(addr, value) for addr, _pytype, _length, value in table._poller._pending_writes]
+        assert queued == [(0x1000, 7), (0x2000, 7)]
+        assert process.writes == []  # nothing ran on the UI thread
+        assert [e.last_value for e in table._entries] == [7, 7]
+    finally:
+        table.shutdown()

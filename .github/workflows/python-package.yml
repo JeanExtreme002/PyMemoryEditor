@@ -27,9 +27,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
         python-version: '3.12'
     - name: Install lint deps
@@ -44,9 +44,9 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
         python-version: '3.12'
     - name: Install dev deps
@@ -63,6 +63,9 @@ jobs:
   build:
     needs: lint
     runs-on: ${{ matrix.os }}
+    # Hard ceiling, same purpose as build-macos'. A cell takes ~4 minutes
+    # (measured 2026-10-08: 2m30s to 4m25s); without this the default is 6h.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -71,9 +74,9 @@ jobs:
           - ubuntu-latest
           - windows-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install Qt system libraries (Linux)
@@ -117,6 +120,10 @@ jobs:
       # that cost eight times over, and it pushed build-macos past its
       # 20-minute budget.
       #
+      # --maxfail=10 rather than -x: one broken test should not hide the next
+      # nine, but a wholesale breakage (a backend that fails to import) still
+      # stops early instead of printing 600 tracebacks.
+      #
       # --cov-fail-under is the real, in-repo coverage gate (deterministic and
       # independent of any external service), and `--cov-config` is what keeps
       # it meaningful now that the MCP suite lives in `build-mcp`.
@@ -126,14 +133,16 @@ jobs:
       # quality. It also varies by platform in a way the gate cannot absorb:
       # measured that way, Linux came out at 46% and macOS at 59%, so a floor
       # picked from macOS alone failed all eight matrix cells. Scoped to the
-      # library, the numbers are 87% on macOS and 66% on Linux, and 60 is the
-      # same floor this job carried before the MCP server existed.
+      # library, the numbers are 87% on macOS and 66% on Linux. The floor is
+      # 62: four points under the lowest cell (Linux), so it trips on a real
+      # regression rather than on platform spread. (It was 60 from before the
+      # MCP server existed, when nothing had been measured.)
       #
       # (coverage.py only counts the host backend + shared code -- the two
       # foreign backends aren't imported, which is most of that platform
       # spread.) Ratchet up once the numbers settle on Codecov.
       run: |
-        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s --maxfail=10 --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=62
     - name: Upload coverage to Codecov
       # Upload from every matrix cell so Codecov merges each OS's backend
       # coverage into one combined view (each platform exercises a different
@@ -141,7 +150,7 @@ jobs:
       # flaky upload never blocks the merge; the hard gate is --cov-fail-under
       # above. Runs even when tests fail so partial coverage stays visible.
       if: always()
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
       with:
         files: ./coverage.xml
         flags: ${{ runner.os }}-py${{ matrix.python-version }}
@@ -168,9 +177,9 @@ jobs:
     # Hard ceiling so a pathological scan can never sit at the 6h default.
     timeout-minutes: 20
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
         python-version: '3.12'
     # No Qt system-library step here: the PySide6 macOS wheel bundles its own
@@ -184,12 +193,12 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s --maxfail=10 --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=62
     - name: Upload coverage to Codecov
       # Flag mirrors the matrix format (`runner.os` is "macOS" here) so Codecov
       # groups this cell alongside the Linux and Windows uploads.
       if: always()
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
       with:
         files: ./coverage.xml
         flags: macOS-py3.12
@@ -203,10 +212,12 @@ jobs:
   build-speed:
     needs: lint
     runs-on: ubuntu-latest
+    # ~3 minutes measured; see the `build` note.
+    timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
         python-version: '3.12'
     - name: Install Qt system libraries (Linux)
@@ -243,10 +254,10 @@ jobs:
         QT_QPA_PLATFORM: offscreen
       # Same conservative coverage gate as the main matrix (see that step's note).
       run: |
-        pytest tests --ignore=tests/mcp_server -v -s -x --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=60
+        pytest tests --ignore=tests/mcp_server -v -s --maxfail=10 --cov=PyMemoryEditor --cov-config=.coveragerc-lib --cov-report=term --cov-report=xml --cov-fail-under=62
     - name: Upload coverage to Codecov
       if: always()
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
       with:
         files: ./coverage.xml
         flags: speed-Linux-py3.12
@@ -312,9 +323,9 @@ jobs:
             addopts: '-m "not scan_heavy"'
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
         python-version: '3.12'
     - name: Install dependencies (MCP SDK + NumPy speed extra)
@@ -327,7 +338,7 @@ jobs:
       # came out at 71% on macOS but 60.4% on Linux -- four tenths of a point
       # above a floor of 60, on a number mostly about code this job does not
       # target. Scoped, the MCP package is 91% covered by its own suite on
-      # macOS and 90.4% on Linux, so 80 leaves real headroom.
+      # macOS and 90.4% on Linux, so 85 leaves five points of headroom.
       env:
         PYTEST_ADDOPTS: ${{ matrix.addopts }}
       # `-q --durations=25` rather than the `-v -s` the library jobs use. This
@@ -345,14 +356,40 @@ jobs:
       # library jobs apt-install a pile of X libraries for it. This job runs no
       # Qt tests, so it disables the plugin instead of paying for them.
       run: |
-        pytest tests/mcp_server -p no:pytest-qt -q --durations=25 -x --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=80
+        pytest tests/mcp_server -p no:pytest-qt -q --durations=25 --maxfail=10 --cov=PyMemoryEditor/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-report=xml --cov-fail-under=85
     - name: Upload coverage to Codecov
       # Its own flag, so the merged report shows MCP coverage alongside the
       # library's instead of one overwriting the other.
       if: always()
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
       with:
         files: ./coverage.xml
         flags: mcp-${{ runner.os }}-py3.12
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
+
+  # Dependency audit. The core library has no dependencies; this checks the
+  # extras (Qt app, MCP SDK, NumPy) and their transitive closure against the
+  # PyPI advisory database. Advisory, not a gate: `continue-on-error` keeps a
+  # new upstream CVE from blocking an unrelated PR, and the weekly `schedule`
+  # run surfaces it on main regardless. Dependabot security PRs remain the
+  # fix path; this job is the visibility the disabled version-update PRs
+  # don't provide (see .github/dependabot.yml).
+  audit:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+    - name: Set up Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+      with:
+        python-version: '3.12'
+    - name: Install the package with every runtime extra
+      run: |
+        python -m pip install --upgrade pip
+        pip install ".[app,mcp,speed]" pip-audit
+    - name: pip-audit
+      run: |
+        pip-audit --progress-spinner off

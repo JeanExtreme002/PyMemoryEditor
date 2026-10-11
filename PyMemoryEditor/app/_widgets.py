@@ -166,45 +166,76 @@ class NumericItem(QStandardItem):
             return self.text() < other.text()
 
 
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _parse_hex_digits(text: str) -> Optional[int]:
+    """``text`` as an unsigned hex number, or None. Accepts a ``0x`` prefix."""
+    cleaned = text.strip()
+    if cleaned[:2].lower() == "0x":
+        cleaned = cleaned[2:]
+    # Explicit digit check rather than relying on int(): int(x, 16) also takes
+    # "1_0" (underscore separators) and leading sign/whitespace, none of which
+    # is a hex address a user meant to type.
+    if not cleaned or not _HEX_DIGITS.issuperset(cleaned):
+        return None
+    return int(cleaned, 16)
+
+
 def parse_hex_address(text: str) -> Optional[int]:
     """Parse a hex address string (with or without 0x prefix) into an int.
 
-    Returns None on any parse error. Whitespace is tolerated.
+    Addresses are unsigned: a leading sign makes the string invalid. Returns
+    None on any parse error. Surrounding whitespace is tolerated.
+    """
+    if not text:
+        return None
+    return _parse_hex_digits(text)
+
+
+def parse_hex_offset(text: str) -> Optional[int]:
+    """Parse a hex pointer-chain offset, which unlike an address may be negative.
+
+    ``"-0x10"`` → -16, ``"10"`` → 16. Returns None on any parse error.
     """
     if not text:
         return None
     cleaned = text.strip()
-    if not cleaned:
+    negative = cleaned.startswith("-")
+    if negative or cleaned.startswith("+"):
+        cleaned = cleaned[1:]
+    parsed = _parse_hex_digits(cleaned)
+    if parsed is None:
         return None
-    if cleaned.lower().startswith("0x"):
-        cleaned = cleaned[2:]
-    try:
-        return int(cleaned, 16)
-    except (TypeError, ValueError):
-        return None
+    return -parsed if negative else parsed
+
+
+def format_size(size: int) -> str:
+    """Human-readable byte count (``1536`` → ``"1.5 KB"``), binary units."""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    s = float(size)
+    for unit in units:
+        if s < 1024 or unit == units[-1]:
+            return f"{s:,.1f} {unit}" if unit != "B" else f"{int(s):,} B"
+        s /= 1024
+    return f"{size:,} B"
 
 
 def parse_offsets(texts: Iterable[str]) -> Optional[List[int]]:
     """Parse pointer-chain offset tokens (in order) from raw field strings.
 
     Empty tokens are skipped; every remaining token is read as hex (with or
-    without ``0x``). Returns ``None`` if any non-empty token can't be parsed —
-    the caller treats that as "invalid chain, do nothing". Pure (no Qt) so it
-    can be unit-tested directly.
+    without ``0x``, optionally negative). Returns ``None`` if any non-empty
+    token can't be parsed — the caller treats that as "invalid chain, do
+    nothing". Pure (no Qt) so it can be unit-tested directly.
     """
     offsets: List[int] = []
     for text in texts:
         if not text:
             continue
-        parsed = parse_hex_address(text)
+        parsed = parse_hex_offset(text)
         if parsed is None:
-            # parse_hex_address handles the 0x form; fall back to a plain hex
-            # int for ambiguous tokens like "10" (the dialog treats offsets as
-            # hex throughout).
-            try:
-                parsed = int(text, 16)
-            except ValueError:
-                return None
+            return None
         offsets.append(parsed)
     return offsets
 
@@ -230,13 +261,10 @@ def resolve_base_address(
         module_name = name_part.strip().strip('"').strip("'").strip()
         offset = parse_hex_address(offset_part)
         if offset is None:
-            try:
-                offset = int(offset_part.strip(), 16)
-            except ValueError:
-                return None, (
-                    "The offset after '+' must be hex "
-                    '(e.g. "game.exe"+0x10F4F4).'
-                )
+            return None, (
+                "The offset after '+' must be hex "
+                '(e.g. "game.exe"+0x10F4F4).'
+            )
         module_base = module_lookup(module_name)
         if module_base is None:
             return None, (

@@ -8,9 +8,9 @@
 # macOS at 59% against a floor calibrated on macOS alone, so eight matrix
 # cells failed on a number that says nothing about the library.
 #
-# With mcp/ omitted here, the library floor stays exactly where it was before
-# the MCP server existed (60), and `build-mcp` measures mcp/ under the default
-# pyproject config. A developer running plain `pytest` still measures
+# With mcp/ omitted here, the library floor (62, see the `build` job's note in
+# python-package.yml) measures the library alone, and `build-mcp` measures
+# mcp/ under .coveragerc-mcp. A developer running plain `pytest` still measures
 # everything, which is the honest full-suite number.
 [run]
 # A plain value, not a TOML list: this is an INI file, and

@@ -30,7 +30,9 @@ help:
 	@echo "  $(YELLOW)install-app$(NC)      - Install dependencies to run the PyMemoryEditor App"
 	@echo "  $(YELLOW)run-app$(NC)          - Run the PyMemoryEditor App"
 	@echo "  $(YELLOW)install-dev$(NC)      - Install development dependencies"
-	@echo "  $(YELLOW)test$(NC)             - Run tests"
+	@echo "  $(YELLOW)test$(NC)             - Run the full test suite (incl. live whole-process scans)"
+	@echo "  $(YELLOW)test-fast$(NC)        - Run the fast lane only (-m \"not slow\", ~20 s)"
+	@echo "  $(YELLOW)test-mcp$(NC)         - Run the MCP server suite"
 	@echo "  $(YELLOW)test-verbose$(NC)     - Run tests with verbose output"
 	@echo "  $(YELLOW)test-coverage$(NC)    - Run tests with coverage report"
 	@echo "  $(YELLOW)lint$(NC)             - Run linter (flake8)"
@@ -40,8 +42,9 @@ help:
 	@echo "  $(YELLOW)build-wheel$(NC)      - Build wheel package"
 	@echo "  $(YELLOW)build-sdist$(NC)      - Build source distribution"
 	@echo "  $(YELLOW)validate$(NC)         - Validate package"
-	@echo "  $(YELLOW)publish$(NC)          - Publish to PyPI"
+	@echo "  $(YELLOW)publish$(NC)          - Publish to PyPI by token (emergency path; releases go through GitHub Releases)"
 	@echo "  $(YELLOW)publish-test$(NC)     - Publish to Test PyPI"
+	@echo "  $(YELLOW)ci$(NC)               - Mirror the CI workflow: lint, type-check, both coverage-gated test runs"
 	@echo "  $(YELLOW)version$(NC)          - Show current version"
 	@echo "  $(YELLOW)check-deps$(NC)       - Check for outdated dependencies"
 	@echo "  $(YELLOW)update-deps$(NC)      - Update dependencies"
@@ -103,12 +106,29 @@ install:
 	$(PIP) install -e .
 	@echo "$(GREEN)Package installed successfully!$(NC)"
 
-# Run tests
+# Run tests (everything, including the live scans marked `slow`/`scan_heavy`)
 .PHONY: test
 test:
 	@echo "$(GREEN)Running tests...$(NC)"
 	$(PYTHON) -m pytest $(TEST_DIR) -v
 	@echo "$(GREEN)Tests completed!$(NC)"
+
+# Fast lane: unit, property and GUI tests only (~20 s). The markers are
+# defined in pyproject.toml.
+.PHONY: test-fast
+test-fast:
+	@echo "$(GREEN)Running the fast test lane (-m \"not slow\")...$(NC)"
+	$(PYTHON) -m pytest $(TEST_DIR) -m "not slow"
+	@echo "$(GREEN)Fast tests completed!$(NC)"
+
+# The MCP server suite. CI runs it as its own job (`build-mcp`), with the
+# pytest-qt plugin disabled because it imports Qt at startup and no test here
+# needs it.
+.PHONY: test-mcp
+test-mcp:
+	@echo "$(GREEN)Running the MCP server tests...$(NC)"
+	$(PYTHON) -m pytest $(TEST_DIR)/mcp_server -p no:pytest-qt
+	@echo "$(GREEN)MCP tests completed!$(NC)"
 
 # Run tests with verbose output
 .PHONY: test-verbose
@@ -185,7 +205,10 @@ validate: build
 	$(PYTHON) -m twine check $(DIST_DIR)/*
 	@echo "$(GREEN)Package validation completed!$(NC)"
 
-# Publish to PyPI
+# Publish to PyPI by API token. This is the emergency path only: releases are
+# cut by publishing a GitHub Release, which .github/workflows/publish.yml
+# uploads to PyPI via trusted publishing (OIDC, no token) and then lists on
+# the MCP Registry. Use this target only if that workflow is unavailable.
 .PHONY: publish
 publish: validate
 	@echo "$(YELLOW)Are you sure you want to publish to PyPI? [y/N]$(NC)" && read ans && [ $${ans:-N} = y ]
@@ -281,9 +304,19 @@ pre-commit: lint type-check test
 pre-publish: all security
 	@echo "$(GREEN)Pre-publish checks completed!$(NC)"
 
-# CI/CD targets
+# CI/CD targets. Mirrors .github/workflows/python-package.yml: the library
+# and app tests are gated on the library's coverage (.coveragerc-lib), the
+# MCP suite on its own (.coveragerc-mcp), with the same floors as the
+# workflow. Keep the two in sync when either changes.
 .PHONY: ci
-ci: install-dev install lint type-check test build validate
+ci: install-dev install lint type-check
+	@echo "$(GREEN)Running the library/app suite with the CI coverage gate...$(NC)"
+	QT_QPA_PLATFORM=offscreen $(PYTHON) -m pytest $(TEST_DIR) --ignore=$(TEST_DIR)/mcp_server --maxfail=10 \
+		--cov=$(PACKAGE_NAME) --cov-config=.coveragerc-lib --cov-report=term --cov-fail-under=62
+	@echo "$(GREEN)Running the MCP suite with the CI coverage gate...$(NC)"
+	$(PYTHON) -m pytest $(TEST_DIR)/mcp_server -p no:pytest-qt --maxfail=10 \
+		--cov=$(PACKAGE_NAME)/mcp --cov-config=.coveragerc-mcp --cov-report=term --cov-fail-under=85
+	$(MAKE) build validate
 	@echo "$(GREEN)CI pipeline completed!$(NC)"
 
 # Show package info

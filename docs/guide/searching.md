@@ -81,6 +81,17 @@ target. Every mode is a member of `ScanTypesEnum`:
 <tr><td><code>NOT_VALUE_BETWEEN</code></td><td>value &lt; min or value &gt; max  (rejected by <code>search_by_value</code> with <code>ValueError</code> — use <code>search_by_value_between(..., not_between=True)</code>)</td></tr>
 </table>
 
+```{note}
+**Where can a match start?** Numeric values (`int`, `float`, `bool`) at a
+natural width (1, 2, 4 or 8 bytes) are compared at every slot aligned to that
+width, counted from the start of each region — the same slots for every
+comparison mode, so refining an `EXACT_VALUE` scan with `NOT_EXACT_VALUE` or
+`BIGGER_THAN` never drops an address the first scan reported. `str` and
+`bytes` values, and an `int` at an unusual width (3, 5, 6 or 7 bytes), have no
+natural alignment and can match at any byte. An empty `str` / `bytes` value is
+rejected with `ValueError`: a zero-width target would match everywhere.
+```
+
 ```python
 from PyMemoryEditor import OpenProcess, ScanTypesEnum
 

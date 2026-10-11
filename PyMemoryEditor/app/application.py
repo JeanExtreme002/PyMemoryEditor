@@ -5,6 +5,7 @@ Entry point for the PyMemoryEditor App.
 A Cheat-Engine-inspired memory scanner built on PySide6 (Qt for Python),
 working on Windows, Linux and macOS.
 """
+import logging
 import sys
 import signal
 import contextlib
@@ -266,11 +267,6 @@ def apply_theme(app, theme_id: str = DEFAULT_THEME_ID) -> None:
     )
 
 
-def apply_dark_theme(app) -> None:
-    """Backward-compatible shim that applies the default dark theme."""
-    apply_theme(app, DEFAULT_THEME_ID)
-
-
 STYLE_SHEET = """
 QToolTip {
     color: %(text)s;
@@ -484,9 +480,59 @@ def _scoped_signal_handler(signalnum, handler):
             signal.signal(signalnum, previous_handler)
 
 
+_LOG = logging.getLogger(__name__)
+
+
+def _qt_excepthook(exc_type, exc_value, exc_tb) -> None:
+    """``sys.excepthook`` for the duration of the Qt event loop.
+
+    PySide6 catches an exception raised inside a slot, hands it to
+    ``sys.excepthook`` and carries on — with the default hook that is a
+    traceback on stderr the user never sees, and the action they clicked
+    silently does nothing. Log it (so the Log Console gets it) and show it.
+    KeyboardInterrupt is left to the interpreter's hook: it is the host's
+    signal, not an app bug.
+    """
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    _LOG.error(
+        "Unhandled exception in the UI", exc_info=(exc_type, exc_value, exc_tb)
+    )
+    try:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        if QApplication.instance() is None:
+            return
+        QMessageBox.critical(
+            None,
+            "Unexpected error",
+            "%s: %s\n\nThe full traceback is in Tools → Log Console."
+            % (exc_type.__name__, exc_value),
+        )
+    except Exception:  # noqa: BLE001 — a hook must never raise
+        pass
+
+
+@contextlib.contextmanager
+def _scoped_excepthook(hook):
+    """Install ``hook`` as ``sys.excepthook`` for the block, then restore."""
+    previous = sys.excepthook
+    sys.excepthook = hook
+    try:
+        yield
+    finally:
+        sys.excepthook = previous
+
+
 def main(argv=None):
     """
     Run the app. Safe to call in-process: it installs no signal handler.
+
+    While the event loop runs, ``sys.excepthook`` is swapped for one that logs
+    and shows slot exceptions (PySide6 routes them there and continues), and
+    restored on the way out — the loop owns the thread for that time, so an
+    embedder's own hook is not observable from inside it anyway.
 
     ``argv`` defaults to ``sys.argv`` so packaging tools (which call
     ``main()`` with no arguments) keep working. Tests and embedders can pass
@@ -536,7 +582,8 @@ def main(argv=None):
     window = MainWindow(process)
     window.show()
     try:
-        app.exec()
+        with _scoped_excepthook(_qt_excepthook):
+            app.exec()
     finally:
         try:
             # `process` is only the handle the picker opened; File → Change

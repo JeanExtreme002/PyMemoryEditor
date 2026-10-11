@@ -46,7 +46,12 @@ from PySide6.QtWidgets import (
 
 from PyMemoryEditor import AbstractProcess
 
-from ._widgets import parse_hex_address, parse_offsets, resolve_base_address
+from ._widgets import (
+    MONOSPACE_FAMILY,
+    parse_hex_offset,
+    parse_offsets,
+    resolve_base_address,
+)
 from .value_types import (
     VALUE_TYPES,
     ValueTypeSpec,
@@ -84,7 +89,7 @@ class _OffsetField(QWidget):
         self.edit = QLineEdit()
         self.edit.setPlaceholderText("0")
         self.edit.setFixedWidth(80)
-        self.edit.setFont(QFont("Menlo, Consolas, Courier New", 10))
+        self.edit.setFont(QFont(MONOSPACE_FAMILY, 10))
         layout.addWidget(self.edit)
 
         suffix = QLabel("]")
@@ -159,7 +164,7 @@ class PointerChainDialog(QDialog):
         self._module_offset_edit.setPlaceholderText(
             "optional — added to base (e.g. 0x4A0C68 from a pointer-scan path)"
         )
-        self._module_offset_edit.setFont(QFont("Menlo, Consolas, Courier New", 10))
+        self._module_offset_edit.setFont(QFont(MONOSPACE_FAMILY, 10))
         form.addRow("Module offset:", self._module_offset_edit)
 
         # Offsets row — a chain of "[+ hex ]" slots with a
@@ -277,14 +282,14 @@ class PointerChainDialog(QDialog):
 
         self._output_label = QLabel("Resolved address: —")
         self._output_label.setObjectName("hint")
-        self._output_label.setFont(QFont("Menlo, Consolas, Courier New", 11))
+        self._output_label.setFont(QFont(MONOSPACE_FAMILY, 11))
         self._output_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         layout.addWidget(self._output_label)
 
         self._value_label = QLabel("Value: —")
-        self._value_label.setFont(QFont("Menlo, Consolas, Courier New", 11))
+        self._value_label.setFont(QFont(MONOSPACE_FAMILY, 11))
         self._value_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -396,18 +401,15 @@ class PointerChainDialog(QDialog):
         # dereference (it locates the static slot — it is NOT a chain offset).
         module_offset_text = self._module_offset_edit.text().strip()
         if module_offset_text:
-            module_offset = parse_hex_address(module_offset_text)
+            module_offset = parse_hex_offset(module_offset_text)
             if module_offset is None:
-                try:
-                    module_offset = int(module_offset_text, 16)
-                except ValueError:
-                    QMessageBox.warning(
-                        self,
-                        "Resolve",
-                        "Module offset must be hex (e.g. 0x4A0C68). Leave it "
-                        "empty if your base address already includes it.",
-                    )
-                    return
+                QMessageBox.warning(
+                    self,
+                    "Resolve",
+                    "Module offset must be hex (e.g. 0x4A0C68). Leave it "
+                    "empty if your base address already includes it.",
+                )
+                return
             base += module_offset
 
         offsets = self._read_offsets()

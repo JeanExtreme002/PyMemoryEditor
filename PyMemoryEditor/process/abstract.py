@@ -20,7 +20,8 @@ from typing import (
 
 from ..enums import ScanTypesEnum
 from ..util import UNSET, _check_int_fits
-from .errors import BitnessDetectionError
+from ..util.pattern import PatternLike
+from .errors import BitnessDetectionError, PyMemoryEditorError
 from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .region import MemoryRegion, MemoryRegionSnapshot
@@ -34,6 +35,11 @@ if TYPE_CHECKING:
 _logger = logging.getLogger("PyMemoryEditor")
 
 T = TypeVar("T")
+
+# Identity of the JSON written by ``save_pointer_paths`` and checked by
+# ``load_pointer_paths``.
+_POINTER_SCAN_FORMAT = "pymemoryeditor-pointerscan"
+_POINTER_SCAN_VERSION = 1
 
 
 class AbstractProcess(ABC):
@@ -237,6 +243,12 @@ class AbstractProcess(ABC):
         raise :class:`~PyMemoryEditor.ProcessIDNotExistsError` on every
         platform.
 
+        A listing that is *denied* is different from one that is empty: on
+        Linux and macOS a target owned by another user raises
+        ``PermissionError`` (Linux cannot list ``/proc/<pid>/task``, macOS
+        cannot ``task_threads`` a task it has no port for) rather than
+        silently yielding nothing.
+
         Use :attr:`main_thread` for the conventional "main thread" shortcut.
         """
         raise NotImplementedError()
@@ -387,7 +399,7 @@ class AbstractProcess(ABC):
     @abstractmethod
     def search_by_pattern(
         self,
-        pattern: Union[str, bytes, "object"],
+        pattern: PatternLike,
         *,
         byte_length: int = 0,
         progress_information: bool = False,
@@ -766,7 +778,7 @@ class AbstractProcess(ABC):
         return data
 
     @abstractmethod
-    def allocate_memory(self, size: int, *, permission=None) -> int:
+    def allocate_memory(self, size: int, *, permission: Optional[int] = None) -> int:
         """
         Reserve and commit ``size`` bytes inside the target process's address
         space and return the base address of the new region.
@@ -1070,6 +1082,8 @@ class AbstractProcess(ABC):
         def read_chunk(address: int, size: int) -> Optional[bytes]:
             try:
                 return self.read_process_memory(address, bytes, size)
+            except PyMemoryEditorError:
+                raise  # closed / vanished process: not a skippable page
             except Exception:  # noqa: BLE001 — unreadable page mid-scan; skip it
                 return None
 
@@ -1117,8 +1131,8 @@ class AbstractProcess(ABC):
         import json
 
         payload = {
-            "format": "pymemoryeditor-pointerscan",
-            "version": 1,
+            "format": _POINTER_SCAN_FORMAT,
+            "version": _POINTER_SCAN_VERSION,
             "pid": self.pid,
             "paths": [path.to_dict() for path in paths],
         }
@@ -1132,6 +1146,11 @@ class AbstractProcess(ABC):
         Returns a list of :class:`~PyMemoryEditor.PointerPath`. Resolve one with
         ``path.rebase(process).resolve(process)`` (or hand it to
         :meth:`rescan_pointer_paths`).
+
+        :raises ValueError: if the file is not a pointer-scan export written by
+            :meth:`save_pointer_paths` (wrong ``format``, an unsupported
+            ``version``, or a missing / malformed ``paths`` list). The message
+            names the file and the field.
         """
         import json
 
@@ -1139,7 +1158,35 @@ class AbstractProcess(ABC):
 
         with open(file, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        return [PointerPath.from_dict(entry) for entry in payload["paths"]]
+
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "%s is not a pointer-scan export: expected a JSON object, got %s."
+                % (file, type(payload).__name__)
+            )
+        fmt = payload.get("format")
+        if fmt != _POINTER_SCAN_FORMAT:
+            raise ValueError(
+                "%s is not a pointer-scan export: 'format' is %r, expected %r "
+                "(files are written by save_pointer_paths)."
+                % (file, fmt, _POINTER_SCAN_FORMAT)
+            )
+        version = payload.get("version")
+        if version != _POINTER_SCAN_VERSION:
+            raise ValueError(
+                "%s uses pointer-scan format version %r; this version of "
+                "PyMemoryEditor reads version %r." % (file, version, _POINTER_SCAN_VERSION)
+            )
+        entries = payload.get("paths")
+        if not isinstance(entries, list):
+            raise ValueError(
+                "%s is missing its 'paths' list (got %s)."
+                % (file, "nothing" if entries is None else type(entries).__name__)
+            )
+        try:
+            return [PointerPath.from_dict(entry) for entry in entries]
+        except ValueError as error:
+            raise ValueError("%s: %s" % (file, error)) from None
 
     def rescan_pointer_paths(
         self,
@@ -1200,6 +1247,8 @@ class AbstractProcess(ABC):
 
                 if live.resolve(self) == target_address:
                     survivors.append(live)
+            except PyMemoryEditorError:
+                raise  # closed / vanished process: every path would "fail"
             except Exception:  # noqa: BLE001 — broken chain / unreadable page: drop it
                 continue
 
@@ -1217,8 +1266,12 @@ class AbstractProcess(ABC):
         pass the files here — only the paths that showed up in all of them (the
         reliable static pointers) are returned.
 
-        :param sources: two or more file names (from :meth:`save_pointer_paths`)
-            and/or lists of :class:`~PyMemoryEditor.PointerPath`.
+        :param sources: one or more file names (from :meth:`save_pointer_paths`)
+            and/or lists of :class:`~PyMemoryEditor.PointerPath`. A single
+            source returns its module-backed paths unchanged (the intersection
+            of one set is itself); it takes at least two for the comparison to
+            narrow anything.
+        :raises ValueError: if no source is given.
 
         Example
         -------
@@ -1227,6 +1280,9 @@ class AbstractProcess(ABC):
             stable = process.compare_pointer_scans("scan1.json", "scan2.json", "scan3.json")
         """
         from .pointer_scan import intersect_pointer_paths
+
+        if not sources:
+            raise ValueError("compare_pointer_scans() needs at least one source.")
 
         path_lists = [
             self.load_pointer_paths(source) if isinstance(source, str) else list(source)

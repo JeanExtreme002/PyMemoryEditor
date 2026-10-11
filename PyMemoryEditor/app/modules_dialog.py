@@ -38,8 +38,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, ModuleInfo
 
 from ._auto_refresh_dialog import AutoRefreshTableDialog
-from ._widgets import MONOSPACE_FAMILY, NumericItem
-from .memory_map_dialog import _format_size
+from ._widgets import MONOSPACE_FAMILY, NumericItem, format_size
 
 
 class ModulesDialog(AutoRefreshTableDialog):
@@ -173,7 +172,7 @@ class ModulesDialog(AutoRefreshTableDialog):
             base_item.setData(base, Qt.UserRole)
 
             size = int(module.size)
-            size_item = NumericItem(_format_size(size))
+            size_item = NumericItem(format_size(size))
             size_item.setData(size, Qt.UserRole)
             size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 

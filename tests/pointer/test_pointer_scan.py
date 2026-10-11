@@ -456,3 +456,100 @@ def test_build_pointer_map_keeps_only_in_range_pointers():
     assert list(values) == [base + 0x20]
     assert list(addresses) == [base]
     assert isinstance(values, array.array)
+
+
+# --------------------------------------------------------------------------- #
+# Error propagation and export-file validation
+# --------------------------------------------------------------------------- #
+
+import json  # noqa: E402
+
+from PyMemoryEditor import ClosedProcess  # noqa: E402
+from PyMemoryEditor.process.errors import ProcessIDNotExistsError  # noqa: E402
+
+
+def test_build_pointer_map_propagates_a_dead_process():
+    """A closed / vanished target is not a skippable page: an empty map would
+    be indistinguishable from "no pointers found"."""
+    base = 0x300000
+
+    def read_chunk(address, size):
+        raise ProcessIDNotExistsError(4242)
+
+    mapped = AddressRanges([(base, base + 0x100)])
+    with pytest.raises(ProcessIDNotExistsError):
+        build_pointer_map([(base, 0x100)], read_chunk, mapped, ptr_size=8)
+
+
+def test_build_pointer_map_still_skips_an_unreadable_chunk():
+    base = 0x300000
+
+    def read_chunk(address, size):
+        raise OSError(14, "page gone")
+
+    mapped = AddressRanges([(base, base + 0x100)])
+    values, addresses = build_pointer_map([(base, 0x100)], read_chunk, mapped, ptr_size=8)
+    assert list(values) == [] and list(addresses) == []
+
+
+def test_rescan_pointer_paths_propagates_a_closed_process():
+    """``rescan`` drops paths whose chain is broken, but a process that is
+    closed would "break" every path — that is an error, not an empty result."""
+    handle = OpenProcess(pid=os.getpid())
+    handle.close()
+    path = PointerPath(0x1000, (0x10,), ptr_size=ctypes.sizeof(ctypes.c_void_p))
+    with pytest.raises(ClosedProcess):
+        handle.rescan_pointer_paths([path], 0x2000)
+
+
+def test_compare_pointer_scans_needs_a_source(process):
+    with pytest.raises(ValueError, match="at least one source"):
+        process.compare_pointer_scans()
+
+
+def test_pointer_path_from_dict_parses_prefixed_hex_and_decimal():
+    restored = PointerPath.from_dict(
+        {"base_address": "0x1000", "offsets": ["0x10", "32", 48], "ptr_size": "8"}
+    )
+    assert restored.base_address == 0x1000
+    assert restored.offsets == (0x10, 32, 48)
+    assert restored.ptr_size == 8
+
+
+@pytest.mark.parametrize(
+    "data, field",
+    [
+        ({"base_address": "1F"}, "base_address"),          # hex without 0x: do not guess
+        ({"base_address": "0x10", "offsets": ["zz"]}, "offsets"),
+        ({"base_address": True}, "base_address"),
+        ({"base_address": "0x10", "ptr_size": None}, "ptr_size"),
+        ({"offsets": []}, "base_address"),
+        ("not a mapping", "base_address"),
+    ],
+)
+def test_pointer_path_from_dict_rejects_malformed_fields(data, field):
+    with pytest.raises(ValueError, match=field):
+        PointerPath.from_dict(data)
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ({"paths": []}, "'format'"),
+        ({"format": "pymemoryeditor-pointerscan", "version": 99, "paths": []}, "version 99"),
+        ({"format": "pymemoryeditor-pointerscan", "version": 1}, "'paths'"),
+        ({"format": "pymemoryeditor-pointerscan", "version": 1, "paths": {}}, "'paths'"),
+        ([1, 2, 3], "JSON object"),
+        (
+            {"format": "pymemoryeditor-pointerscan", "version": 1, "paths": [{"base_address": "1F"}]},
+            "base_address",
+        ),
+    ],
+)
+def test_load_pointer_paths_explains_a_file_that_is_not_an_export(process, tmp_path, payload, message):
+    """A wrong file used to surface as a bare ``KeyError: 'paths'``."""
+    file = tmp_path / "scan.json"
+    file.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=message) as info:
+        process.load_pointer_paths(str(file))
+    assert str(file) in str(info.value)

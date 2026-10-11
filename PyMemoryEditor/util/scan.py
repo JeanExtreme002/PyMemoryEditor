@@ -161,6 +161,35 @@ def decode_scan_target(
     return int.from_bytes(target_value, byte_order)
 
 
+# Widths with a natural alignment: the ones ``struct`` / NumPy decode in one
+# step. A value of one of these widths is stepped by its width; any other
+# width (a 3-, 5-, 6- or 7-byte field) has no natural alignment and can sit
+# at any byte offset, so scans step byte by byte for it.
+_NATURAL_WIDTHS = frozenset((1, 2, 4, 8))
+
+
+def _is_text(is_string: Union[bool, Type, None]) -> bool:
+    """
+    Map ``scan_memory_for_exact_value``'s ``is_string`` argument — a boolean
+    for backward compatibility, or the value's ``pytype`` — to "is this a
+    ``str`` / ``bytes`` target?".
+    """
+    if isinstance(is_string, bool):
+        return is_string
+    return is_string is str or is_string is bytes
+
+
+def _validate_scan_target(target_value: Union[bytes, Tuple[bytes, ...]], target_value_size: int) -> None:
+    """Reject a zero-width target: it would match at every offset (one past
+    the end of the buffer included) and carries no information."""
+    targets = target_value if isinstance(target_value, tuple) else (target_value,)
+    if target_value_size <= 0 or any(len(t) == 0 for t in targets):
+        raise ValueError(
+            "the search target must not be empty: a zero-width value would "
+            "match at every address."
+        )
+
+
 def scan_memory_for_exact_value(
     memory_region_data: Sequence,
     memory_region_data_size: int,
@@ -168,58 +197,99 @@ def scan_memory_for_exact_value(
     target_value_size: int,
     comparison: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     is_string: Union[bool, Type, None] = False,
-    *args,
-    **kwargs,
 ) -> Generator[int, None, None]:
     """
     Search for an exact (or not-exact) match of the target value in the memory region.
 
-    For EXACT_VALUE this is the fastest path (delegates to bytes.find).
-    For NOT_EXACT_VALUE it returns each candidate offset whose value differs
-    from target_value. Numeric scans step by `target_value_size` (natural
-    alignment); string scans step byte-by-byte since strings can begin anywhere.
+    Offsets are yielded in ascending order. The stepping policy depends on the
+    value type (see ``is_string`` below) and width:
 
-    The 6th argument accepts either a `pytype` (the value type — `str` means
-    "treat as string") or a plain `is_string` boolean for backward
-    compatibility with the previous API.
+    * **Numeric at a natural width** (``int`` / ``bool`` at 1, 2, 4 or 8
+      bytes; ``float`` at 4 or 8): only offsets aligned to
+      ``target_value_size`` are considered — exactly the slots ``scan_memory``
+      decodes for the ordered comparisons, so EXACT, NOT_EXACT and
+      ``BIGGER_THAN_OR_EXACT`` agree on which addresses hold a value, and a
+      refine scan can never drop an address the first scan reported. For
+      ``int`` / ``bool`` the EXACT path is ``bytes.find`` (C speed) filtered to
+      aligned hits; ``float`` is delegated to ``scan_memory`` so that
+      ``-0.0 == 0.0`` and ``NaN != NaN`` follow IEEE-754 value semantics
+      rather than byte equality.
+    * **Numeric at an unusual width** (a 3-, 5-, 6- or 7-byte ``int``): no
+      natural alignment exists, so a match can begin at any byte and
+      NOT_EXACT yields every byte offset whose window differs.
+    * **Text** (``str`` / ``bytes``): a match can begin at any byte. For
+      NOT_EXACT_VALUE every offset whose ``target_value_size``-byte window
+      *overlaps* an exact match is suppressed too, so the bytes beside a match
+      are not reported as independent hits.
+
+    The 6th argument accepts either a ``pytype`` (the value type) or a plain
+    ``is_string`` boolean for backward compatibility with the previous API.
+
+    :raises ValueError: if ``target_value`` is empty.
     """
-    if is_string is str:
-        is_string = True
-    elif not isinstance(is_string, bool):
-        # A non-str type (int/float/bool/bytes) collapses to non-string.
-        is_string = False
+    _validate_scan_target(target_value, target_value_size)
 
-    data = _as_bytes(memory_region_data)
-
-    if comparison is ScanTypesEnum.EXACT_VALUE:
-        found_index = data.find(target_value, 0)
-        while found_index != -1:
-            yield found_index
-            found_index = data.find(target_value, found_index + 1)
+    if is_string is float:
+        # Value semantics (IEEE-754) rather than byte equality; also picks up
+        # the NumPy fast path when the ``[speed]`` extra is installed.
+        yield from scan_memory(
+            memory_region_data,
+            memory_region_data_size,
+            target_value,
+            target_value_size,
+            comparison,
+            float,
+        )
         return
 
-    if comparison is ScanTypesEnum.NOT_EXACT_VALUE:
-        match_positions = []
-        found_index = data.find(target_value, 0)
-        while found_index != -1:
-            match_positions.append(found_index)
-            found_index = data.find(target_value, found_index + 1)
+    text = _is_text(is_string)
+    size = target_value_size
+    step = 1 if text or size not in _NATURAL_WIDTHS else size
+    data = _as_bytes(memory_region_data)
 
-        end = memory_region_data_size - target_value_size + 1
-        step = 1 if is_string else target_value_size
+    def matches() -> Generator[int, None, None]:
+        """Exact matches at ``step`` alignment, ascending. ``bytes.find``
+        locates candidates in C; an unaligned hit resumes the search at the
+        next aligned slot (no aligned match can start strictly between)."""
+        start = 0
+        while True:
+            found_index = data.find(target_value, start)
+            if found_index == -1:
+                return
+            if found_index % step:
+                start = (found_index // step + 1) * step
+                continue
+            yield found_index
+            start = found_index + 1 if text else found_index + step
 
-        # An offset O overlaps with a match M iff |M - O| < target_value_size,
-        # i.e. M lies in (O - target_value_size, O + target_value_size). Since
-        # match_positions is sorted (bytes.find yields ascending indices), a
-        # bisect_left lookup turns the inner loop from O(m) into O(log m).
-        for offset in range(0, end, step):
-            idx = bisect_left(match_positions, offset - target_value_size + 1)
-            if (
-                idx < len(match_positions)
-                and match_positions[idx] < offset + target_value_size
-            ):
+    if comparison is ScanTypesEnum.EXACT_VALUE:
+        yield from matches()
+        return
+
+    if comparison is not ScanTypesEnum.NOT_EXACT_VALUE:
+        return
+
+    end = memory_region_data_size - size + 1
+
+    if text:
+        match_positions = list(matches())
+        # An offset O overlaps with a match M iff |M - O| < size, i.e. M lies
+        # in (O - size, O + size). match_positions is sorted, so a bisect_left
+        # lookup turns the inner loop from O(m) into O(log m).
+        for offset in range(0, end):
+            idx = bisect_left(match_positions, offset - size + 1)
+            if idx < len(match_positions) and match_positions[idx] < offset + size:
                 continue
             yield offset
+        return
+
+    next_match = matches()
+    skip = next(next_match, -1)
+    for offset in range(0, end, step):
+        if offset == skip:
+            skip = next(next_match, -1)
+            continue
+        yield offset
 
 
 def make_predicate(
@@ -330,8 +400,14 @@ def scan_memory(
       - int   → signed integer (struct b/h/i/q)
       - float → IEEE-754 (struct f/d)
       - bool  → unsigned 1-byte
-      - str   → bytewise comparison, step=1 (str matches can start at any byte)
-      - bytes / None → bytewise comparison aligned to `target_value_size`
+      - str / bytes → bytewise comparison, step=1 (a match can start at any byte)
+      - None  → bytewise comparison aligned to `target_value_size`
+
+    Numeric values at a natural width (1, 2, 4 or 8 bytes) are stepped by
+    that width; an unusual ``int`` width (3, 5, 6, 7) has no natural alignment
+    and is stepped byte by byte, like text.
+
+    :raises ValueError: if the target (or either end of a range) is empty.
 
     Without this dispatch, BIGGER_THAN on signed ints (e.g. "> -1") would
     compare against the reinterpreted unsigned (e.g. 0xFFFFFFFF) and produce
@@ -340,6 +416,8 @@ def scan_memory(
     generator and tuple-unpacking overhead — for a multi-million-iteration
     scan this is the difference between minutes and seconds.
     """
+    _validate_scan_target(target_value, target_value_size)
+
     is_string = pytype is str
     # sys.byteorder is typed as Literal["little", "big"] — preserve that
     # narrowing for the downstream int.from_bytes / struct.unpack calls.
@@ -419,7 +497,11 @@ def scan_memory(
     # Numerics here decode through int.from_bytes; the target was already
     # decoded above with the matching signedness via decode_scan_target.
     data = _as_bytes(memory_region_data)
-    step = 1 if is_string else target_value_size
+    step = (
+        1
+        if is_string or pytype is bytes or target_value_size not in _NATURAL_WIDTHS
+        else target_value_size
+    )
     end = memory_region_data_size - target_value_size + 1
     int_from_bytes = int.from_bytes
     signed = pytype is int
