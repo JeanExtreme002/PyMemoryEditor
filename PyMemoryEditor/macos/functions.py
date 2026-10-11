@@ -847,10 +847,8 @@ def search_addresses_by_value(
 
 def _thread_id(port: int) -> Optional[int]:
     """System-wide id of the thread behind ``port``, or ``None`` when the
-    kernel refuses the lookup — the thread exited between task_threads and
-    here. Such a thread is left out rather than reported under its port name,
-    which lives in another id space and would break "smallest tid is the main
-    thread"."""
+    kernel refuses the lookup — usually because the thread exited between
+    task_threads and here."""
     info = thread_identifier_info_data_t()
     info_count = mach_msg_type_number_t(THREAD_IDENTIFIER_INFO_COUNT)
     kr = libsystem.thread_info(
@@ -897,6 +895,11 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
         # port name is local to our IPC space and, once released, the same
         # thread can come back under a different name on the next call.
         thread_ids = [_thread_id(port) for port in ports]
+        if ports and all(thread_id is None for thread_id in thread_ids):
+            # Every lookup refused is not a thread exiting mid-listing but a
+            # task that won't answer thread_info at all. Report the port names
+            # then — one id space, as before — rather than an empty list.
+            thread_ids = list(ports)
     finally:
         # task_threads hands us one send right (a user reference) per thread;
         # each must be released or every call leaks a reference per thread in
@@ -925,6 +928,9 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
 
     for port, thread_id in zip(ports, thread_ids):
         if thread_id is None:
+            # Exited mid-listing. Skipped rather than reported under its port
+            # name, which lives in another id space and could pose as the
+            # smallest (main) thread.
             continue
         yield ThreadInfo(
             tid=thread_id,

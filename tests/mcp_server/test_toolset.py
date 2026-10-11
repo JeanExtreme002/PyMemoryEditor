@@ -2394,6 +2394,36 @@ class TestClosingABusySession:
         assert dead.handle_closed is True
         assert store.capacity_refusal(live) is None
 
+    def test_a_dead_session_busy_for_a_moment_still_frees_its_slot(self):
+        """The reaper's short wait covers a quick call holding the lock: the
+        attach that needed the slot goes through instead of being refused."""
+        import os
+        import threading
+
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS, SessionStore
+
+        live = os.getpid()
+        dead_pid = 2 ** 22 + 12345  # above every default pid_max: never alive
+        store = SessionStore()
+        dead = store.open(FakeProcess(pid=dead_pid), dead_pid, "gone")
+        for _ in range(MAX_OPEN_SESSIONS - 1):
+            store.open(FakeProcess(pid=live), live, "other")
+
+        held = threading.Event()
+
+        def hold_briefly():
+            with dead.lock:
+                held.set()
+                threading.Event().wait(0.05)
+
+        holder = threading.Thread(target=hold_briefly, daemon=True)
+        holder.start()
+        assert held.wait(5)
+
+        store.open(FakeProcess(pid=live), live, "new")  # must not raise
+        holder.join(5)
+        assert dead.handle_closed is True
+
     def test_a_close_stops_a_refine_while_it_reads(self, make_toolset):
         toolset = make_toolset(config())
         process = FakeProcess()

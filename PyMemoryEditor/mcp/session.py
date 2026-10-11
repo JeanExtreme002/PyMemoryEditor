@@ -54,6 +54,12 @@ _logger = logging.getLogger("PyMemoryEditor")
 MAX_OPEN_SESSIONS = 8
 
 
+#: How long the dead-session reaper waits for a busy session's lock. It runs
+#: inside open_process, once per dead session, so it stays well under
+#: CLOSE_WAIT_SECONDS.
+REAP_WAIT_SECONDS = 0.25
+
+
 class SessionError(Exception):
     """An unknown or expired session/scan id.
 
@@ -357,10 +363,11 @@ class SessionStore:
 
         for session_id in dead:
             try:
-                # No wait: this runs inside open_process, and an operation
-                # still running on a dead target releases its handle (and its
-                # slot) by itself as soon as it notices.
-                self.close(session_id, wait=0.0)
+                # A short wait: this runs inside open_process, so it must not
+                # sit out CLOSE_WAIT_SECONDS per session, but a quick call that
+                # holds the lock for a moment should still free its slot now.
+                # A longer operation releases the handle by itself when done.
+                self.close(session_id, wait=REAP_WAIT_SECONDS)
             except SessionError:  # closed concurrently
                 pass
         return dead

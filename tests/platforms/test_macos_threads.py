@@ -134,9 +134,38 @@ def test_a_thread_whose_id_cannot_be_read_is_left_out(monkeypatch):
     in another id space and would pose as the smallest (main) thread."""
     from PyMemoryEditor.macos import functions as mac
 
+    real_thread_id = mac._thread_id
+    calls = {"count": 0}
+
+    def first_one_only(port):
+        calls["count"] += 1
+        return real_thread_id(port) if calls["count"] == 1 else None
+
+    process = OpenProcess(pid=os.getpid())
+    try:
+        expected = len(list(process.get_threads()))
+        if expected < 2:
+            pytest.skip("needs at least two threads in the test process")
+        monkeypatch.setattr(mac, "_thread_id", first_one_only)
+        threads = list(process.get_threads())
+    finally:
+        process.close()
+
+    assert len(threads) == 1
+    assert threads[0].tid != threads[0].raw  # a real thread id, not the port
+
+
+def test_a_task_refusing_every_lookup_falls_back_to_port_names(monkeypatch):
+    """No lookup succeeding is not threads exiting but a task that won't
+    answer thread_info: the threads are still listed, under their port names."""
+    from PyMemoryEditor.macos import functions as mac
+
     monkeypatch.setattr(mac, "_thread_id", lambda _port: None)
     process = OpenProcess(pid=os.getpid())
     try:
-        assert list(process.get_threads()) == []
+        threads = list(process.get_threads())
     finally:
         process.close()
+
+    assert threads
+    assert all(thread.tid == thread.raw for thread in threads)
