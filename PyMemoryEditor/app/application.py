@@ -500,9 +500,15 @@ def _qt_excepthook(exc_type, exc_value, exc_tb) -> None:
         "Unhandled exception in the UI", exc_info=(exc_type, exc_value, exc_tb)
     )
     try:
+        from PySide6.QtCore import QThread
         from PySide6.QtWidgets import QApplication, QMessageBox
 
-        if QApplication.instance() is None:
+        app = QApplication.instance()
+        # Widgets may only be created on the GUI thread. PySide6 routes an
+        # exception escaping a QThread.run() through this same hook, from
+        # that worker thread, so a dialog there would be undefined behaviour.
+        # The log line above is the whole report in that case.
+        if app is None or QThread.currentThread() is not app.thread():
             return
         QMessageBox.critical(
             None,

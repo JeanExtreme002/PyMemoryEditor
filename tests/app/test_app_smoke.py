@@ -695,3 +695,37 @@ def test_qt_excepthook_logs_and_reports_but_passes_keyboard_interrupt(monkeypatc
     with _scoped_excepthook(_qt_excepthook):
         assert sys.excepthook is _qt_excepthook
     assert sys.excepthook is previous
+
+
+def test_qt_excepthook_only_logs_when_called_off_the_gui_thread(monkeypatch, caplog):
+    """
+    PySide6 routes an exception escaping ``QThread.run()`` through the same
+    hook, from the worker thread. Widgets may only be created on the GUI
+    thread, so there the hook must log and stop — no dialog.
+    """
+    import logging
+    import sys
+    import threading
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from PyMemoryEditor.app.application import _qt_excepthook
+
+    QApplication.instance() or QApplication([])
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: shown.append(args[2]))
+
+    def raise_in_thread():
+        try:
+            raise RuntimeError("worker boom")
+        except RuntimeError:
+            _qt_excepthook(*sys.exc_info())
+
+    with caplog.at_level(logging.ERROR, logger="PyMemoryEditor.app.application"):
+        worker = threading.Thread(target=raise_in_thread)
+        worker.start()
+        worker.join(5)
+
+    assert not worker.is_alive()
+    assert shown == []
+    assert any("worker boom" in (r.exc_text or "") for r in caplog.records)
