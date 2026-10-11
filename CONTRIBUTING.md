@@ -52,7 +52,7 @@ make pre-commit             # lint + type-check + test
 ```
 
 The CI pipeline runs the same lint, mypy and tests, and blocks merges on failure.
-The library matrix runs Python 3.10–3.13 on Ubuntu and Windows plus a single
+The library matrix runs Python 3.10–3.15 on Ubuntu and Windows plus a single
 Python 3.12 cell on macOS, so all three platform backends are exercised on every
 push. Dedicated jobs also run the suite with the `speed` extra (NumPy) to keep
 the vectorized scan path covered, and the MCP server suite once per OS. Even so,

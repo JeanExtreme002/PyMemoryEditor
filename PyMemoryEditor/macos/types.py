@@ -95,6 +95,11 @@ class vm_region_basic_info_64(Structure):
     """
 
     _pack_ = 4
+    # Explicit since Python 3.14, where `_pack_` without `_layout_` is
+    # deprecated (an error from 3.19). MS layout with pack 4 is what clang's
+    # `#pragma pack(4)` produces for these plain fields; older Pythons ignore
+    # the attribute and already lay `_pack_` structs out this way.
+    _layout_ = "ms"
     _fields_ = [
         ("protection", vm_prot_t),
         ("max_protection", vm_prot_t),
@@ -126,6 +131,7 @@ class vm_region_extended_info(Structure):
     """
 
     _pack_ = 4
+    _layout_ = "ms"  # see vm_region_basic_info_64
     _fields_ = [
         ("protection", vm_prot_t),
         ("user_tag", c_uint),
@@ -157,6 +163,7 @@ class task_dyld_info_data_t(Structure):
     """
 
     _pack_ = 4
+    _layout_ = "ms"  # see vm_region_basic_info_64
     _fields_ = [
         ("all_image_info_addr", mach_vm_address_t),
         ("all_image_info_size", mach_vm_size_t),
