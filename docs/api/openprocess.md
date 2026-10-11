@@ -313,7 +313,7 @@ identical on every platform.
    Build a :py:class:`RemotePointer` bound to this process — a live,
    re-resolving handle. See :doc:`../guide/pointers`.
 
-.. py:method:: scan_pointer_paths(target_address, *, max_depth=3, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
+.. py:method:: scan_pointer_paths(target_address, *, max_depth=3, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None, should_stop=None)
 
    Reverse pointer scan — yield :py:class:`PointerPath` recipes that resolve
    to ``target_address``. See :doc:`../guide/pointer-scan`.

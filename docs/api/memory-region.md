@@ -31,9 +31,10 @@ of memory with its address, size, permissions and backing path.
       Platform-specific descriptor. Portable code should rely on the boolean
       fields below instead of poking at this directly. Shape varies:
 
-      - **Windows** — ``MEMORY_BASIC_INFORMATION_{32,64}`` with ``Protect``
-        (PAGE_* bitmask) and ``Type`` (``MEM_PRIVATE`` / ``MEM_IMAGE`` /
-        ``MEM_MAPPED``).
+      - **Windows** — ``MEMORY_BASIC_INFORMATION_{32,64}`` (the running
+        Python's layout: ``_64`` on 64-bit Python, even for a 32-bit target)
+        with ``Protect`` (PAGE_* bitmask) and ``Type`` (``MEM_PRIVATE`` /
+        ``MEM_IMAGE`` / ``MEM_MAPPED``).
       - **Linux** — small struct with ``Privileges`` (bytes like ``rwxp`` /
         ``rwxs``).
       - **macOS** — struct with ``Protection`` (``VM_PROT_*`` bitmask) and

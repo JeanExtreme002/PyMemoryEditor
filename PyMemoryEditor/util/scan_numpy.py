@@ -15,8 +15,13 @@ multi-megabyte region.
 This module replaces that loop with a vectorized NumPy comparison:
 
     arr  = np.frombuffer(buffer, dtype="<i4")   # bytes -> int array, zero-copy
-    mask = arr > target                         # one C-level comparison, whole array
+    mask = arr > target                         # one C-level comparison per block
     offs = np.flatnonzero(mask) * item_size      # match positions -> byte offsets
+
+The comparison runs over fixed-size blocks of the array and the offsets are
+yielded block by block, so a broad scan (``!= 0``, ``> 0``) over a 256 MiB
+chunk never holds tens of millions of Python ints — or a full-size mask — at
+once.
 
 The result is *identical* to the pure-Python loop — the same offsets in the
 same ascending order — so it is a drop-in fast path, not a behavior change. The
@@ -30,7 +35,8 @@ NumPy is an **optional** dependency. When it is not installed,
 no code change is required on the caller's side.
 """
 
-from typing import List, Literal, Optional, Type, Union
+import operator
+from typing import Callable, Iterator, Literal, Optional, Type, Union
 
 from ..enums import ScanTypesEnum
 
@@ -81,6 +87,21 @@ def numpy_dtype(
     return prefix + char
 
 
+# The single-target comparisons, applied element-wise to a NumPy block.
+_SINGLE_VALUE_OPS = {
+    ScanTypesEnum.EXACT_VALUE: operator.eq,
+    ScanTypesEnum.NOT_EXACT_VALUE: operator.ne,
+    ScanTypesEnum.BIGGER_THAN: operator.gt,
+    ScanTypesEnum.SMALLER_THAN: operator.lt,
+    ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE: operator.ge,
+    ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE: operator.le,
+}
+
+# Elements compared per block. Big enough that the per-block NumPy call
+# overhead vanishes, small enough that one block's offset list stays a few MiB.
+_BLOCK_ELEMENTS = 1 << 18
+
+
 def scan_offsets(
     buffer,
     target_value_size: int,
@@ -90,7 +111,7 @@ def scan_offsets(
     target_value: Union[int, float],
     start_value: Union[int, float],
     end_value: Union[int, float],
-) -> Optional[List[int]]:
+) -> Optional[Iterator[int]]:
     """
     Vectorized equivalent of ``scan_memory``'s numeric fast path.
 
@@ -100,9 +121,10 @@ def scan_offsets(
         scan types (EXACT / NOT_EXACT / the four ordered comparisons).
     :param start_value, end_value: the inclusive bounds for ``VALUE_BETWEEN`` /
         ``NOT_VALUE_BETWEEN`` (ignored for the other scan types).
-    :return: byte offsets of every match in ascending order, or ``None`` when
-        ``(pytype, target_value_size)`` has no NumPy fast path so the caller can
-        fall back to the struct loop.
+    :return: a lazy iterator over the byte offsets of every match in ascending
+        order, or ``None`` when ``(pytype, target_value_size)`` has no NumPy
+        fast path so the caller can fall back to the struct loop. The ``None``
+        decision is made eagerly; only the comparison itself is deferred.
     """
     if not NUMPY_AVAILABLE:
         return None
@@ -115,31 +137,33 @@ def scan_offsets(
     # guarantees len(buffer) is a multiple of the item size, so frombuffer never
     # raises on a ragged tail.
     arr = _np.frombuffer(buffer, dtype=dtype)
-    if arr.size == 0:
-        return []
 
-    if scan_type is ScanTypesEnum.EXACT_VALUE:
-        mask = arr == target_value
-    elif scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
-        mask = arr != target_value
-    elif scan_type is ScanTypesEnum.BIGGER_THAN:
-        mask = arr > target_value
-    elif scan_type is ScanTypesEnum.SMALLER_THAN:
-        mask = arr < target_value
-    elif scan_type is ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE:
-        mask = arr >= target_value
-    elif scan_type is ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE:
-        mask = arr <= target_value
+    single = _SINGLE_VALUE_OPS.get(scan_type)
+    if single is not None:
+        def compare(block):
+            return single(block, target_value)
     elif scan_type is ScanTypesEnum.VALUE_BETWEEN:
-        mask = (arr >= start_value) & (arr <= end_value)
+        def compare(block):
+            return (block >= start_value) & (block <= end_value)
     elif scan_type is ScanTypesEnum.NOT_VALUE_BETWEEN:
-        mask = ~((arr >= start_value) & (arr <= end_value))
+        def compare(block):
+            return ~((block >= start_value) & (block <= end_value))
     else:  # pragma: no cover - ScanTypesEnum is closed; defensive only.
         return None
 
-    # flatnonzero returns ascending indices, so multiplying by the item size
-    # yields ascending byte offsets — the same order the Python loop emits.
-    return (_np.flatnonzero(mask) * target_value_size).tolist()
+    return _iter_block_offsets(arr, compare, target_value_size)
+
+
+def _iter_block_offsets(arr, compare: Callable, item_size: int) -> Iterator[int]:
+    """Yield the byte offsets where ``compare`` holds, one block at a time."""
+    for first in range(0, arr.size, _BLOCK_ELEMENTS):
+        mask = compare(arr[first : first + _BLOCK_ELEMENTS])
+        # flatnonzero returns ascending indices, so shifting by the block start
+        # and multiplying by the item size yields ascending byte offsets — the
+        # same order the Python loop emits.
+        hits = _np.flatnonzero(mask)
+        if hits.size:
+            yield from ((hits + first) * item_size).tolist()
 
 
 __all__ = ("NUMPY_AVAILABLE", "numpy_dtype", "scan_offsets")

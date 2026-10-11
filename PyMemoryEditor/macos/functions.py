@@ -19,6 +19,7 @@ from ..process.region import (
     default_address_filter,
     default_scan_filter,
     MemoryRegion,
+    MemoryRegionSnapshot,
     make_region,
 )
 from ..process.scanning import (
@@ -48,9 +49,12 @@ from .types import (
     MEMORY_BASIC_INFORMATION,
     TASK_DYLD_INFO,
     TASK_DYLD_INFO_COUNT,
+    THREAD_IDENTIFIER_INFO,
+    THREAD_IDENTIFIER_INFO_COUNT,
     VM_FLAGS_ANYWHERE,
     VM_MEMORY_SHARED_PMAP,
     VM_PROT_COPY,
+    VM_PROT_EXECUTE,
     VM_PROT_READ,
     VM_PROT_WRITE,
     VM_REGION_BASIC_INFO_64,
@@ -62,6 +66,7 @@ from .types import (
     mach_vm_address_t,
     mach_vm_size_t,
     task_dyld_info_data_t,
+    thread_identifier_info_data_t,
     vm_region_basic_info_64,
     vm_region_extended_info,
 )
@@ -433,17 +438,131 @@ def _mach_read(task: int, address: int, local_buffer_address: int, size: int) ->
     return out_size.value
 
 
+def _protections_in_span(task: int, start: int, end: int) -> List[Tuple[int, int, int]]:
+    """
+    Return ``(address, size, protection)`` for every mapped slice of
+    ``[start, end)``, one entry per VM region, clipped to the span.
+
+    A page span handed to ``mach_vm_protect`` can cover more than one region —
+    a write that straddles a page boundary can land in a neighbour with a
+    different protection — so the protect-flip must save and restore each
+    region's protection separately rather than stamping the first region's
+    value across the whole span. Unmapped gaps are simply absent from the
+    result (``mach_vm_region`` returns the next region at or after the cursor).
+    """
+    spans: List[Tuple[int, int, int]] = []
+    cursor = start
+
+    while cursor < end:
+        addr = mach_vm_address_t(cursor)
+        size = mach_vm_size_t(0)
+        info = vm_region_basic_info_64()
+        info_count = mach_msg_type_number_t(VM_REGION_BASIC_INFO_COUNT_64)
+        object_name = mach_port_t(0)
+
+        kr = libsystem.mach_vm_region(
+            task,
+            ctypes.byref(addr),
+            ctypes.byref(size),
+            VM_REGION_BASIC_INFO_64,
+            ctypes.cast(ctypes.byref(info), ctypes.c_void_p),
+            ctypes.byref(info_count),
+            ctypes.byref(object_name),
+        )
+        if kr != KERN_SUCCESS:
+            break
+        if object_name.value:
+            libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
+
+        region_start = addr.value
+        region_end = region_start + size.value
+        if size.value == 0 or region_start >= end:
+            break
+
+        low = max(region_start, cursor)
+        high = min(region_end, end)
+        spans.append((low, high - low, info.protection))
+        cursor = high
+
+    return spans
+
+
+def _elevate_span_protection(task: int, address: int, size: int, protection: int) -> int:
+    """
+    Make ``[address, address+size)`` writable for a protect-flip and return the
+    ``kern_return_t``.
+
+    ``VM_PROT_COPY`` makes the change private to the target task: the entry is
+    marked needs-copy (copy-on-write) and WRITE is added to its *maximum*
+    protection, which is what lets a write land on a read-only, file-backed
+    mapping without touching the file or other processes sharing it.
+
+    EXECUTE is kept when the original protection had it, so a thread running
+    on a patched code page doesn't take an instruction-fetch fault during the
+    flip. W^X policy (Apple Silicon, the hardened runtime) refuses RWX on most
+    pages; when that happens the elevate falls back to READ|WRITE|COPY — the
+    long-standing behaviour — instead of failing the write.
+    """
+    new_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY
+    if protection & VM_PROT_EXECUTE:
+        kr = libsystem.mach_vm_protect(
+            task, address, size, 0, new_protection | VM_PROT_EXECUTE
+        )
+        if kr == KERN_SUCCESS:
+            return kr
+        _logger.debug(
+            "mach_vm_protect refused RWX at 0x%X (kr=%d, %s); elevating without "
+            "EXECUTE for the duration of the write",
+            address, kr, mach_error_message(kr),
+        )
+    return libsystem.mach_vm_protect(task, address, size, 0, new_protection)
+
+
+def _restore_span_protections(task: int, spans: Sequence[Tuple[int, int, int]]) -> None:
+    """
+    Best-effort restore of each ``(address, size, protection)`` slice saved by
+    :func:`_elevated_write_protection`.
+
+    The write itself already succeeded (or the elevate is being unwound), so
+    raising here would discard the user's intended outcome; but a silent
+    failure leaves the target page more permissive than it started, which is
+    an invisible side-effect the caller should know about — log and warn.
+    """
+    for span_address, span_size, protection in spans:
+        restore_kr = libsystem.mach_vm_protect(
+            task, span_address, span_size, 0, protection
+        )
+        if restore_kr != KERN_SUCCESS:
+            message = (
+                "mach_vm_protect could not restore the original protection "
+                "(0x%x) on the target page at 0x%x after a write-via-protect-flip; "
+                "the page is left more permissive than before (kr=%d, %s)."
+                % (
+                    protection,
+                    span_address,
+                    restore_kr,
+                    mach_error_message(restore_kr),
+                )
+            )
+            _logger.warning(message)
+            warnings.warn(message, ResourceWarning, stacklevel=4)
+
+
 @contextmanager
 def _elevated_write_protection(
     task: int, address: int, size: int, *, original_kr: int
 ) -> Iterator[None]:
     """
-    Temporarily make the page span covering ``(address, size)`` read+write,
+    Temporarily make the page span covering ``(address, size)`` writable,
     restoring its original protection on exit — the protect-flip that lets a
     write land on a read-only page (mirroring WriteProcessMemory on Windows).
 
-    The elevate uses ``VM_PROT_COPY`` so the change is private to the target
-    task. ``original_kr`` is the kern_return_t of the write that triggered this
+    The span can cross into neighbouring regions with different protections,
+    so each region's protection is saved and restored on its own slice (see
+    :func:`_protections_in_span`); EXECUTE is preserved where the platform
+    allows it (see :func:`_elevate_span_protection`).
+
+    ``original_kr`` is the kern_return_t of the write that triggered this
     retry; it's woven into the error if the address turns out to be genuinely
     invalid, so the caller still sees the *original* failure rather than a
     misleading "protect failed".
@@ -452,57 +571,42 @@ def _elevated_write_protection(
         protection can't be elevated. A failure to *restore* on exit is logged
         and warned (the write already happened) but never raised.
     """
-    # Discover the page's original protection so we can restore it afterwards.
-    region = _query_region(task, address)
-    if region is None:
+    # Align the protect span to whole pages: mach_vm_protect is page-granular,
+    # and the restore below must cover the exact same span as the elevate or it
+    # could leave a slice of a straddled page more permissive than it started.
+    prot_address, prot_size = _page_aligned_span(address, size)
+
+    # Discover each region's original protection so we can restore it.
+    spans = _protections_in_span(task, prot_address, prot_address + prot_size)
+    if not any(start <= address < start + length for start, length, _ in spans):
         # The address really is invalid — surface the original write error.
         raise OSError(
             "mach_vm_write failed: %s (kr=%d)"
             % (mach_error_message(original_kr), original_kr)
         )
 
-    original_protection = region.struct.Protection
-
-    # Align the protect span to whole pages: mach_vm_protect is page-granular,
-    # and the restore below must cover the exact same span as the elevate or it
-    # could leave a slice of a straddled page more permissive than it started.
-    prot_address, prot_size = _page_aligned_span(address, size)
-
-    new_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY
-    protect_kr = libsystem.mach_vm_protect(
-        task, prot_address, prot_size, 0, new_protection
-    )
-    if protect_kr != KERN_SUCCESS:
-        raise OSError(
-            "mach_vm_write failed (kr=%d) and mach_vm_protect could not elevate "
-            "the protection (kr=%d, %s)."
-            % (original_kr, protect_kr, mach_error_message(protect_kr))
-        )
+    elevated: List[Tuple[int, int, int]] = []
+    for span_address, span_size, protection in spans:
+        protect_kr = _elevate_span_protection(task, span_address, span_size, protection)
+        if protect_kr != KERN_SUCCESS:
+            # Undo the slices already elevated before reporting the failure.
+            _restore_span_protections(task, elevated)
+            raise OSError(
+                "mach_vm_write failed (kr=%d) and mach_vm_protect could not elevate "
+                "the protection at 0x%X (kr=%d, %s)."
+                % (
+                    original_kr,
+                    span_address,
+                    protect_kr,
+                    mach_error_message(protect_kr),
+                )
+            )
+        elevated.append((span_address, span_size, protection))
 
     try:
         yield
     finally:
-        # Best-effort restore. The write itself already succeeded, so raising
-        # here would discard the user's intended outcome; but a silent failure
-        # leaves the target page more permissive than it started, which is an
-        # invisible side-effect the caller should know about.
-        restore_kr = libsystem.mach_vm_protect(
-            task, prot_address, prot_size, 0, original_protection
-        )
-        if restore_kr != KERN_SUCCESS:
-            message = (
-                "mach_vm_protect could not restore the original protection "
-                "(0x%x) on the target page at 0x%x after a write-via-protect-flip; "
-                "the page is left more permissive than before (kr=%d, %s)."
-                % (
-                    original_protection,
-                    address,
-                    restore_kr,
-                    mach_error_message(restore_kr),
-                )
-            )
-            _logger.warning(message)
-            warnings.warn(message, ResourceWarning, stacklevel=2)
+        _restore_span_protections(task, elevated)
 
 
 def _mach_write(task: int, address: int, local_buffer_address: int, size: int) -> None:
@@ -770,17 +874,36 @@ def search_addresses_by_value(
     )
 
 
+def _thread_id(port: int) -> int:
+    """System-wide id of the thread behind ``port``; the port name itself if
+    the kernel refuses the lookup (the thread exited between task_threads and
+    here), so a listing never fails over one thread."""
+    info = thread_identifier_info_data_t()
+    info_count = mach_msg_type_number_t(THREAD_IDENTIFIER_INFO_COUNT)
+    kr = libsystem.thread_info(
+        port, THREAD_IDENTIFIER_INFO, ctypes.byref(info), ctypes.byref(info_count)
+    )
+    if kr != KERN_SUCCESS:
+        _logger.debug(
+            "get_threads: thread_info(%d) failed: %s (kr=%d); using the port name",
+            port, mach_error_message(kr), kr,
+        )
+        return port
+    return int(info.thread_id)
+
+
 def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
     """
     Yield a :class:`ThreadInfo` for every thread of the target task using
     Mach's ``task_threads``.
 
     .. note::
-       ``tid`` here is the **Mach thread port name**, not the BSD/POSIX
-       pthread id. Looking up the POSIX tid would require an extra
-       ``thread_info(THREAD_IDENTIFIER_INFO)`` call per thread; the Mach port
-       is sufficient for any further Mach-level operation and is what the
-       kernel hands us cheaply.
+       ``tid`` is the system-wide thread id from
+       ``thread_info(THREAD_IDENTIFIER_INFO)`` — the value
+       ``pthread_threadid_np`` returns — so it is stable across calls and the
+       main thread has the smallest one. ``raw`` is the Mach thread port name
+       the kernel handed us, released before this yields: an identifier only,
+       not a live port, for a foreign task.
     """
     thread_list = ctypes.POINTER(ctypes.c_uint)()
     count = ctypes.c_uint(0)
@@ -791,16 +914,31 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
             "task_threads failed: %s (kr=%d)" % (mach_error_message(kr), kr)
         )
 
+    # Copy the port names out and release everything *before* yielding, so an
+    # abandoned or slowly-consumed generator can't hold kernel resources.
+    ports: List[int] = []
+    thread_ids: List[int] = []
     try:
-        for index in range(count.value):
-            yield ThreadInfo(
-                tid=int(thread_list[index]),
-                start_address=None,
-                state=None,
-                priority=None,
-                raw=int(thread_list[index]),
-            )
+        ports = [int(port) for port in thread_list[: count.value]]
+        # Resolve each thread's id while we still hold its send right: the
+        # port name is local to our IPC space and, once released, the same
+        # thread can come back under a different name on the next call.
+        thread_ids = [_thread_id(port) for port in ports]
     finally:
+        # task_threads hands us one send right (a user reference) per thread;
+        # each must be released or every call leaks a reference per thread in
+        # *our* IPC space — unbounded growth for a caller polling the thread
+        # list (the app's auto-refresh, the MCP tool). The names stay valid for
+        # threads of our own task (libpthread holds its own reference), but for
+        # a foreign task they are dead once released: ``tid`` / ``raw`` are
+        # identifiers, not live ports.
+        for port in ports:
+            dealloc_kr = libsystem.mach_port_deallocate(mach_task_self_.value, port)
+            if dealloc_kr != KERN_SUCCESS:
+                _logger.debug(
+                    "get_threads: mach_port_deallocate(%d) failed: %s (kr=%d)",
+                    port, mach_error_message(dealloc_kr), dealloc_kr,
+                )
         # The kernel out-allocates ``thread_list`` in the caller's address
         # space; freeing it back is the caller's responsibility, otherwise we
         # leak VM in *our own* task each enumeration. The deallocation size is
@@ -812,12 +950,34 @@ def get_threads(task: int) -> Generator[ThreadInfo, None, None]:
                 count.value * ctypes.sizeof(ctypes.c_uint),
             )
 
+    for port, thread_id in zip(ports, thread_ids):
+        yield ThreadInfo(
+            tid=thread_id,
+            start_address=None,
+            state=None,
+            priority=None,
+            raw=port,
+        )
+
 
 # Mach-O constants for sizing an image from its load commands.
 _MH_MAGIC_64 = 0xFEEDFACF
 _MH_MAGIC_32 = 0xFEEDFACE  # 32-bit image header magic (host byte order)
 _LC_SEGMENT_64 = 0x19
 _MACH_HEADER_64_SIZE = 32  # sizeof(struct mach_header_64)
+_LOAD_COMMAND_MIN_SIZE = 8  # sizeof(struct load_command): cmd + cmdsize
+_SEGMENT_COMMAND_64_PREFIX = 40  # cmd, cmdsize, segname[16], vmaddr, vmsize
+
+# Ceilings on the target-controlled counts the module walk trusts. `ncmds` /
+# `sizeofcmds` come from the image header and `infoArrayCount` from dyld's
+# image table — all live in the *target's* memory, so a corrupted or hostile
+# process could otherwise make get_modules() loop ~4 billion times (or try to
+# read a 4 GiB load-command block). Real images carry a few KiB of load
+# commands (tens of KiB for a binary linking hundreds of dylibs) and real
+# processes a few thousand images at most; both caps leave orders of magnitude
+# of headroom.
+_MAX_SIZEOFCMDS = 4 * 1024 * 1024
+_MAX_DYLD_IMAGES = 0x10000
 
 
 def _read_cstring(task: int, address: int, *, max_length: int = 4096) -> str:
@@ -850,6 +1010,100 @@ def _read_cstring(task: int, address: int, *, max_length: int = 4096) -> str:
     return bytes(data[:max_length]).decode("utf-8", errors="replace")
 
 
+def _iter_load_commands(
+    task: int, load_address: int
+) -> Generator[Tuple[int, bytes], None, None]:
+    """
+    Yield ``(cmd, data)`` for each load command of the 64-bit Mach-O image at
+    ``load_address``; yields nothing when the header is unreadable or not
+    ``MH_MAGIC_64``.
+
+    The whole ``sizeofcmds`` block is read in one ``mach_vm_read_overwrite``
+    (instead of 8 bytes per command), and ``data`` is the full command. If that
+    bulk read fails, it falls back to reading each command's header — and the
+    segment prefix for ``LC_SEGMENT_64`` — individually, so ``data`` may then be
+    only the leading bytes; callers must check its length.
+
+    Every count is bounded: ``sizeofcmds`` by :data:`_MAX_SIZEOFCMDS`, ``ncmds``
+    by how many minimum-size commands fit in ``sizeofcmds``, and each command
+    must lie within the block — a corrupted header can't make the walk spin.
+    """
+    try:
+        header = read_process_memory(task, load_address, bytes, _MACH_HEADER_64_SIZE)
+    except MachReadError:
+        return
+
+    if int.from_bytes(header[:4], "little") != _MH_MAGIC_64:
+        return
+
+    ncmds = int.from_bytes(header[16:20], "little")
+    sizeofcmds = int.from_bytes(header[20:24], "little")
+    if sizeofcmds > _MAX_SIZEOFCMDS:
+        _logger.debug(
+            "image at 0x%X claims sizeofcmds=%d; capping at %d",
+            load_address, sizeofcmds, _MAX_SIZEOFCMDS,
+        )
+        sizeofcmds = _MAX_SIZEOFCMDS
+    ncmds = min(ncmds, sizeofcmds // _LOAD_COMMAND_MIN_SIZE)
+    if ncmds == 0:
+        return
+
+    commands_address = load_address + _MACH_HEADER_64_SIZE
+    block: Optional[bytes]
+    try:
+        block = read_process_memory(task, commands_address, bytes, sizeofcmds)
+    except MachReadError:
+        block = None
+
+    offset = 0
+    for _ in range(ncmds):
+        if offset + _LOAD_COMMAND_MIN_SIZE > sizeofcmds:
+            break
+
+        if block is not None:
+            cmd_header = block[offset:offset + _LOAD_COMMAND_MIN_SIZE]
+        else:
+            try:
+                cmd_header = read_process_memory(
+                    task, commands_address + offset, bytes, _LOAD_COMMAND_MIN_SIZE
+                )
+            except MachReadError:
+                break
+
+        cmd = int.from_bytes(cmd_header[:4], "little")
+        cmd_size = int.from_bytes(cmd_header[4:8], "little")
+        if cmd_size < _LOAD_COMMAND_MIN_SIZE or offset + cmd_size > sizeofcmds:
+            break  # malformed — stop rather than walk garbage
+
+        if block is not None:
+            data = block[offset:offset + cmd_size]
+        elif cmd == _LC_SEGMENT_64 and cmd_size >= _SEGMENT_COMMAND_64_PREFIX:
+            try:
+                data = read_process_memory(
+                    task, commands_address + offset, bytes, _SEGMENT_COMMAND_64_PREFIX
+                )
+            except MachReadError:
+                break
+        else:
+            data = cmd_header
+
+        yield cmd, data
+        offset += cmd_size
+
+
+def _parse_segment(data: bytes) -> Optional[Tuple[bytes, int, int]]:
+    """Return ``(segname, vmaddr, vmsize)`` from an ``LC_SEGMENT_64`` command."""
+    # struct segment_command_64: cmd, cmdsize, segname[16],
+    # vmaddr (u64 @ offset 24), vmsize (u64 @ offset 32), ...
+    if len(data) < _SEGMENT_COMMAND_64_PREFIX:
+        return None
+    return (
+        data[8:24].split(b"\x00", 1)[0],
+        int.from_bytes(data[24:32], "little"),
+        int.from_bytes(data[32:40], "little"),
+    )
+
+
 def _macho_image_size(task: int, load_address: int) -> int:
     """
     Return the size of the ``__TEXT`` segment of the Mach-O image at
@@ -865,41 +1119,12 @@ def _macho_image_size(task: int, load_address: int) -> int:
     image and accurately sized on and off the cache, and it is the region a
     code/AOB scan cares about — so it is the most useful, stable choice here.
     """
-    try:
-        header = read_process_memory(task, load_address, bytes, _MACH_HEADER_64_SIZE)
-    except MachReadError:
-        return 0
-
-    if int.from_bytes(header[:4], "little") != _MH_MAGIC_64:
-        return 0
-
-    ncmds = int.from_bytes(header[16:20], "little")
-    cmd_address = load_address + _MACH_HEADER_64_SIZE
-
-    for _ in range(ncmds):
-        try:
-            cmd_header = read_process_memory(task, cmd_address, bytes, 8)
-        except MachReadError:
-            break
-
-        cmd = int.from_bytes(cmd_header[:4], "little")
-        cmd_size = int.from_bytes(cmd_header[4:8], "little")
-        if cmd_size == 0:
-            break  # malformed — avoid an infinite loop
-
-        if cmd == _LC_SEGMENT_64:
-            # struct segment_command_64: cmd, cmdsize, segname[16],
-            # vmaddr (u64 @ offset 24), vmsize (u64 @ offset 32), ...
-            try:
-                seg = read_process_memory(task, cmd_address, bytes, 40)
-            except MachReadError:
-                break
-
-            if seg[8:24].split(b"\x00", 1)[0] == b"__TEXT":
-                return int.from_bytes(seg[32:40], "little")
-
-        cmd_address += cmd_size
-
+    for cmd, data in _iter_load_commands(task, load_address):
+        if cmd != _LC_SEGMENT_64:
+            continue
+        segment = _parse_segment(data)
+        if segment is not None and segment[0] == b"__TEXT":
+            return segment[2]
     return 0
 
 
@@ -929,44 +1154,18 @@ def get_image_segments(task: int, load_address: int) -> List[Tuple[int, int]]:
     simply won't contain any real pointer slot). Returns ``[]`` when the header
     can't be parsed.
     """
-    try:
-        header = read_process_memory(task, load_address, bytes, _MACH_HEADER_64_SIZE)
-    except MachReadError:
-        return []
-
-    if int.from_bytes(header[:4], "little") != _MH_MAGIC_64:
-        return []
-
-    ncmds = int.from_bytes(header[16:20], "little")
-    cmd_address = load_address + _MACH_HEADER_64_SIZE
-
     segments: List[Tuple[bytes, int, int]] = []  # (segname, vmaddr, vmsize)
     text_vmaddr: Optional[int] = None
 
-    for _ in range(ncmds):
-        try:
-            cmd_header = read_process_memory(task, cmd_address, bytes, 8)
-        except MachReadError:
-            break
-
-        cmd = int.from_bytes(cmd_header[:4], "little")
-        cmd_size = int.from_bytes(cmd_header[4:8], "little")
-        if cmd_size == 0:
-            break
-
-        if cmd == _LC_SEGMENT_64:
-            try:
-                seg = read_process_memory(task, cmd_address, bytes, 40)
-            except MachReadError:
-                break
-            segname = seg[8:24].split(b"\x00", 1)[0]
-            vmaddr = int.from_bytes(seg[24:32], "little")
-            vmsize = int.from_bytes(seg[32:40], "little")
-            if segname == b"__TEXT":
-                text_vmaddr = vmaddr
-            segments.append((segname, vmaddr, vmsize))
-
-        cmd_address += cmd_size
+    for cmd, data in _iter_load_commands(task, load_address):
+        if cmd != _LC_SEGMENT_64:
+            continue
+        segment = _parse_segment(data)
+        if segment is None:
+            continue
+        if segment[0] == b"__TEXT":
+            text_vmaddr = segment[1]
+        segments.append(segment)
 
     if text_vmaddr is None:
         return []
@@ -1008,6 +1207,16 @@ def get_modules(task: int) -> Generator[ModuleInfo, None, None]:
     if not all_infos_address:
         return
 
+    yield from _iter_dyld_images(task, all_infos_address)
+
+
+def _iter_dyld_images(
+    task: int, all_infos_address: int
+) -> Generator[ModuleInfo, None, None]:
+    """
+    Walk the ``dyld_all_image_infos`` table at ``all_infos_address`` inside the
+    target and yield a :class:`ModuleInfo` per image (see :func:`get_modules`).
+    """
     pointer_size = 8  # 64-bit task
 
     def read_pointer(address: int) -> int:
@@ -1028,6 +1237,15 @@ def get_modules(task: int) -> Generator[ModuleInfo, None, None]:
 
     if not info_array_address or image_count == 0:
         return
+
+    # `infoArrayCount` is read from the target; bound it so a corrupted or
+    # hostile dyld table can't turn this into a multi-billion-step loop.
+    if image_count > _MAX_DYLD_IMAGES:
+        _logger.warning(
+            "get_modules: dyld reports %d images; only the first %d are listed",
+            image_count, _MAX_DYLD_IMAGES,
+        )
+        image_count = _MAX_DYLD_IMAGES
 
     # struct dyld_image_info { const mach_header* imageLoadAddress;
     #     const char* imageFilePath; uintptr_t imageFileModDate; } — 3 pointers.
@@ -1160,7 +1378,10 @@ def search_values_by_addresses(
         memory_regions = [
             region for region in get_memory_regions(task, pid) if default_address_filter(region)
         ]
-    else:
+    elif not isinstance(memory_regions, MemoryRegionSnapshot):
+        # Materialize one-shot iterables, but hand a snapshot through as-is:
+        # copying it into a plain list drops the "already sorted" tag that
+        # lets iter_values_for_addresses skip re-sorting on every refine.
         memory_regions = list(memory_regions)
 
     yield from iter_values_for_addresses(

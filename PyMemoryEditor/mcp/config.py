@@ -19,9 +19,12 @@ actually be given:
 * **which process** — attaching to a target the operator did not pre-approve
   asks the user, live, and the prompt says whether writes are possible
   (:mod:`PyMemoryEditor.mcp.policy`);
-* **each write** — ``write_value`` is tagged so a client prompts on every call,
-  even in its most permissive auto-approve mode
-  (see ``_ALWAYS_ASK`` in :mod:`PyMemoryEditor.mcp.server`).
+* **each write** — ``write_value`` is tagged so a client that honours the
+  ``anthropic/requiresUserInteraction`` hint prompts on every call, even in its
+  most permissive auto-approve mode (see ``_ALWAYS_ASK`` in
+  :mod:`PyMemoryEditor.mcp.server`). The hint is an Anthropic extension, not
+  standard MCP: a client that does not know it may run writes unprompted, and
+  ``--read-only`` is the guarantee for that case.
 
 ``--read-only`` is there for when you want the guarantee enforced below this
 process rather than promised by it: the write tool is not registered at all, so
@@ -75,10 +78,12 @@ class ServerConfig:
     """Everything the server's behaviour depends on.
 
     :param allow_write: register the memory-mutating tools (``write_value``).
-        **On by default** — editing memory is what the library is for, and each
-        write is confirmed by the client. Set it off with ``--read-only`` when
-        you want the guarantee enforced below this process: the tool then does
-        not exist, and on Windows the process handle carries no write rights.
+        **On by default** — editing memory is what the library is for, and
+        clients that honour the ``anthropic/requiresUserInteraction`` hint ask
+        before each write (others may not). Set it off with ``--read-only``
+        when your client auto-approves tools, or whenever you want the
+        guarantee enforced below this process: the tool then does not exist,
+        and on Windows the process handle carries no write rights.
     :param allowed_processes: process names pre-approved so they open without
         prompting — see :class:`~PyMemoryEditor.mcp.policy.ProcessPolicy`.
         Leaving it empty does **not** mean "anything goes": unlisted targets
@@ -157,9 +162,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Needs no flags: it asks you before attaching to a process, and "
-            "your client confirms every write. Pass --read-only to remove the "
-            "write tool entirely, or --allow-process NAME to skip the attach "
-            "prompt for a target you already trust."
+            "clients that honour the requiresUserInteraction hint (such as "
+            "Claude Code) ask before each write; others may not. Pass "
+            "--read-only to remove the write tool entirely (do so if your "
+            "client auto-approves tools), or --allow-process NAME to skip the "
+            "attach prompt for a target you already trust."
         ),
     )
     parser.add_argument(

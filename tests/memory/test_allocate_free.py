@@ -90,11 +90,12 @@ def test_allocate_rejects_nonpositive_size(process):
 
 
 @pytest.mark.skipif(
-    sys.platform != "darwin",
-    reason="macOS needs the size to free; unknown address without size is a ValueError",
+    sys.platform not in ("darwin", "win32"),
+    reason="Linux cannot free at all; macOS/Windows refuse an unknown address without a size",
 )
-def test_macos_free_unknown_address_without_size_raises(process):
-    """On macOS, freeing an address we didn't allocate (no size) is a ValueError."""
+def test_free_unknown_address_without_size_raises(process):
+    """On macOS and Windows, freeing an address we didn't allocate (no size) is
+    a ValueError, not a release of memory the target may still be using."""
     with pytest.raises(ValueError):
         process.free_memory(0x1000)
 

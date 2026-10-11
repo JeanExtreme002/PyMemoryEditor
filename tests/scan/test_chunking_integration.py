@@ -96,33 +96,34 @@ def test_scan_memory_across_chunked_region_finds_all_matches():
     assert sorted(found) == sorted(expected_global_offsets)
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="WOW64 dispatch is Win32-only")
-def test_mbi_class_for_handle_wow64(monkeypatch):
-    """When the target is WOW64, the 32-bit MBI layout is selected."""
+@pytest.mark.skipif(sys.platform != "win32", reason="WOW64 handling is Win32-only")
+def test_mbi_class_for_handle_is_the_host_layout_for_wow64_targets(monkeypatch):
+    """
+    VirtualQueryEx always fills the caller's native MEMORY_BASIC_INFORMATION
+    (NtQueryVirtualMemory rejects a smaller buffer with ERROR_BAD_LENGTH), so
+    a WOW64 target must *not* switch a 64-bit Python to the 28-byte layout.
+    Regression: picking MEMORY_BASIC_INFORMATION_32 there made every region
+    query of a 32-bit target fail and every scan of it raise.
+    """
+    import ctypes
+
     from PyMemoryEditor.win32 import functions as wf
-    from PyMemoryEditor.win32.types import (
-        MEMORY_BASIC_INFORMATION_32,
-        MEMORY_BASIC_INFORMATION_64,
-    )
+    from PyMemoryEditor.win32.types import MEMORY_BASIC_INFORMATION
 
-    # Force "host is 64-bit" so the WOW64 branch is taken.
-    monkeypatch.setattr(wf, "_HOST_IS_64BIT", True)
-
-    # Fake IsWow64Process that flips the BOOL it gets via byref.
     def fake_is_wow64(handle, out_bool_ptr):
         out_bool_ptr._obj.value = 1  # type: ignore[attr-defined]
         return 1
 
-    monkeypatch.setattr(wf.kernel32, "IsWow64Process", fake_is_wow64)
-    assert wf.mbi_class_for_handle(0xDEAD) is MEMORY_BASIC_INFORMATION_32
-
-    # Same handle but target is 64-bit.
     def fake_is_native(handle, out_bool_ptr):
         out_bool_ptr._obj.value = 0  # type: ignore[attr-defined]
         return 1
 
-    monkeypatch.setattr(wf.kernel32, "IsWow64Process", fake_is_native)
-    assert wf.mbi_class_for_handle(0xBEEF) is MEMORY_BASIC_INFORMATION_64
+    for fake in (fake_is_wow64, fake_is_native):
+        monkeypatch.setattr(wf.kernel32, "IsWow64Process", fake)
+        mbi = wf.mbi_class_for_handle(0xDEAD)
+        assert mbi is MEMORY_BASIC_INFORMATION
+        # The native struct: 48 bytes on 64-bit Python, 28 on 32-bit.
+        assert ctypes.sizeof(mbi) == (48 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)
 
 
 # --------------------------------------------------------------------------- #

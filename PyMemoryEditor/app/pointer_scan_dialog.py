@@ -77,6 +77,16 @@ _MONO = MONOSPACE_FAMILY
 _UI_BATCH = 200
 
 
+def _module_bases(process) -> dict:
+    """Module name -> base address, the *first* module wins on a duplicate
+    name — the same pick as ``PointerPath.rebase``, so a path rebases onto one
+    module whichever way it is replayed."""
+    bases: dict = {}
+    for module in process.get_modules():
+        bases.setdefault(module.name, module.base_address)
+    return bases
+
+
 class _PointerScanCancelled(Exception):
     """Raised from the progress callback to abort a scan mid-map-build."""
 
@@ -141,6 +151,9 @@ class PointerScanWorker(QThread):
                 writable_only=req.writable_only,
                 max_results=req.max_results,
                 progress_callback=self._on_map_progress,
+                # The walk can run a long time between two paths; this lets
+                # Stop end it there too, not only at the next yield.
+                should_stop=lambda: self._cancelled,
             )
 
             batch: List[_ResultRow] = []
@@ -246,7 +259,7 @@ class PointerRescanWorker(QThread):
     def run(self) -> None:
         try:
             # One name→base lookup so rebasing each saved path is O(1).
-            module_bases = {m.name: m.base_address for m in self._process.get_modules()}
+            module_bases = _module_bases(self._process)
 
             batch: List[_ResultRow] = []
             total = len(self._paths) or 1
@@ -979,7 +992,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         # For display, rebase each survivor onto the current process and read its
         # value — best effort; a path that can't resolve now is still a valid
         # member of the intersection and is kept (shown dimmed / "—").
-        module_bases = {m.name: m.base_address for m in self._process.get_modules()}
+        module_bases = _module_bases(self._process)
         spec, length = self._current_spec()
 
         rows: List[_ResultRow] = []

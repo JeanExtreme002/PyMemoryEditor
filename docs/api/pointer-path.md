@@ -73,6 +73,9 @@ hashable.
    in ``process`` — the call that makes a saved path valid again after a
    restart moved the module (ASLR).
 
+   When two loaded modules share the name, the first one ``get_modules()``
+   lists is used — the same one ``rescan_pointer_paths`` picks.
+
    :raises ValueError: this path has no associated module (its base came
       from a caller-supplied static range), so it cannot be rebased.
    :raises LookupError: the module is not loaded in ``process``.
@@ -94,7 +97,8 @@ hashable.
    fields accept plain ints, ``0x``-prefixed hex strings (``"0x158"``, as
    written by :py:meth:`to_dict`) or decimal strings (``"344"``); a bare hex
    string without the prefix is rejected with ``ValueError`` rather than
-   guessed at, as is a missing ``base_address``.
+   guessed at, as is a missing ``base_address`` or a ``ptr_size`` other than
+   ``4`` or ``8``.
 ```
 
 ### Comparison & display

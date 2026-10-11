@@ -9,6 +9,7 @@ References:
 - mach_vm_write:          <mach/mach_vm.h>
 - mach_vm_region:         <mach/mach_vm.h>
 - mach_port_deallocate:   <mach/mach_port.h>
+- thread_info:            <mach/thread_act.h>
 - mach_error_string:      <mach/mach_error.h>
 """
 
@@ -157,6 +158,20 @@ libsystem.task_threads.argtypes = (
     POINTER(mach_msg_type_number_t),
 )
 libsystem.task_threads.restype = kern_return_t
+
+# kern_return_t thread_info(
+#     thread_inspect_t         target_act,
+#     thread_flavor_t          flavor,
+#     thread_info_t            thread_info_out,  /* caller-sized out buffer */
+#     mach_msg_type_number_t  *thread_info_outCnt);
+# Used with THREAD_IDENTIFIER_INFO to give get_threads() a stable thread id.
+libsystem.thread_info.argtypes = (
+    mach_port_t,
+    ctypes.c_uint,  # thread_flavor_t
+    ctypes.c_void_p,
+    POINTER(mach_msg_type_number_t),
+)
+libsystem.thread_info.restype = kern_return_t
 
 # kern_return_t vm_deallocate(
 #     vm_map_t   target_task,

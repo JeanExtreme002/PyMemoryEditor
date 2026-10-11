@@ -153,3 +153,56 @@ def test_format_size_uses_binary_units(size, expected):
     from PyMemoryEditor.app._widgets import format_size
 
     assert format_size(size) == expected
+
+
+# --- releasing a process after detached workers ---------------------------- #
+
+
+def test_run_after_detached_workers_runs_at_once_when_none_is_running(qapp):
+    from PyMemoryEditor.app._widgets import run_after_detached_workers
+
+    calls = []
+    run_after_detached_workers(lambda: calls.append("closed"))
+    assert calls == ["closed"]
+
+
+def test_run_after_detached_workers_waits_for_a_wedged_worker(qapp):
+    """Changing process must not close the old handle under a worker that is
+    still inside a syscall on it: the close waits for the worker to finish."""
+    import threading
+
+    from PySide6.QtCore import QCoreApplication, QThread
+
+    from PyMemoryEditor.app._widgets import (
+        _DETACHED_WORKERS,
+        detach_worker,
+        run_after_detached_workers,
+    )
+
+    release = threading.Event()
+
+    class _Wedged(QThread):
+        def run(self):
+            release.wait(5)
+
+    worker = _Wedged()
+    worker.start()
+    detach_worker(worker)
+    try:
+        calls = []
+        run_after_detached_workers(lambda: calls.append("closed"))
+        assert calls == []
+
+        release.set()
+        assert worker.wait(5000)
+        # `finished` is delivered to the GUI thread as a queued call.
+        for _ in range(50):
+            QCoreApplication.processEvents()
+            if calls:
+                break
+            QThread.msleep(10)
+        assert calls == ["closed"]
+        assert worker not in _DETACHED_WORKERS
+    finally:
+        release.set()
+        worker.wait(5000)

@@ -19,9 +19,11 @@ at.
 
 Consent is enforced where it can actually be given, not by hiding features:
 attaching to a process you have not pre-approved asks **you** for permission
-([Choosing your targets](#choosing-your-targets)), and your client confirms
-**every single write** before it runs. `--read-only` drops the write tool
-entirely if you want that guarantee below this process.
+([Choosing your targets](#choosing-your-targets)), and `write_value` asks
+clients that honour the `requiresUserInteraction` hint — Claude Code, for one —
+to confirm **every single write** before it runs. Other clients may run writes
+without asking: if yours auto-approves tools, start the server with
+`--read-only`, which drops the write tool entirely.
 
 Read [Safety](#safety) before pointing it at anything you care about: the
 server runs with your privileges and it is **not a sandbox**.
@@ -94,7 +96,7 @@ that install from the MCP Registry start the server.
 <tr><th width="34%">Flag</th><th>What it does</th></tr>
 <tr>
   <td><code>--read-only</code></td>
-  <td>Removes the <code>write_value</code> tool, so the server can read and scan but never modify a target. On Windows the process handle is also opened without write rights, so the <i>kernel</i> enforces it rather than this process promising to. Writing is otherwise <b>on by default</b> — each write is confirmed by your client.</td>
+  <td>Removes the <code>write_value</code> tool, so the server can read and scan but never modify a target. On Windows the process handle is also opened without write rights, so the <i>kernel</i> enforces it rather than this process promising to. Writing is otherwise <b>on by default</b> — clients that honour the <code>requiresUserInteraction</code> hint (such as Claude Code) ask before each write; others may not, so use this flag if yours auto-approves tools.</td>
 </tr>
 <tr>
   <td><code>--allow-process NAME</code></td>
@@ -145,7 +147,7 @@ that install from the MCP Registry start the server.
 <tr><td><code>refine_scan</code></td><td>Next scan — narrow an existing result set. The step that makes it work.</td></tr>
 <tr><td><code>list_scan_results</code></td><td>Page through a result set, reading each address's live value.</td></tr>
 <tr><td><code>read_value</code></td><td>Read one typed value from an address.</td></tr>
-<tr><td><code>write_value</code></td><td>Write one value. Your client confirms every call; absent under <code>--read-only</code>.</td></tr>
+<tr><td><code>write_value</code></td><td>Write one value. Clients that honour <code>requiresUserInteraction</code> confirm every call; absent under <code>--read-only</code>.</td></tr>
 <tr><td><code>resolve_pointer_chain</code></td><td>Replay a Cheat Engine pointer recipe to its final address.</td></tr>
 <tr><td><code>find_pointer_paths</code></td><td>Reverse pointer scan — turn a found address into a recipe that survives a restart.</td></tr>
 </table>
@@ -226,9 +228,12 @@ the error names the two flags that get you moving:
 `--allow-process NAME` or `--allow-any-process`.
 ```
 
-Independently of that, `open_process` and `write_value` are tagged so a client
-always asks before running them, even in its most permissive auto-approve mode.
-So in Claude Code you see and confirm the tool call itself as well.
+Independently of that, `open_process` and `write_value` carry the
+`anthropic/requiresUserInteraction` hint, so a client that honours it always
+asks before running them, even in its most permissive auto-approve mode. In
+Claude Code you see and confirm the tool call itself as well. The hint is an
+Anthropic extension rather than standard MCP, and a client that does not know
+it treats these like any other tool.
 
 ## Safety
 
@@ -241,10 +246,13 @@ way.
   decision, not a config-file one, so a model that has been confused cannot
   widen its own reach — it can ask, and only you answer. The prompt names the
   process and pid, and says whether writes are possible.
-- **No unattended writes.** `open_process` and `write_value` are tagged
-  `requiresUserInteraction`, which makes a client prompt on **every** call —
-  even in its most permissive auto-approve mode. `write_value` also returns the
-  previous value, so a change can be undone.
+- **No unattended writes, on clients that honour the hint.** `open_process`
+  and `write_value` are tagged `requiresUserInteraction`, which makes a client
+  that understands it (Claude Code, for one) prompt on **every** call — even in
+  its most permissive auto-approve mode. It is an Anthropic extension, so other
+  clients may ignore it and auto-approve writes like any tool: on those, use
+  `--read-only`. `write_value` also returns the previous value, so a change can
+  be undone.
 - **A real read-only mode when you want one.** `--read-only` does not register
   the write tool at all, so the model cannot see it, let alone be talked into
   calling it; on Windows the handle itself carries no write rights.
@@ -275,14 +283,16 @@ gave it — not a sandbox, and not protection against a determined operator.
 Process names are matched by substring, and a name is not an identity: PIDs are
 recycled and executables can be renamed.
 
-Two specific things to avoid:
+Three specific things to watch for:
 
 - **Do not expose the HTTP transports** (`--transport sse` /
   `streamable-http`) to a network you do not control. They carry no
   authentication, so that publishes read access to this machine's process
   memory to anyone who can reach the port. Write access over them is refused
   unless you pass `--allow-remote-write` as well — keep it that way unless the
-  port is yours end to end.
+  port is yours end to end. The attach approval does not help here either: the
+  prompt goes to whichever client is connected, so whoever reaches the port
+  also answers it.
 - **Approval is by name, and a pid can be reused.** The server re-reads the
   target's name once it holds the handle and drops it if the pid now belongs
   to something else, but a target whose name it cannot read cannot be checked

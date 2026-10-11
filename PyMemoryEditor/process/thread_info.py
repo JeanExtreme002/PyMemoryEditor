@@ -6,15 +6,15 @@ Cross-platform thread descriptor returned by ``AbstractProcess.get_threads()``.
 Each backend fills in what its OS exposes cheaply; fields left ``None`` mean
 "this platform does not surface that attribute via the API we use." Callers
 that need a platform-specific extra (e.g. the TEB on Windows, the Mach
-thread port on macOS) can pull it through ``raw`` — the backend stores the
+thread port name on macOS) can pull it through ``raw`` — the backend stores the
 original platform handle there for round-tripping.
 
 The meaning of ``tid`` is intentionally not unified across OSes:
 
 - **Linux**:   POSIX TID — same namespace as PID; ``gettid()`` returns this.
 - **Windows**: kernel-assigned global thread id (DWORD) from ``THREADENTRY32``.
-- **macOS**:   Mach thread port name from ``task_threads``. Not the BSD pthread
-              id; obtain that via ``thread_info(THREAD_IDENTIFIER_INFO)`` if needed.
+- **macOS**:   system-wide thread id from ``thread_info(THREAD_IDENTIFIER_INFO)``
+              (what ``pthread_threadid_np`` returns), not the Mach port name.
 
 Documented this way because pretending otherwise leads to subtle bugs in code
 that mixes pids and tids across platforms.
@@ -38,7 +38,9 @@ class ThreadInfo:
         is platform-specific; ``None`` when not available.
     :param raw: the underlying platform handle/struct used to look up this
         thread (a ``THREADENTRY32`` on Windows, the TID string from
-        ``/proc/<pid>/task/`` on Linux, a Mach port int on macOS). Useful for
+        ``/proc/<pid>/task/`` on Linux, the Mach thread port name on macOS —
+        whose send right is released before the thread is yielded, so for
+        another process it is an identifier, not a live port). Useful for
         advanced callers that need to make follow-up OS-specific calls.
     """
 

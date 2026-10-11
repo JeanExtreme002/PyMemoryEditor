@@ -6,7 +6,7 @@ target's header and fall back to a guess, instead of mis-detecting silently.
 
 A wrong bitness silently poisons the pointer-width default used by the pointer
 APIs (resolve_pointer_chain / RemotePointer / scan_pointer_paths). The Windows
-path (``IsProcess64Bit`` / ``mbi_class_for_handle``) already warned on the
+path (``IsProcess64Bit``) already warned on the
 ``IsWow64Process`` failure; these tests lock the same contract on the macOS and
 Linux fallbacks so a refactor can't drop the warning unnoticed.
 

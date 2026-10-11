@@ -261,11 +261,12 @@ install-docs:
 	$(PIP) install -e .
 	@echo "$(GREEN)Docs dependencies installed!$(NC)"
 
-# Build the HTML documentation. Output lands in $(DOCS_BUILD_DIR).
+# Build the HTML documentation. Output lands in $(DOCS_BUILD_DIR). Warnings
+# are errors, the same as the `docs` job in python-package.yml.
 .PHONY: docs
 docs:
 	@echo "$(GREEN)Building HTML documentation...$(NC)"
-	$(PYTHON) -m sphinx -b html $(DOCS_DIR) $(DOCS_BUILD_DIR)
+	$(PYTHON) -m sphinx -W --keep-going -b html $(DOCS_DIR) $(DOCS_BUILD_DIR)
 	@echo "$(GREEN)Documentation generated at $(DOCS_BUILD_DIR)/index.html$(NC)"
 
 # Live-reload docs server — rebuilds on every save and reloads the browser.

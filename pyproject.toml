@@ -188,9 +188,11 @@ exclude = [
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
-# Coverage scope: the Qt app is excluded — it's exercised manually, not by
-# the automated test suite. The library code (everything else) is what we
-# track regressions against.
+# Coverage scope: the Qt app is excluded. tests/app covers its workers,
+# models and smoke paths, but most of app/ is widget wiring that the suite
+# does not drive, so counting it would make the gate measure the UI rather
+# than the library. The library code (everything else) is what we track
+# regressions against.
 [tool.coverage.run]
 source = ["PyMemoryEditor"]
 omit = [
@@ -220,7 +222,7 @@ skip_empty = true
 # paying that in all ten library cells timed the macOS job out. Locally the
 # two halves are ~60 s and ~22 s.
 # Mark a test (or set ``pytestmark = pytest.mark.slow`` at module scope) to
-# add it to the slow bucket — see tests/test_editor.py for the pattern.
+# add it to the slow bucket — see tests/memory/test_editor.py for the pattern.
 [tool.pytest.ini_options]
 addopts = "-n auto --dist=loadfile"
 markers = [

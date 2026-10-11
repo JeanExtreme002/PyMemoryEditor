@@ -86,6 +86,15 @@ VALID_NUMERIC_WIDTHS = {int: (1, 2, 4, 8), float: (4, 8), bool: (1,)}
 #: shared libraries and the model wants the main image plus a few, not the lot.
 MODULE_PREVIEW = 20
 
+#: Characters of a caller's value quoted in a scan description. A ``str`` scan
+#: value can be up to ``MAX_TEXT_BYTES`` long, and the description is repeated
+#: in every scan, refine and ``list_scan_results`` response.
+MAX_CAPTION_VALUE_CHARS = 48
+
+#: Comparisons a scan description lists: the first scan plus the most recent
+#: refines, with the ones in between counted rather than repeated.
+MAX_DESCRIPTION_STEPS = 4
+
 #: Ceiling on ``list_scan_results(limit=...)``. Paging exists for the end of a
 #: refine chain, where a handful of candidates get inspected one by one; a
 #: model asking for thousands of rows has lost the thread and should refine
@@ -490,8 +499,8 @@ def parse_scan_bounds(
         parsed_end = parse_value(pytype, end_value, field="end_value")
         description = "%s in [%s, %s]%s" % (
             label,
-            value,
-            end_value,
+            _caption_value(value),
+            _caption_value(end_value),
             " (excluded)" if scan_name == "not_between" else "",
         )
         return parsed, parsed_end, description
@@ -501,7 +510,40 @@ def parse_scan_bounds(
             "end_value only applies to scan_type 'between' / 'not_between'; "
             "scan_type=%r takes value alone." % scan_name
         )
-    return parsed, parsed, "%s %s %s" % (label, _SCAN_SYMBOLS[scan_name], value)
+    return parsed, parsed, "%s %s %s" % (
+        label, _SCAN_SYMBOLS[scan_name], _caption_value(value)
+    )
+
+
+def _caption_value(raw: Any) -> str:
+    """``raw`` as quoted in a scan description, cut to a bounded length."""
+    text = str(raw)
+    if len(text) <= MAX_CAPTION_VALUE_CHARS:
+        return text
+    return "%s… (%d chars)" % (text[:MAX_CAPTION_VALUE_CHARS], len(text))
+
+
+def _chain_steps(
+    previous_steps: Sequence[str], elided: int, step: str
+) -> Tuple[Tuple[str, ...], int, str]:
+    """Extend a refine chain by ``step`` and render its description.
+
+    :returns: ``(steps, elided, description)`` — the steps to keep (the first
+        scan plus the most recent refines, at most
+        :data:`MAX_DESCRIPTION_STEPS`), how many were dropped from the middle,
+        and the ``"a -> b -> c"`` caption built from them.
+    """
+    steps = tuple(previous_steps) + (step,)
+    if len(steps) > MAX_DESCRIPTION_STEPS:
+        dropped = len(steps) - MAX_DESCRIPTION_STEPS
+        steps = steps[:1] + steps[1 + dropped :]
+        elided += dropped
+    shown = list(steps)
+    if elided:
+        shown.insert(
+            1, "… (%d earlier refine%s)" % (elided, "" if elided == 1 else "s")
+        )
+    return steps, elided, " -> ".join(shown)
 
 
 def parse_bufflength(raw: int, pytype: Type, *, required: bool) -> Optional[int]:
@@ -631,9 +673,11 @@ class MemoryToolset:
             "platform": host_platform(),
             "write_enabled": self.config.allow_write,
             "write_note": (
-                "Memory writes are available. Each one is confirmed by the "
-                "user's client before it runs, so state plainly what you are "
-                "about to change and why — and never write to an address that "
+                "Memory writes are available. write_value asks clients that "
+                "honour the requiresUserInteraction hint (such as Claude Code) "
+                "to confirm each call, but other clients may run it without "
+                "asking — so state plainly what you are about to change and "
+                "why before you call it, and never write to an address that "
                 "did not come out of a scan or a pointer chain."
                 if self.config.allow_write
                 else "This server was started with --read-only: the "
@@ -748,7 +792,10 @@ class MemoryToolset:
 
         :returns: ``{"status": "ok", "pid": ..., "name": ..., "decision": ...}``,
             or ``{"status": "ambiguous", "candidates": [...]}`` when a name
-            matches several processes.
+            matches several processes. Candidates the policy forbids outright
+            are left out, as :meth:`list_processes` leaves them out; if that
+            leaves one, it is the target, and if it leaves none the policy's
+            refusal is raised.
         """
         if pid and name:
             raise ToolError(
@@ -780,7 +827,7 @@ class MemoryToolset:
             if len(candidates) > 1:
                 try:
                     names = dict(
-                        (found_pid, found_name)
+                        (found_pid, found_name or "")
                         for found_pid, found_name in iter_processes()
                         if found_pid in candidates
                     )
@@ -788,13 +835,26 @@ class MemoryToolset:
                     # Names are a nicety here; the pids are what the caller
                     # needs to disambiguate with.
                     names = {}
-                return {
-                    "status": "ambiguous",
-                    "candidates": [
-                        {"pid": found_pid, "name": names.get(found_pid, "")}
-                        for found_pid in sorted(candidates)
-                    ],
-                }
+                everyone = [
+                    (found_pid, names.get(found_pid, ""))
+                    for found_pid in sorted(candidates)
+                ]
+                # The same filter list_processes applies, so a name never
+                # reveals a process the listing hides. When it hides them all,
+                # the refusal is the one a pid would have got.
+                visible = self.policy.filter(everyone)
+                if not visible:
+                    raise ToolError(self.policy.check(*everyone[0]).reason)
+                if len(visible) > 1:
+                    return {
+                        "status": "ambiguous",
+                        "candidates": [
+                            {"pid": found_pid, "name": found_name}
+                            for found_pid, found_name in visible
+                        ],
+                        "hidden_by_policy": len(everyone) - len(visible),
+                    }
+                candidates = [visible[0][0]]
             pid = candidates[0]
 
         pid = parse_int_arg(pid, "pid")
@@ -888,7 +948,8 @@ class MemoryToolset:
         :param name: a process name (or fragment) to resolve instead, matched
             case-insensitively as a substring. When several processes match,
             no process is opened and the candidates are returned for you to
-            pick a ``pid`` from.
+            pick a ``pid`` from. Processes the policy denies are never among
+            them, just as ``list_processes`` omits them.
 
         Pass exactly one of the two. The returned session stays open until
         ``close_process`` or server shutdown; reuse its id rather than
@@ -907,15 +968,7 @@ class MemoryToolset:
         target = self.resolve_target(pid=pid, name=name)
 
         if target["status"] == "ambiguous":
-            return {
-                "opened": False,
-                "reason": "ambiguous_name",
-                "message": (
-                    '%d processes match "%s". Re-call open_process with one of '
-                    "these pids." % (len(target["candidates"]), name)
-                ),
-                "candidates": target["candidates"],
-            }
+            return ambiguous_name_result(target, name)
 
         decision = target["decision"]
         if not decision.allowed:
@@ -928,14 +981,25 @@ class MemoryToolset:
         return self.attach(target["pid"], target["name"])
 
     def close_process(self, session_id: str) -> Dict[str, Any]:
-        """Detach from a process and drop its scan result sets."""
+        """Detach from a process and drop its scan result sets.
+
+        If another call on the session is still running, it stops at its next
+        check and the process handle is released as soon as it does.
+        """
         session = self.store.close(session_id)
-        return {
+        result: Dict[str, Any] = {
             "closed": True,
             "session_id": session.session_id,
             "pid": session.pid,
             "name": session.name,
         }
+        if not session.handle_closed:
+            result["note"] = (
+                "Another call on this session was still running. The session "
+                "is gone and that call stops at its next check; the process "
+                "handle is released as soon as it does."
+            )
+        return result
 
     def process_info(self, session_id: str) -> Dict[str, Any]:
         """Summarize an open target: bitness, address space, modules, threads.
@@ -983,16 +1047,16 @@ class MemoryToolset:
             "thread_count": len(threads),
             # Named for what it is. The library's `main_thread` convention is
             # "smallest tid", which holds on Linux (POSIX tids are assigned in
-            # order) but not on macOS, where tid is a Mach port *name*, nor
-            # reliably on Windows. Calling it main_thread_id presented a guess
-            # to the model as a fact.
+            # order) and macOS (tid is the system-wide thread id, also
+            # assigned in order) but not reliably on Windows. Calling it
+            # main_thread_id presented a guess to the model as a fact.
             "lowest_thread_id": (
                 min(thread.tid for thread in threads) if threads else None
             ),
             "lowest_thread_id_note": (
                 "The convention for 'the main thread' is the smallest thread "
-                "id. That is only meaningful on Linux — on macOS a tid is a "
-                "Mach port name and on Windows the ordering is not guaranteed."
+                "id. That holds on Linux and macOS, where thread ids are "
+                "assigned in order; on Windows the ordering is not guaranteed."
             ),
         }
 
@@ -1138,7 +1202,7 @@ class MemoryToolset:
         with session.lock, self._target_errors(session, "scan_value"):
             regions = session.snapshot_regions(refresh=True)
             addresses, truncated, timed_out, elapsed = self._run_batched_scan(
-                make_scan, regions
+                make_scan, regions, session
             )
             scan = self.store.new_scan(
                 session,
@@ -1186,7 +1250,7 @@ class MemoryToolset:
             regions = session.snapshot_regions(refresh=True)
             try:
                 addresses, truncated, timed_out, elapsed = self._run_batched_scan(
-                    make_scan, regions
+                    make_scan, regions, session
                 )
             except ValueError as error:
                 raise ToolError(
@@ -1199,7 +1263,7 @@ class MemoryToolset:
                 value_type="pattern",
                 bufflength=None,
                 addresses=addresses,
-                description="pattern %s" % text,
+                description="pattern %s" % _caption_value(text),
                 truncated=truncated,
                 timed_out=timed_out,
             )
@@ -1283,6 +1347,12 @@ class MemoryToolset:
                 "Scan %s has no value width recorded, so it cannot be refined. "
                 "Run a fresh scan_value instead." % scan_id
             )
+        steps, elided, chained = _chain_steps(
+            previous.steps or (previous.description,),
+            previous.elided_steps,
+            description,
+        )
+
         with session.lock, self._target_errors(session, "refine_scan"):
             started = monotonic()
 
@@ -1291,11 +1361,12 @@ class MemoryToolset:
             # integer"), which is a likely refine mistake and exactly the kind
             # of message the SDK would otherwise withhold.
             #
-            # The same byte order `scan_memory` picks: `str` compares
-            # big-endian, everything else in host order. It matters for the
-            # ordered comparisons, which `_TEXT_SCAN_TYPES` currently keeps
-            # away from text — keep the two in step if that guard ever widens.
-            byte_order = "big" if pytype is str else sys.byteorder
+            # The same byte order `scan_memory` picks: `str` and `bytes`
+            # compare big-endian (lexicographically), numbers in host order.
+            # It matters for the ordered comparisons, which `_TEXT_SCAN_TYPES`
+            # currently keeps away from text — keep the two in step if that
+            # guard ever widens.
+            byte_order = "big" if pytype in (str, bytes) else sys.byteorder
 
             target = decode_scan_target(
                 value_to_bytes(pytype, width, parsed), byte_order, pytype
@@ -1326,7 +1397,9 @@ class MemoryToolset:
                 value_type=previous.value_type,
                 bufflength=previous.bufflength,
                 addresses=kept,
-                description="%s -> %s" % (previous.description, description),
+                description=chained,
+                steps=steps,
+                elided_steps=elided,
                 # Narrowing a partial set keeps it partial: the addresses the
                 # original scan never reached are still missing, and saying
                 # otherwise is how a refine chain lies with confidence.
@@ -1717,6 +1790,9 @@ class MemoryToolset:
                     max_results=max_results,
                     memory_regions=regions,
                     progress_callback=progress,
+                    should_stop=lambda: (
+                        session.closing.is_set() or monotonic() >= deadline
+                    ),
                 ):
                     paths.append(
                         {
@@ -1725,14 +1801,19 @@ class MemoryToolset:
                             "static": path.module is not None,
                         }
                     )
-                    # The reverse walk has no progress callback, so this is the
-                    # only place its runtime can be bounded. It is not a
-                    # guarantee — a deep walk can go a long time between yields
-                    # — but it stops a productive-but-endless scan from holding
-                    # the session lock forever.
-                    if monotonic() >= deadline:
-                        timed_out_phase = "path_search"
+                    # `should_stop` above ends the walk itself on a close or
+                    # the deadline, even deep between two yields; checking here
+                    # too stops a productive walk without waiting for the next
+                    # poll. Either way the session lock is released promptly
+                    # (SessionStore.close leaves the handle to be closed then).
+                    if session.closing.is_set() or monotonic() >= deadline:
                         break
+                # The walk ends the same way whether it ran out of graph or was
+                # stopped, so tell the two apart from the cause.
+                if session.closing.is_set():
+                    raise _closed_mid_operation(session, "find_pointer_paths")
+                if monotonic() >= deadline:
+                    timed_out_phase = "path_search"
             except _ScanDeadline:
                 pass
             except (OSError, ValueError, PyMemoryEditorError) as error:
@@ -1976,12 +2057,14 @@ class MemoryToolset:
         self,
         make_scan: Callable[[Sequence[MemoryRegion]], Generator],
         regions: Sequence[MemoryRegion],
+        session: Session,
     ) -> Tuple[List[int], bool, bool, float]:
         """Drive a scan batch by batch, honouring both the count and time caps.
 
         See :func:`PyMemoryEditor.mcp.session.batch_regions` for why the scan is
         split at all: a value scan yields only on hits, so scanning for a rare
-        value gives the consumer no chance to check a clock.
+        value gives the consumer no chance to check a clock. The same check
+        point notices ``session`` being closed, and abandons the scan.
         """
         limit = self.config.max_scan_results
         started = monotonic()
@@ -1992,6 +2075,8 @@ class MemoryToolset:
         timed_out = False
 
         for batch in batch_regions(regions, self.config.scan_batch_bytes):
+            if session.closing.is_set():
+                raise _closed_mid_operation(session, "the scan")
             if monotonic() >= deadline:
                 timed_out = True
                 break
@@ -2153,6 +2238,24 @@ class MemoryToolset:
         return payload
 
 
+def ambiguous_name_result(target: Dict[str, Any], name: str) -> Dict[str, Any]:
+    """The ``open_process`` reply for a name that matched several processes.
+
+    Shared by the toolset's ``open_process`` and the protocol layer's, which
+    resolve the same way and must answer the same way.
+    """
+    return {
+        "opened": False,
+        "reason": "ambiguous_name",
+        "message": (
+            '%d processes match "%s". Re-call open_process with one of '
+            "these pids." % (len(target["candidates"]), name)
+        ),
+        "candidates": target["candidates"],
+        "hidden_by_policy": target.get("hidden_by_policy", 0),
+    }
+
+
 def _truncate_to_span(pytype: Type, value: Any, span: Optional[int]) -> Any:
     """The part of ``value`` that a write of ``span`` bytes actually stores.
 
@@ -2180,6 +2283,15 @@ def _clamp_pointer_arg(name: str, value: Any) -> int:
     low, high = POINTER_SCAN_LIMITS[name]
     resolved = parse_int_arg(value, name, default=POINTER_SCAN_DEFAULTS[name])
     return min(max(resolved, low), high)
+
+
+def _closed_mid_operation(session: Session, action: str) -> SessionError:
+    """The error for an operation that noticed its session being closed."""
+    return SessionError(
+        'Session "%s" was closed while %s was running, so it stopped early and '
+        "its results were discarded. Call open_process to attach again."
+        % (session.session_id, action)
+    )
 
 
 class _ScanDeadline(Exception):
@@ -2258,6 +2370,8 @@ def _permission_hint() -> str:
 
 __all__ = (
     "MAX_ADDRESS",
+    "MAX_CAPTION_VALUE_CHARS",
+    "MAX_DESCRIPTION_STEPS",
     "MAX_OFFSET_MAGNITUDE",
     "MAX_PAGE_SIZE",
     "MAX_TEXT_BYTES",
@@ -2267,6 +2381,7 @@ __all__ = (
     "VALUE_TYPES",
     "MemoryToolset",
     "ToolError",
+    "ambiguous_name_result",
     "format_address",
     "format_offset",
     "format_value",

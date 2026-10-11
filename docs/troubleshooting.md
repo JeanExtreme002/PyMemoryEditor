@@ -10,7 +10,7 @@ The most common first hurdle — the OS is denying access.
 
 <table>
 <tr><th>Platform</th><th>Fix</th></tr>
-<tr><td>🪟 <b>Windows</b></td><td>Run your terminal <b>as Administrator</b>. Anti-cheat-guarded processes may still refuse — that's expected and intentional.</td></tr>
+<tr><td>🪟 <b>Windows</b></td><td>Run your terminal <b>as Administrator</b>. SYSTEM services may still refuse unless your code enables <code>SeDebugPrivilege</code> (PyMemoryEditor never does), and protected processes (anti-cheat, antivirus) cannot be opened at all — that's expected and intentional. If only writing is refused, open read-only with <code>permission=PROCESS_VM_READ | PROCESS_QUERY_INFORMATION</code>.</td></tr>
 <tr><td>🐧 <b>Linux</b></td><td>Run as root, or relax <code>ptrace_scope</code>:<br><code>sudo sysctl kernel.yama.ptrace_scope=0</code><br>Opening your own process always works.</td></tr>
 <tr><td>🍎 <b>macOS</b></td><td>The Python binary must be signed with the <code>com.apple.security.cs.debugger</code> entitlement (or SIP off + root). Opening the <em>current</em> process always works — great for trying things out.</td></tr>
 </table>
@@ -90,6 +90,10 @@ except AmbiguousProcessNameError as exc:
 The given `pid=` doesn't correspond to any running process. The PID may have
 been **recycled** between when you obtained it and when you opened it — this
 happens with short-lived processes.
+
+On Linux it is also raised *after* opening, by a write, scan or listing on a
+process that has since exited — even when the pid now belongs to another
+process. See [Platform Notes → Process identity](platform-notes.md#process-identity).
 
 ## Read / write failures
 

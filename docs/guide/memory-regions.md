@@ -53,8 +53,9 @@ threads or pass through functions without defensive copies.
 The `struct` attribute carries the underlying OS-specific descriptor. You
 usually won't need it — the portable booleans above are enough. When you do:
 
-- **Windows** — `MEMORY_BASIC_INFORMATION_{32,64}` with `Protect` (PAGE_* bitmask)
-  and `Type` (`MEM_PRIVATE` / `MEM_IMAGE` / `MEM_MAPPED`).
+- **Windows** — `MEMORY_BASIC_INFORMATION_{32,64}` (the running Python's
+  layout: `_64` on 64-bit Python, even for a 32-bit target) with `Protect`
+  (PAGE_* bitmask) and `Type` (`MEM_PRIVATE` / `MEM_IMAGE` / `MEM_MAPPED`).
 - **Linux** — a small struct with `Privileges` (bytes like `rwxp` / `rwxs`).
 - **macOS** — a struct with `Protection` (`VM_PROT_*` bitmask) and `Shared`.
 

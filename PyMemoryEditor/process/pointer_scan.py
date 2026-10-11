@@ -125,6 +125,10 @@ class PointerPath:
         :raises ValueError: when this path has no associated module (its base
             came from a caller-supplied static range), so it cannot be rebased.
         :raises LookupError: when the module is not loaded in ``process``.
+
+        When several loaded modules share the name, the first one
+        :meth:`~AbstractProcess.get_modules` lists wins —
+        :meth:`~AbstractProcess.rescan_pointer_paths` picks the same one.
         """
         if self.module is None or self.module_offset is None:
             raise ValueError(
@@ -172,8 +176,8 @@ class PointerPath:
         export files keep working. A bare hex string without the ``0x`` prefix
         (``"1F"``) is rejected rather than guessed at.
 
-        :raises ValueError: if a required field is missing or a numeric field
-            cannot be parsed.
+        :raises ValueError: if a required field is missing, a numeric field
+            cannot be parsed, or ``ptr_size`` is not 4 or 8.
         """
 
         def as_int(value: Union[str, int], name: str) -> int:
@@ -200,13 +204,24 @@ class PointerPath:
                 "'base_address' field, got %r." % (data,)
             )
 
+        # Validated here rather than left to resolve time: a hand-edited
+        # ``"ptr_size": 3`` would otherwise load fine and every walk of the
+        # path would fail — which ``rescan_pointer_paths`` reports by quietly
+        # dropping the path.
+        ptr_size = as_int(data.get("ptr_size", 8), "ptr_size")
+        if ptr_size not in (4, 8):
+            raise ValueError(
+                "pointer path field 'ptr_size' must be 4 (32-bit target) or 8 "
+                "(64-bit target), got %r." % (ptr_size,)
+            )
+
         module_offset = data.get("module_offset")
         return cls(
             base_address=as_int(data["base_address"], "base_address"),
             offsets=tuple(as_int(offset, "offsets") for offset in data.get("offsets", ())),
             module=data.get("module"),
             module_offset=None if module_offset is None else as_int(module_offset, "module_offset"),
-            ptr_size=as_int(data.get("ptr_size", 8), "ptr_size"),
+            ptr_size=ptr_size,
         )
 
     def recipe(self) -> Tuple[Optional[str], Optional[int], Tuple[int, ...]]:
@@ -297,7 +312,8 @@ def build_pointer_map(
         readable/writable set the caller wants in the map).
     :param read_chunk: ``read_chunk(address, size)`` returns the bytes at
         ``address`` or ``None`` to skip an unreadable chunk; it may also raise,
-        in which case the chunk is skipped.
+        in which case the chunk is skipped — except for a library error (a
+        closed or exited process) or ``MemoryError``, which propagate.
     :param mapped_ranges: a value is kept only if it points somewhere inside
         these ranges (a plausible, dereferenceable pointer).
     :param aligned: when ``True`` (default) only consider slots at pointer-size
@@ -323,9 +339,11 @@ def build_pointer_map(
 
             try:
                 data = read_chunk(chunk_address, chunk_size)
-            except PyMemoryEditorError:
+            except (PyMemoryEditorError, MemoryError):
                 # The process is closed or gone: not a skippable page, and an
-                # empty map would be indistinguishable from "no pointers".
+                # empty map would be indistinguishable from "no pointers". The
+                # same goes for an exhausted host: skipping the chunk would
+                # hand back a silently incomplete map.
                 raise
             except Exception:  # noqa: BLE001 — backend read errors vary; skip the chunk
                 data = None
@@ -372,6 +390,12 @@ def build_pointer_map(
     return values, addresses
 
 
+# How many candidate slots the reverse walk visits between two calls of its
+# ``should_stop`` hook: often enough to stop within milliseconds, rarely enough
+# that a clock read per call costs nothing next to the walk itself.
+_STOP_POLL_INTERVAL = 1024
+
+
 def find_pointer_paths(
     target_address: int,
     values: "array.array",
@@ -383,6 +407,7 @@ def find_pointer_paths(
     max_offset: int = 0x400,
     ptr_size: int = 8,
     max_results: Optional[int] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Generator[PointerPath, None, None]:
     """
     Reverse-walk the pointer map (``values`` sorted ascending, ``addresses``
@@ -397,8 +422,24 @@ def find_pointer_paths(
     :param max_offset: largest positive offset a single hop may add — the
         struct-size window the search considers (Cheat Engine's "max offset").
     :param max_results: stop after yielding this many paths (``None`` = no cap).
+    :param should_stop: optional ``should_stop()`` polled during the walk (every
+        ``_STOP_POLL_INTERVAL`` candidate slots); once it returns True the walk
+        ends early, as if the graph were exhausted. A deep walk can run a long
+        time between yields, so a consumer checking only between yields cannot
+        bound it — this can.
     """
     state = {"count": 0}
+    polled = 0
+    stopped = False
+
+    def stop_requested() -> bool:
+        nonlocal polled, stopped
+        if stopped or should_stop is None:
+            return stopped
+        polled += 1
+        if polled % _STOP_POLL_INTERVAL == 0 and should_stop():
+            stopped = True
+        return stopped
 
     def make_path(base_address: int, offsets: Tuple[int, ...]) -> PointerPath:
         resolved = module_resolver(base_address)
@@ -434,6 +475,8 @@ def find_pointer_paths(
         lo = bisect_left(values, current - max_offset)
         hi = bisect_right(values, current)
         for i in range(lo, hi):
+            if stop_requested():
+                return
             slot_address = addresses[i]
             if slot_address in visited:  # break pointer cycles within a path
                 continue

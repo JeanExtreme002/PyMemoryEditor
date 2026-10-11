@@ -2,9 +2,9 @@
 
 from ctypes import (
     Structure,
-    c_char,
     c_ulonglong,
     c_void_p,
+    c_wchar,
     sizeof,
     wintypes,
 )
@@ -52,11 +52,13 @@ class SYSTEM_INFO(Structure):
     ]
 
 
-# Default MEMORY_BASIC_INFORMATION layout based on the running Python's bitness.
-# When the target process has a different bitness (Python x64 attached to a
-# 32-bit target — common with legacy games), prefer
-# `mbi_class_for_handle(handle)` from PyMemoryEditor.win32.functions, which
-# dispatches based on IsWow64Process.
+# MEMORY_BASIC_INFORMATION layout of the running Python. This is the layout
+# VirtualQueryEx fills in for *every* target: NtQueryVirtualMemory always
+# writes the caller's native struct (and rejects a smaller buffer with
+# ERROR_BAD_LENGTH), so a 64-bit Python uses the 64-bit layout even for a
+# 32-bit (WOW64) target. The explicit _32/_64 forms mirror winnt.h's
+# MEMORY_BASIC_INFORMATION32/64, which exist for debuggers decoding a
+# foreign-architecture target's data — not for VirtualQueryEx.
 MEMORY_BASIC_INFORMATION = (
     MEMORY_BASIC_INFORMATION_64
     if sizeof(c_void_p) == 8
@@ -93,13 +95,17 @@ MAX_MODULE_NAME32 = 255
 MAX_PATH = 260
 
 
-class MODULEENTRY32(Structure):
-    """Layout matching the ANSI Win32 ``MODULEENTRY32`` (Module32First/Next).
+class MODULEENTRY32W(Structure):
+    """Layout matching the Unicode Win32 ``MODULEENTRY32W`` (Module32FirstW/NextW).
 
+    The wide variant is used so module names and paths come back as ``str``
+    exactly as Windows stores them; the ANSI ``MODULEENTRY32`` converts them
+    through the active code page, mangling any character outside it.
     ``modBaseAddr`` is declared as a void pointer so it stays pointer-sized on
     both 32- and 64-bit builds; read it as an int via ``entry.modBaseAddr``.
-    ``szModule`` / ``szExePath`` are ``c_char`` arrays — accessing them yields
-    the NUL-terminated bytes directly.
+    ``szModule`` / ``szExePath`` are ``c_wchar`` arrays — accessing them yields
+    the NUL-terminated ``str`` directly. Documented size: 1080 bytes on 64-bit,
+    1064 on 32-bit.
     """
 
     _fields_ = [
@@ -111,8 +117,8 @@ class MODULEENTRY32(Structure):
         ("modBaseAddr", c_void_p),
         ("modBaseSize", wintypes.DWORD),
         ("hModule", wintypes.HMODULE),
-        ("szModule", c_char * (MAX_MODULE_NAME32 + 1)),
-        ("szExePath", c_char * MAX_PATH),
+        ("szModule", c_wchar * (MAX_MODULE_NAME32 + 1)),
+        ("szExePath", c_wchar * MAX_PATH),
     ]
 
 
@@ -121,12 +127,13 @@ class MODULEENTRY32(Structure):
 TH32CS_SNAPPROCESS = 0x00000002
 
 
-class PROCESSENTRY32(Structure):
-    """Layout matching the ANSI Win32 ``PROCESSENTRY32`` (Process32First/Next).
+class PROCESSENTRY32W(Structure):
+    """Layout matching the Unicode Win32 ``PROCESSENTRY32W`` (Process32FirstW/NextW).
 
     ``th32DefaultHeapID`` is a ``ULONG_PTR`` — declared as a void pointer so it
     stays pointer-sized on both 32- and 64-bit builds. ``szExeFile`` is a
-    ``c_char`` array holding the NUL-terminated executable name (no path).
+    ``c_wchar`` array holding the NUL-terminated executable name (no path) as
+    ``str``. Documented size: 568 bytes on 64-bit, 556 on 32-bit.
     """
 
     _fields_ = [
@@ -139,5 +146,5 @@ class PROCESSENTRY32(Structure):
         ("th32ParentProcessID", wintypes.DWORD),
         ("pcPriClassBase", wintypes.LONG),
         ("dwFlags", wintypes.DWORD),
-        ("szExeFile", c_char * MAX_PATH),
+        ("szExeFile", c_wchar * MAX_PATH),
     ]

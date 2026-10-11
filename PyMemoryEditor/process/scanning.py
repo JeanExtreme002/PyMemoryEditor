@@ -8,12 +8,12 @@ The chunking + boundary logic was copy-pasted between `linux/functions.py` and
 in three places. This module owns it once:
 
   - `iter_values_for_addresses` reads the value at each of a sorted list of
-    addresses, grouping syscalls by region and chunk, and yields
-    `(address, value | None)` tuples. Addresses that fall in gaps between
-    regions, or whose `[address, address+bufflength)` would extend past the
-    last chunk of the containing region, yield `(address, None)` — the
-    previous per-backend code silently dropped gap-addresses and zero-padded
-    truncated reads.
+    addresses, grouping nearby addresses of the same region into one syscall,
+    and yields `(address, value | None)` tuples. Addresses that fall in gaps
+    between regions, or whose `[address, address+bufflength)` would extend
+    past the containing region into unmapped memory, yield `(address, None)`
+    — the previous per-backend code silently dropped gap-addresses and
+    zero-padded truncated reads.
 
   - `iter_search_results` walks every chunk of every region and yields
     `(found_address, chunk_offset, region_index)` triples driven by a
@@ -46,6 +46,8 @@ from ..util import (
     scan_memory,
     scan_memory_for_exact_value,
 )
+from ..util.pattern import is_fixed_width
+from .errors import PyMemoryEditorError
 from .region import MemoryRegion, MemoryRegionSnapshot
 
 
@@ -65,7 +67,7 @@ T = TypeVar("T")
 
 
 def _ensure_sorted_by_address(
-    memory_regions: Sequence[MemoryRegion],
+    memory_regions: Iterable[MemoryRegion],
 ) -> Sequence[MemoryRegion]:
     """
     Return ``memory_regions`` sorted by ``address``, reusing the input verbatim
@@ -74,13 +76,25 @@ def _ensure_sorted_by_address(
 
     The optimization matters in tight refine-scan loops where snapshots are
     reused across many ``search_by_addresses`` / ``search_by_value*`` calls;
-    re-sorting a 100k-region list per call would dominate the runtime.
+    re-sorting a 100k-region list per call would dominate the runtime. Any
+    other iterable (a plain list, a tuple, a generator) is materialized into a
+    new sorted list, so backends can pass the caller's ``memory_regions``
+    through untouched and the snapshot tag survives.
     """
-    if not memory_regions:
-        return memory_regions
     if isinstance(memory_regions, MemoryRegionSnapshot):
         return memory_regions
     return sorted(memory_regions, key=lambda region: region.address)
+
+
+def _as_region_sequence(
+    memory_regions: Iterable[MemoryRegion],
+) -> Sequence[MemoryRegion]:
+    """Materialize a one-shot iterable: the scan drivers walk the regions twice
+    (once to total the size for progress, once to scan). A list — snapshot or
+    not — is returned as is."""
+    if isinstance(memory_regions, Sequence):
+        return memory_regions
+    return list(memory_regions)
 
 
 def _always_false(_exc: BaseException) -> bool:
@@ -88,9 +102,25 @@ def _always_false(_exc: BaseException) -> bool:
     return False
 
 
+# What a ``read_chunk`` may raise for a read that failed: every backend reports
+# I/O failures as an ``OSError`` subclass (``MachReadError``,
+# ``_LinuxPartialIOError``, ``_Win32ChunkReadError`` / ``_Win32FatalReadError``)
+# and a closed process as a library error. Anything else — a ``TypeError`` from
+# a bad buffer, a ``MemoryError`` — is a bug or an exhausted host, not a dead
+# page, and propagates even with ``raise_error=False``.
+_READ_ERRORS = (OSError, PyMemoryEditorError)
+
+
+# Two requested addresses closer than this share one read: copying the gap is
+# cheaper than another syscall. Farther apart, each cluster gets its own read,
+# so a handful of addresses in a 256 MiB region no longer pulls in the whole
+# chunk.
+_ADDRESS_WINDOW_GAP = 64 * 1024
+
+
 def iter_values_for_addresses(
     addresses: Sequence[int],
-    memory_regions: Sequence[MemoryRegion],
+    memory_regions: Iterable[MemoryRegion],
     pytype: Type[T],
     bufflength: int,
     read_chunk: Callable[[int, int], "ctypes.Array"],
@@ -99,22 +129,32 @@ def iter_values_for_addresses(
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """
-    Yield `(address, value)` for each address, reading memory in region-level
-    chunks. `read_chunk(address, size)` is expected to return a ctypes byte
-    array (or any object supporting `[start:end]` byte slicing) or raise.
+    Yield `(address, value)` for each address in ascending address order.
+    `read_chunk(address, size)` is expected to return a ctypes byte array (or
+    any object supporting the buffer protocol) or raise.
+
+    Reads are grouped: addresses of the same region chunk that lie within
+    ``_ADDRESS_WINDOW_GAP`` bytes of each other share one read, which spans
+    from the first of them to the end of the last value. Only the bytes the
+    values need (plus small gaps) are read, never the whole chunk.
 
     Failures:
       - Address falls in a gap between regions → yield (address, None).
-      - Address is in a region but the read fails: if the error is classified
-        transient (page gone) by `transient_error_check`, yield (address, None).
+      - Address is in a region but the read fails with an I/O error (an
+        ``OSError`` or a library error): if the error is classified transient
+        (page gone) by `transient_error_check`, yield (address, None).
         Otherwise: if `raise_error` is True, propagate the exception; else
-        yield (address, None) and continue.
+        yield (address, None) and continue. Any other exception is a bug and
+        always propagates.
       - Address is near the very end of the region and `address + bufflength`
-        extends past the region — yield (address, None). The previous code
-        silently zero-padded.
+        extends past it: when the following regions continue the range
+        without a gap (and are readable), the value is read directly, the way
+        ``read_process_memory`` would; otherwise yield (address, None). The
+        previous code silently zero-padded.
     """
     if transient_error_check is None:
         transient_error_check = _always_false
+    is_transient = transient_error_check
 
     # Validate the width once, up front. A width the type cannot represent is
     # a caller error, not an I/O failure, so it propagates regardless of
@@ -125,10 +165,67 @@ def iter_values_for_addresses(
 
     sorted_addresses = sorted(addresses)
     sorted_regions = _ensure_sorted_by_address(memory_regions)
+    address_count = len(sorted_addresses)
     address_index = 0
     region_index = 0
 
-    while address_index < len(sorted_addresses):
+    def read(address: int, size: int) -> Optional[memoryview]:
+        """``read_chunk`` as one contiguous byte view, or ``None`` when the
+        read failed in a way the caller allows us to skip."""
+        try:
+            data = read_chunk(address, size)
+        except _READ_ERRORS as exc:
+            if not is_transient(exc) and raise_error:
+                raise
+            _logger.debug(
+                "iter_values_for_addresses: skipping read at 0x%X (%d bytes): %s",
+                address,
+                size,
+                exc,
+            )
+            return None
+        if data is None:  # a backend signalling a transient miss without raising
+            return None
+        # One contiguous byte view per read: slicing it below gives a buffer
+        # `from_buffer_copy` accepts (a single memcpy) instead of a list of
+        # ints that would have to be re-packed element by element. Works for
+        # ctypes arrays, bytes and bytearray alike.
+        return memoryview(data).cast("B")
+
+    def decode(view: memoryview, offset: int) -> Optional[T]:
+        raw = view[offset : offset + bufflength]
+        if len(raw) < bufflength:
+            # Defensive: the backend returned fewer bytes than requested.
+            # Don't silently zero-pad.
+            return None
+        try:
+            data = (ctypes.c_byte * bufflength).from_buffer_copy(raw)
+            return convert_from_byte_array(data, pytype, bufflength)
+        except (ValueError, UnicodeDecodeError, OSError):
+            if raise_error:
+                raise
+            return None
+
+    def read_straddling(target_address: int, current: int) -> Optional[T]:
+        """A value running past the end of ``sorted_regions[current]``: read it
+        directly when the next regions continue the range without a gap — the
+        region list splits wherever the protection changes, so adjacent
+        regions are one readable span to the OS — else report it unreadable."""
+        needed_end = target_address + bufflength
+        covered_end = sorted_regions[current].address + sorted_regions[current].size
+        following = current + 1
+        while covered_end < needed_end and following < len(sorted_regions):
+            neighbour = sorted_regions[following]
+            if neighbour.address > covered_end or not neighbour.is_readable:
+                break
+            covered_end = max(covered_end, neighbour.address + neighbour.size)
+            following += 1
+        if covered_end < needed_end:
+            return None
+        view = read(target_address, bufflength)
+        return None if view is None else decode(view, 0)
+
+    while address_index < address_count:
         current_address = sorted_addresses[address_index]
 
         # Advance past regions that end before the current address.
@@ -147,6 +244,7 @@ def iter_values_for_addresses(
         region = sorted_regions[region_index]
         base_address = region.address
         size = region.size
+        region_end = base_address + size
 
         # Address falls in the gap before this region (and no earlier region holds it).
         if current_address < base_address:
@@ -155,88 +253,66 @@ def iter_values_for_addresses(
             continue
 
         # We have a region containing `current_address`. Walk its chunks and
-        # consume every address that lies inside the region.
+        # consume every address that lies inside the region. The chunks only
+        # bound how far one read may reach (no read spans more than a chunk
+        # plus `bufflength - 1` bytes); within a chunk the addresses are
+        # clustered into windows and each window is read on its own.
         for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
-            if address_index >= len(sorted_addresses):
+            if address_index >= address_count:
                 break
 
-            chunk_address = base_address + chunk_offset
-            chunk_end = chunk_address + chunk_size
-
+            chunk_end = base_address + chunk_offset + chunk_size
             if sorted_addresses[address_index] >= chunk_end:
                 continue
 
-            # Read up to `bufflength - 1` bytes past the chunk so addresses
-            # near the chunk boundary (but still inside the same region)
-            # can still be fully decoded. The last chunk of a region can't
-            # extend past the region end — addresses near that boundary will
-            # be detected and yielded as None below.
-            extra = bufflength - 1 if chunk_offset + chunk_size < size else 0
-            read_size = chunk_size + extra
-
-            try:
-                chunk_data = read_chunk(chunk_address, read_size)
-                # One contiguous byte view per chunk: slicing it below gives a
-                # buffer `from_buffer_copy` accepts (a single memcpy) instead
-                # of a list of ints that would have to be re-packed element by
-                # element. Works for ctypes arrays, bytes and bytearray alike.
-                chunk_view = memoryview(chunk_data).cast("B")
-            except Exception as exc:  # noqa: BLE001 — backend errors vary
-                transient = transient_error_check(exc)
-                if not transient and raise_error:
-                    raise
-                _logger.debug(
-                    "iter_values_for_addresses: skipping chunk at 0x%X (%d bytes): %s",
-                    chunk_address,
-                    read_size,
-                    exc,
-                )
-                while (
-                    address_index < len(sorted_addresses)
-                    and sorted_addresses[address_index] < chunk_end
-                    and sorted_addresses[address_index] >= base_address
-                ):
-                    yield sorted_addresses[address_index], None
-                    address_index += 1
-                continue
-
             while (
-                address_index < len(sorted_addresses)
+                address_index < address_count
                 and sorted_addresses[address_index] < chunk_end
-                and sorted_addresses[address_index] >= base_address
             ):
-                target_address = sorted_addresses[address_index]
-                offset_in_chunk = target_address - chunk_address
+                # Grow a window while the next address is close to the end of
+                # the bytes already needed. A value that would straddle the
+                # region's end is the last thing in the region (addresses are
+                # sorted), needs no bytes from this window, and is handled
+                # separately below.
+                window_first = address_index
+                window_start = sorted_addresses[window_first]
+                window_end = window_start
+                window_stop = window_first
+                while (
+                    window_stop < address_count
+                    and sorted_addresses[window_stop] < chunk_end
+                    and sorted_addresses[window_stop] <= window_end + _ADDRESS_WINDOW_GAP
+                ):
+                    target_address = sorted_addresses[window_stop]
+                    if target_address + bufflength <= region_end:
+                        window_end = target_address + bufflength
+                    window_stop += 1
 
-                # Reject reads that would straddle the region's end (the only
-                # remaining case where chunk_data could be too short).
-                if target_address + bufflength > base_address + size:
-                    yield target_address, None
-                    address_index += 1
-                    continue
+                view: Optional[memoryview] = None
+                read_failed = False
+                if window_end > window_start:
+                    view = read(window_start, window_end - window_start)
+                    read_failed = view is None
 
-                try:
-                    raw = chunk_view[offset_in_chunk : offset_in_chunk + bufflength]
-                    if len(raw) < bufflength:
-                        # Defensive: the backend returned fewer bytes than
-                        # requested. Don't silently zero-pad.
+                for index in range(window_first, window_stop):
+                    target_address = sorted_addresses[index]
+                    if read_failed:
                         yield target_address, None
-                        address_index += 1
-                        continue
-                    data = (ctypes.c_byte * bufflength).from_buffer_copy(raw)
-                    yield target_address, convert_from_byte_array(
-                        data, pytype, bufflength
-                    )
-                except (ValueError, UnicodeDecodeError, OSError) as error:
-                    if raise_error:
-                        raise error
-                    yield target_address, None
+                    elif target_address + bufflength > region_end:
+                        yield target_address, read_straddling(
+                            target_address, region_index
+                        )
+                    else:
+                        assert view is not None
+                        yield target_address, decode(
+                            view, target_address - window_start
+                        )
 
-                address_index += 1
+                address_index = window_stop
 
 
 def iter_search_results(
-    memory_regions: Sequence[MemoryRegion],
+    memory_regions: Iterable[MemoryRegion],
     pytype: Type,
     bufflength: int,
     target_value_bytes: Union[bytes, Tuple[bytes, ...]],
@@ -273,6 +349,8 @@ def iter_search_results(
     """
     if transient_error_check is None:
         transient_error_check = _always_false
+
+    memory_regions = _as_region_sequence(memory_regions)
 
     memory_total = 0
     for region in memory_regions:
@@ -369,8 +447,32 @@ def iter_search_results(
         checked_memory_size += size
 
 
+def _iter_match_starts(
+    compiled_pattern: "Pattern[bytes]", data: bytes, overlapping: bool
+) -> Generator[int, None, None]:
+    """Ascending start offsets of the matches of ``compiled_pattern`` in
+    ``data``. ``overlapping`` restarts the search one byte after each match's
+    start instead of at its end, so a match beginning inside the previous one
+    is reported too (a zero-width match advances one byte either way)."""
+    if not overlapping:
+        for found in compiled_pattern.finditer(data):
+            yield found.start()
+        return
+    search = compiled_pattern.search
+    position = 0
+    # ``search`` clamps a start past the end back to ``len(data)``, where a
+    # zero-width pattern would match forever — stop once we are past it.
+    while position <= len(data):
+        match = search(data, position)
+        if match is None:
+            return
+        start = match.start()
+        yield start
+        position = start + 1
+
+
 def iter_pattern_results(
-    memory_regions: Sequence[MemoryRegion],
+    memory_regions: Iterable[MemoryRegion],
     compiled_pattern: "Pattern[bytes]",
     pattern_length: int,
     read_chunk: Callable[[int, int], Any],
@@ -394,11 +496,23 @@ def iter_pattern_results(
     straddling a chunk boundary are still detected; matches that fall in
     the overlap region are clamped so each address is attributed to
     exactly one chunk.
+
+    A fixed-width pattern (every IDA-style signature) reports overlapping
+    matches — ``90 90`` over ``90 90 90`` yields offsets 0 and 1, the same
+    as a value scan for those bytes. A variable-width regex follows
+    ``re.finditer`` (leftmost, non-overlapping), so a long match is not
+    re-reported once per suffix.
     """
     if transient_error_check is None:
         transient_error_check = _always_false
 
     pattern_length = max(1, pattern_length)
+    memory_regions = _as_region_sequence(memory_regions)
+    # A fixed-width pattern reports overlapping matches, like a value scan
+    # (``90 90`` over ``90 90 90`` → offsets 0 and 1); a variable-width regex
+    # keeps ``finditer``'s leftmost non-overlapping matches. See
+    # ``util.pattern.is_fixed_width``.
+    overlapping = is_fixed_width(compiled_pattern)
 
     memory_total = 0
     for region in memory_regions:
@@ -435,17 +549,17 @@ def iter_pattern_results(
             if chunk_data is None:
                 continue
 
-            # ``compiled_pattern.finditer`` needs a real bytes object. Convert
-            # once per chunk; ctypes arrays expose the buffer protocol so this
-            # is a single memcpy.
+            # The regex engine needs a real bytes object. Convert once per
+            # chunk; ctypes arrays expose the buffer protocol so this is a
+            # single memcpy.
             data_bytes = bytes(chunk_data)
 
-            for match in compiled_pattern.finditer(data_bytes):
-                offset = match.start()
+            for offset in _iter_match_starts(compiled_pattern, data_bytes, overlapping):
                 # Same clamping rule as iter_search_results: matches in the
-                # overlap belong to the *next* chunk's emission slot.
+                # overlap belong to the *next* chunk's emission slot. Starts
+                # ascend, so nothing after this one belongs here either.
                 if offset >= chunk_size:
-                    continue
+                    break
                 found_address = chunk_address + offset
 
                 if progress_information:

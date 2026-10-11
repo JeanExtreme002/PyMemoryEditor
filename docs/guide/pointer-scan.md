@@ -24,7 +24,7 @@ It carries everything you need to reconstruct the chain in another run.
 ## Method signature
 
 ```{eval-rst}
-.. py:method:: scan_pointer_paths(target_address, *, max_depth=3, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None)
+.. py:method:: scan_pointer_paths(target_address, *, max_depth=3, max_offset=0x400, ptr_size=None, aligned=True, writable_only=True, static_ranges=None, max_results=None, memory_regions=None, progress_callback=None, should_stop=None)
    :no-index:
 
    :param int target_address: the dynamic address to find pointer paths to
@@ -48,7 +48,12 @@ It carries everything you need to reconstruct the chain in another run.
    :param memory_regions: optional snapshot from
       :py:meth:`snapshot_memory_regions`.
    :param progress_callback: a callable ``callback(fraction)`` invoked as the
-      pointer map is built (the long phase), ``fraction`` in ``[0, 1]``.
+      pointer map is built (the long phase), ``fraction`` in ``[0, 1]``. Raise
+      from it to abort the map build.
+   :param should_stop: a callable ``should_stop()`` polled during the path
+      search; once it returns ``True`` the search ends and no more paths are
+      yielded. The search can run a long time between two paths, so this is
+      how a deadline or a cancel button bounds it.
    :returns: a generator of :py:class:`PointerPath`.
 ```
 

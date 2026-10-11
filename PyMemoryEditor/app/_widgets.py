@@ -84,6 +84,39 @@ def _reap_detached_worker(worker: QThread) -> None:
     worker.deleteLater()
 
 
+def run_after_detached_workers(callback: Callable[[], None]) -> None:
+    """Run ``callback`` once every currently detached worker has finished.
+
+    A detached worker can still be inside a backend syscall on the process it
+    was given, so releasing that process (``close()``) must wait for it: on
+    Windows the handle value can be recycled for an unrelated object the moment
+    it is closed, and a late write from the cheat poller would land there.
+    With no worker still running, ``callback`` runs immediately.
+    """
+    pending = [worker for worker in _DETACHED_WORKERS if worker.isRunning()]
+    if not pending:
+        callback()
+        return
+
+    remaining = set(pending)
+    done = False
+
+    def _on_finished(worker: QThread) -> None:
+        nonlocal done
+        remaining.discard(worker)
+        if remaining or done:
+            return
+        done = True
+        callback()
+
+    for worker in pending:
+        worker.finished.connect(lambda w=worker: _on_finished(w))
+    # Same race as detach_worker: one may have finished before its connect.
+    for worker in pending:
+        if worker.isFinished():
+            _on_finished(worker)
+
+
 class TearsDownOnClose:
     """Mixin that runs a dialog's teardown on *every* way out, not just close.
 

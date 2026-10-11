@@ -85,8 +85,16 @@ MACH_SEND_INVALID_DEST = 0x10000003
 
 
 class vm_region_basic_info_64(Structure):
-    """Layout of struct vm_region_basic_info_64 from <mach/vm_region.h>."""
+    """Layout of struct vm_region_basic_info_64 from <mach/vm_region.h>.
 
+    The header wraps its structs in ``#pragma pack(push, 4)``, so the 8-byte
+    ``offset`` sits at offset 20 (not 24) and the struct is 36 bytes — 9
+    natural_t units, the kernel's ``VM_REGION_BASIC_INFO_COUNT_64``. Without
+    ``_pack_`` ctypes pads it to 40 bytes, putting ``offset`` / ``behavior`` /
+    ``user_wired_count`` at the wrong offsets and over-stating the count.
+    """
+
+    _pack_ = 4
     _fields_ = [
         ("protection", vm_prot_t),
         ("max_protection", vm_prot_t),
@@ -111,8 +119,13 @@ class vm_region_extended_info(Structure):
     see :data:`VM_MEMORY_SHARED_PMAP`); the remaining fields are declared so the
     struct size — and therefore :data:`VM_REGION_EXTENDED_INFO_COUNT` — matches
     what the kernel expects.
+
+    Same ``#pragma pack(4)`` block as :class:`vm_region_basic_info_64`; every
+    field here is at most 4 bytes, so packing does not change the layout, but
+    it is declared for fidelity with the header.
     """
 
+    _pack_ = 4
     _fields_ = [
         ("protection", vm_prot_t),
         ("user_tag", c_uint),
@@ -138,8 +151,12 @@ class task_dyld_info_data_t(Structure):
     ``all_image_info_addr`` is the address, *inside the target task*, of dyld's
     ``dyld_all_image_infos`` structure — the entry point for enumerating the
     Mach-O images loaded in the process.
+
+    <mach/task_info.h> is under ``#pragma pack(push, 4)``: the struct is 20
+    bytes (``TASK_DYLD_INFO_COUNT`` = 5), not the 24 ctypes would pad it to.
     """
 
+    _pack_ = 4
     _fields_ = [
         ("all_image_info_addr", mach_vm_address_t),
         ("all_image_info_size", mach_vm_size_t),
@@ -150,6 +167,28 @@ class task_dyld_info_data_t(Structure):
 # task_info() reports the buffer length in natural_t (4-byte) units, like
 # mach_vm_region's info_count.
 TASK_DYLD_INFO_COUNT = sizeof(task_dyld_info_data_t) // _NATURAL_T_SIZE
+
+
+# thread_info() flavor and layout from <mach/thread_info.h>.
+THREAD_IDENTIFIER_INFO = 4
+
+
+class thread_identifier_info_data_t(Structure):
+    """Layout of struct thread_identifier_info from <mach/thread_info.h>.
+
+    ``thread_id`` is the system-wide, never-reused thread id — the value
+    ``pthread_threadid_np`` returns and lldb / Activity Monitor show — unlike
+    the Mach port name, which is local to the caller's IPC space.
+    """
+
+    _fields_ = [
+        ("thread_id", c_uint64),
+        ("thread_handle", c_uint64),
+        ("dispatch_qaddr", c_uint64),
+    ]
+
+
+THREAD_IDENTIFIER_INFO_COUNT = sizeof(thread_identifier_info_data_t) // _NATURAL_T_SIZE
 
 
 class MEMORY_BASIC_INFORMATION(Structure):

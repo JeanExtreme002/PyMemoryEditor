@@ -24,8 +24,9 @@ mean "this platform does not expose that attribute via the API we use".
         this.
       - **Windows** — kernel-assigned global thread id (DWORD) from
         ``THREADENTRY32``.
-      - **macOS** — Mach thread port name from ``task_threads``. Not the
-        BSD pthread id.
+      - **macOS** — system-wide thread id from
+        ``thread_info(THREAD_IDENTIFIER_INFO)``; the value
+        ``pthread_threadid_np`` returns and lldb shows. Stable across calls.
 
    .. py:attribute:: start_address
       :type: Optional[int]
@@ -47,16 +48,18 @@ mean "this platform does not expose that attribute via the API we use".
 
       Scheduling priority value as reported by the OS (scale is
       platform-specific). Populated on **Linux and Windows**; always ``None`` on
-      macOS, whose ``get_threads`` returns Mach thread ports without the extra
-      per-thread ``thread_info`` call that priority/state would require.
+      macOS, whose ``get_threads`` asks ``thread_info`` only for the thread
+      id, not for the basic info that priority/state would require.
 
    .. py:attribute:: raw
       :type: Any
 
       Underlying platform handle/struct (``THREADENTRY32`` on Windows, the
-      TID string from ``/proc/<pid>/task/`` on Linux, a Mach port int on
-      macOS). Useful for advanced callers that need to make follow-up
-      OS-specific calls.
+      TID string from ``/proc/<pid>/task/`` on Linux, the Mach thread port
+      name on macOS). Useful for advanced callers that need to make follow-up
+      OS-specific calls. On macOS the send right behind that name is released
+      before the thread is yielded, so for another process it is an
+      identifier, not a live port.
 ```
 
 ```{admonition} Don't mix tids across platforms

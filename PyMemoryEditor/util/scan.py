@@ -417,7 +417,9 @@ def scan_memory(
       - int   → signed integer (struct b/h/i/q)
       - float → IEEE-754 (struct f/d)
       - bool  → unsigned 1-byte
-      - str / bytes → bytewise comparison, step=1 (a match can start at any byte)
+      - str / bytes → bytewise (lexicographic, first byte most significant)
+        comparison, step=1 (a match can start at any byte) — the order Python
+        uses to compare two ``bytes`` / ``str`` values
       - None  → bytewise comparison aligned to `target_value_size`
 
     Numeric values at a natural width (1, 2, 4 or 8 bytes) are stepped by
@@ -439,9 +441,14 @@ def scan_memory(
     """
     _validate_scan_target(target_value, target_value_size)
 
-    is_string = pytype is str
+    # Text (``str`` and ``bytes``) orders lexicographically — first byte most
+    # significant — which is the big-endian integer view of the window. That
+    # is how Python compares two ``bytes`` / ``str`` values, so a refine step
+    # that compares the values it reads back (the GUI's next scan) agrees with
+    # the first scan. Numbers decode in host order.
     # sys.byteorder is typed as Literal["little", "big"] — preserve that
     # narrowing for the downstream int.from_bytes / struct.unpack calls.
+    is_string = pytype is str or pytype is bytes
     byte_order: _ByteOrder = cast(_ByteOrder, "big" if is_string else sys.byteorder)
 
     # First byte of each target, used by the string fast path below to build the
@@ -541,14 +548,14 @@ def scan_memory(
     data = _as_bytes(memory_region_data)
     step = (
         1
-        if is_string or pytype is bytes or not aligned or target_value_size not in _NATURAL_WIDTHS
+        if is_string or not aligned or target_value_size not in _NATURAL_WIDTHS
         else target_value_size
     )
     end = memory_region_data_size - target_value_size + 1
     int_from_bytes = int.from_bytes
     signed = pytype is int
 
-    # Fast path for ordered string comparisons. Strings compare big-endian, so a
+    # Fast path for ordered text comparisons. Text compares big-endian, so a
     # window can only match when its first byte falls in a known range; a regex
     # byte-class prefilter finds those candidates in C, skipping the huge NUL
     # runs of reserved memory instead of stepping every byte in Python. Numerics

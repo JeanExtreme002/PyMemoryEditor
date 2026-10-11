@@ -168,6 +168,17 @@ class TestRegistration:
         assert "refine_scan" in INSTRUCTIONS
         assert "server_info" in INSTRUCTIONS
 
+    def test_instructions_mark_target_memory_as_untrusted(self):
+        # The model reads strings out of a process it does not control; the
+        # guidance it gets up front has to say those are data, not orders.
+        assert "untrusted data" in INSTRUCTIONS
+        assert "never instructions" in INSTRUCTIONS
+
+    def test_instructions_do_not_promise_every_write_is_confirmed(self):
+        # The per-write prompt depends on the client honouring a hint.
+        assert "confirms every write" not in INSTRUCTIONS
+        assert "not all do" in INSTRUCTIONS
+
 
 class TestAnnotations:
     def _annotations(self, server, name):
@@ -734,3 +745,134 @@ class TestRememberingANamelessTarget:
         payload = _payload(asyncio.run(run()))
         assert payload["approval_remembered"] is True
         assert toolset.policy.granted_names == ("faketarget",)
+
+
+class TestOpenProcessKeepsTheEventLoopFree:
+    """`open_process` is async (it awaits the approval prompt), so the SDK does
+    not move it to a worker thread the way it does sync tools. Its blocking
+    steps -- enumerating processes, reaping dead sessions, opening the handle
+    -- have to be dispatched by hand, or each one stalls every other request.
+    """
+
+    def _instrument(self, toolset):
+        import threading
+
+        calls = []
+
+        def record(name, function):
+            def wrapper(*args, **kwargs):
+                calls.append((name, threading.current_thread()))
+                return function(*args, **kwargs)
+
+            return wrapper
+
+        toolset.resolve_target = record("resolve_target", toolset.resolve_target)
+        toolset.attach = record("attach", toolset.attach)
+        toolset.store.capacity_refusal = record(
+            "capacity_refusal", toolset.store.capacity_refusal
+        )
+        return calls
+
+    def _open(self, server_config, answerer=None):
+        import threading
+
+        process = FakeProcess()
+        toolset = _toolset_for(process, server_config)
+        calls = self._instrument(toolset)
+        server, _toolset = build_server(server_config, toolset=toolset)
+        loop_thread = {}
+
+        async def run():
+            loop_thread["thread"] = threading.current_thread()
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        return result, calls, loop_thread["thread"]
+
+    def test_the_approval_path_runs_its_blocking_steps_off_the_loop(self):
+        result, calls, loop = self._open(ServerConfig(), Answerer("accept"))
+
+        assert result.is_error is False
+        # Ordering is part of the contract: capacity before asking the user,
+        # and attach (which re-checks it) only after they approved.
+        assert [name for name, _thread in calls] == [
+            "resolve_target", "capacity_refusal", "attach",
+        ]
+        assert all(thread is not loop for _name, thread in calls)
+
+    def test_the_preapproved_path_runs_off_the_loop(self):
+        result, calls, loop = self._open(config())
+
+        assert result.is_error is False
+        assert [name for name, _thread in calls] == ["resolve_target", "attach"]
+        assert all(thread is not loop for _name, thread in calls)
+
+    def test_a_slow_resolve_does_not_stall_the_loop(self):
+        import time
+
+        process = FakeProcess()
+        server_config = config()
+        toolset = _toolset_for(process, server_config)
+        original = toolset.resolve_target
+
+        def slow_resolve(**kwargs):
+            time.sleep(0.3)
+            return original(**kwargs)
+
+        toolset.resolve_target = slow_resolve
+        server, _toolset = build_server(server_config, toolset=toolset)
+
+        async def run():
+            ticks = 0
+
+            async def ticker():
+                nonlocal ticks
+                while True:
+                    await anyio.sleep(0.01)
+                    ticks += 1
+
+            async with connected(server) as session:
+                async with anyio.create_task_group() as group:
+                    group.start_soon(ticker)
+                    result = await session.call_tool("open_process", {"pid": 4242})
+                    group.cancel_scope.cancel()
+            return result, ticks
+
+        result, ticks = asyncio.run(run())
+
+        assert result.is_error is False
+        assert ticks >= 5, "the event loop was blocked while resolving the target"
+
+
+class TestAmbiguousNameOverTheProtocol:
+    def test_the_reply_matches_the_toolset_and_hides_denied_processes(
+        self, monkeypatch
+    ):
+        from PyMemoryEditor.mcp import toolset as toolset_module
+        from PyMemoryEditor.mcp.policy import system_process_names
+
+        denied = sorted(system_process_names())
+        if not denied:
+            pytest.skip("no system denylist on this platform")
+        fleet = [(9001, "game"), (9002, "game"), (9003, denied[0])]
+        monkeypatch.setattr(toolset_module, "iter_processes", lambda: iter(fleet))
+        monkeypatch.setattr(
+            toolset_module,
+            "get_process_ids_by_name",
+            lambda name, **_kwargs: [pid for pid, _name in fleet],
+        )
+
+        server_config = ServerConfig()
+        toolset = _toolset_for(FakeProcess(), server_config)
+        server, _toolset = build_server(server_config, toolset=toolset)
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"name": "game"})
+
+        payload = _payload(asyncio.run(run()))
+
+        assert payload == toolset.open_process(name="game")
+        assert [c["pid"] for c in payload["candidates"]] == [9001, 9002]
+        assert payload["hidden_by_policy"] == 1

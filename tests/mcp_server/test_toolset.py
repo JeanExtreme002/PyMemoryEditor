@@ -28,11 +28,14 @@ class TestServerInfo:
         info = make_toolset(config()).server_info()
         assert info["write_enabled"] is True
 
-    def test_default_note_tells_the_model_writes_are_confirmed(self, make_toolset):
-        # So it explains what it is about to change instead of firing a write
-        # the user then has to judge blind.
-        info = make_toolset(config()).server_info()
-        assert "confirmed" in info["write_note"]
+    def test_default_note_does_not_promise_every_client_confirms(self, make_toolset):
+        # The per-write prompt comes from a hint only some clients honour, so
+        # the note says that, and still asks the model to explain the change
+        # before making it rather than firing a write the user judges blind.
+        note = make_toolset(config()).server_info()["write_note"]
+        assert "requiresUserInteraction" in note
+        assert "may run it without asking" in note
+        assert "state plainly what you are about to change" in note
 
     def test_read_only_note_names_the_flag(self, make_toolset):
         info = make_toolset(config(allow_write=False)).server_info()
@@ -1846,3 +1849,296 @@ class TestAPageWhoseReadFailsSaysSo:
         assert rows, "the addresses are still worth returning"
         assert all(row["readable"] is False for row in rows)
         assert all(row["value"] is None for row in rows)
+
+
+class TestScanDescriptionsStayBounded:
+    """A description is repeated in every scan, refine and page of results, so
+    it must not grow with the value's length or the refine chain's."""
+
+    def test_a_long_text_value_is_cut_in_the_description(self, toolset, session, fake_process):
+        text = "A" * 2000
+        fake_process.poke(WRITABLE_BASE + 0x10, str, text, len(text))
+        scan = toolset.scan_value(session["session_id"], "str", text)
+
+        description = scan["description"]
+        assert len(description) < toolset_module.MAX_CAPTION_VALUE_CHARS + 40
+        assert "(2000 chars)" in description
+
+    def test_a_long_refine_chain_keeps_the_first_and_latest_steps(
+        self, toolset, session, fake_process
+    ):
+        fake_process.poke(WRITABLE_BASE + 0x40, int, 5)
+        scan = toolset.scan_value(session["session_id"], "int", "5", bufflength=4)
+        first = scan["description"]
+
+        lengths = []
+        for value in range(5, 25):
+            fake_process.poke(WRITABLE_BASE + 0x40, int, value)
+            scan = toolset.refine_scan(scan["scan_id"], "exact", str(value))
+            lengths.append(len(scan["description"]))
+
+        description = scan["description"]
+        steps = description.split(" -> ")
+        assert steps[0] == first
+        assert steps[-1] == "int == 24"
+        assert "earlier refines" in steps[1]
+        assert len(steps) == toolset_module.MAX_DESCRIPTION_STEPS + 1
+        # Bounded: the last refines all render at (about) the same length.
+        assert max(lengths[-5:]) - min(lengths[-5:]) <= 2
+
+        listed = toolset.list_scan_results(scan["scan_id"])
+        assert listed["description"] == description
+
+    def test_a_short_chain_is_rendered_in_full(self, toolset, session, fake_process):
+        fake_process.poke(WRITABLE_BASE + 0x40, int, 5)
+        scan = toolset.scan_value(session["session_id"], "int", "5", bufflength=4)
+        scan = toolset.refine_scan(scan["scan_id"], "exact", "5")
+        assert scan["description"] == "int == 5 -> int == 5"
+
+
+class TestAmbiguousNamesRespectThePolicy:
+    """`open_process(name=...)` must not reveal what `list_processes` hides."""
+
+    def _fleet(self, monkeypatch, fleet):
+        monkeypatch.setattr(toolset_module, "iter_processes", lambda: iter(fleet))
+        monkeypatch.setattr(
+            toolset_module,
+            "get_process_ids_by_name",
+            lambda name, **_kwargs: [pid for pid, _name in fleet],
+        )
+
+    @staticmethod
+    def _denied_name() -> str:
+        from PyMemoryEditor.mcp.policy import system_process_names
+
+        names = sorted(system_process_names())
+        if not names:
+            pytest.skip("no system denylist on this platform")
+        return names[0]
+
+    def test_denied_candidates_are_left_out(self, make_toolset, monkeypatch):
+        denied = self._denied_name()
+        self._fleet(monkeypatch, [(9001, "game"), (9002, "game"), (9003, denied)])
+
+        result = make_toolset(config()).open_process(name="game")
+
+        assert result["opened"] is False
+        assert [c["pid"] for c in result["candidates"]] == [9001, 9002]
+        assert result["hidden_by_policy"] == 1
+
+    def test_all_denied_is_refused_like_a_denied_pid(self, make_toolset, monkeypatch):
+        denied = self._denied_name()
+        self._fleet(monkeypatch, [(9003, denied), (9004, denied)])
+        toolset = make_toolset(config())
+
+        with pytest.raises(ToolError) as caught:
+            toolset.open_process(name=denied)
+
+        assert str(caught.value) == toolset.policy.check(9003, denied).reason
+        assert toolset.store.sessions == ()
+
+    def test_one_visible_candidate_is_the_target(self, make_toolset, monkeypatch):
+        denied = self._denied_name()
+        self._fleet(monkeypatch, [(4242, "faketarget"), (9003, denied)])
+
+        target = make_toolset(config()).resolve_target(name="target")
+
+        assert target["status"] == "ok"
+        assert target["pid"] == 4242
+
+
+class TestClosingABusySession:
+    """`close_process` and shutdown must not wait forever on a long operation,
+    and must not close the handle while that operation is still using it."""
+
+    def test_a_slow_pointer_walk_does_not_hang_close(self, make_toolset, monkeypatch):
+        import threading
+        import time
+
+        from PyMemoryEditor import PointerPath
+        from PyMemoryEditor.mcp import session as session_module
+
+        monkeypatch.setattr(session_module, "CLOSE_WAIT_SECONDS", 0.05)
+
+        walking = threading.Event()
+
+        class SlowWalk(FakeProcess):
+            handle_used_after_close = False
+
+            def scan_pointer_paths(self, target_address, **kwargs):
+                kwargs["progress_callback"](1.0)
+                offset = 0
+                while True:
+                    walking.set()
+                    # The walk itself between yields: if the handle were
+                    # closed underneath it, this is where it would show.
+                    time.sleep(0.02)
+                    if self.closed:
+                        SlowWalk.handle_used_after_close = True
+                    offset += 8
+                    yield PointerPath(
+                        base_address=WRITABLE_BASE,
+                        offsets=(offset,),
+                        module="game",
+                        module_offset=0,
+                        ptr_size=8,
+                    )
+
+        process = SlowWalk()
+        toolset = make_toolset(config(max_scan_seconds=60.0))
+        toolset._open_process = lambda **_kwargs: process
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        outcome = {}
+
+        def walk():
+            try:
+                outcome["result"] = toolset.find_pointer_paths(
+                    session_id, hex(WRITABLE_BASE), max_results=10**6
+                )
+            except SessionError as error:
+                outcome["error"] = error
+
+        worker = threading.Thread(target=walk, daemon=True)
+        worker.start()
+        assert walking.wait(5)
+
+        started = time.monotonic()
+        closed = toolset.close_process(session_id)
+        assert time.monotonic() - started < 2, "close waited on the walk"
+        assert closed["closed"] is True
+
+        worker.join(5)
+        assert not worker.is_alive(), "the walk did not notice the close"
+        assert "was closed" in str(outcome.get("error"))
+        assert process.closed, "the handle was never released"
+        assert SlowWalk.handle_used_after_close is False
+
+    def test_a_walk_that_never_yields_still_stops_on_close(self, make_toolset, monkeypatch):
+        """A deep walk can go a long time without finding a path. The toolset
+        hands the library a `should_stop` hook, so a close ends the walk there
+        instead of waiting for a yield that may never come."""
+        import threading
+        import time
+
+        from PyMemoryEditor.mcp import session as session_module
+
+        monkeypatch.setattr(session_module, "CLOSE_WAIT_SECONDS", 0.05)
+
+        walking = threading.Event()
+
+        class BarrenWalk(FakeProcess):
+            def scan_pointer_paths(self, target_address, **kwargs):
+                kwargs["progress_callback"](1.0)
+                should_stop = kwargs["should_stop"]
+                while not should_stop():
+                    walking.set()
+                    time.sleep(0.01)
+                return
+                yield  # a generator, like the real one
+
+        process = BarrenWalk()
+        toolset = make_toolset(config(max_scan_seconds=60.0))
+        toolset._open_process = lambda **_kwargs: process
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        outcome = {}
+
+        def walk():
+            try:
+                outcome["result"] = toolset.find_pointer_paths(
+                    session_id, hex(WRITABLE_BASE)
+                )
+            except SessionError as error:
+                outcome["error"] = error
+
+        worker = threading.Thread(target=walk, daemon=True)
+        worker.start()
+        assert walking.wait(5)
+
+        toolset.close_process(session_id)
+
+        worker.join(5)
+        assert not worker.is_alive(), "the walk did not notice the close"
+        assert "was closed" in str(outcome.get("error"))
+        assert process.closed
+
+    def test_a_walk_that_never_yields_still_honours_the_deadline(self, make_toolset):
+        import time
+
+        class BarrenWalk(FakeProcess):
+            def scan_pointer_paths(self, target_address, **kwargs):
+                kwargs["progress_callback"](1.0)
+                should_stop = kwargs["should_stop"]
+                while not should_stop():
+                    time.sleep(0.01)
+                return
+                yield
+
+        toolset = make_toolset(config(max_scan_seconds=0.2))
+        toolset._open_process = lambda **_kwargs: BarrenWalk()
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        result = toolset.find_pointer_paths(session_id, hex(WRITABLE_BASE))
+
+        assert result["timed_out"] is True
+        assert result["timed_out_phase"] == "path_search"
+        assert result["count"] == 0
+
+    def test_a_busy_session_defers_closing_its_handle(self, monkeypatch):
+        import threading
+
+        from PyMemoryEditor.mcp.session import SessionStore
+
+        store = SessionStore()
+        process = FakeProcess()
+        session = store.open(process, 1, "a")
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with session.lock:
+                held.set()
+                release.wait(5)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        assert held.wait(5)
+
+        assert store.close_all(wait=0.05) == 1
+        assert process.closed is False, "closed while another thread held it"
+        assert session.handle_closed is False
+
+        release.set()
+        holder.join(5)
+        assert process.closed is True
+        assert session.handle_closed is True
+
+    def test_a_call_queued_behind_a_close_does_not_run(self, toolset, session):
+        import threading
+
+        live = toolset.store.get(session["session_id"])
+        queued_error = {}
+        entered = threading.Event()
+
+        with live.lock:
+            def queued():
+                entered.set()
+                try:
+                    with live.lock:
+                        queued_error["ran"] = True
+                except SessionError as error:
+                    queued_error["error"] = error
+
+            worker = threading.Thread(target=queued, daemon=True)
+            worker.start()
+            assert entered.wait(5)
+            toolset.store.close(session["session_id"], wait=0.0)
+
+        worker.join(5)
+        assert "ran" not in queued_error
+        assert "was closed" in str(queued_error["error"])
+
+    def test_an_idle_session_closes_its_handle_immediately(self, toolset, session, fake_process):
+        closed = toolset.close_process(session["session_id"])
+        assert fake_process.closed
+        assert "note" not in closed
