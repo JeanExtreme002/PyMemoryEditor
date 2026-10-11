@@ -87,5 +87,9 @@ def test_read_write_and_death_of_a_foreign_process(child):
             process.read_process_memory(address, int, 4)
 
     # A reaped pid no longer exists, so opening it is refused up front.
-    with pytest.raises(ProcessIDNotExistsError):
-        OpenProcess(pid=proc.pid)
+    # Not on Windows: the kernel keeps an exited process's pid reserved while
+    # any handle to it is open, and ``Popen`` holds one until it is collected,
+    # so ``OpenProcess`` on that pid legitimately still succeeds there.
+    if sys.platform != "win32":
+        with pytest.raises(ProcessIDNotExistsError):
+            OpenProcess(pid=proc.pid)
