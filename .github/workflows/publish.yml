@@ -41,9 +41,9 @@ jobs:
       run: python -m twine check --strict dist/*
 
     - name: Publish to PyPI
-      # Pinned to the branch head rather than the moving `release/v1` ref.
-      # Refresh with: gh api repos/pypa/gh-action-pypi-publish/git/ref/heads/release/v1
-      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
+      # Pinned to a release tag's commit rather than the moving `release/v1`
+      # ref; Dependabot bumps the SHA and the tag comment together.
+      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
   # The MCP Registry checks the package on PyPI (the README's mcp-name marker,
   # the pinned version), so this runs only once the upload above succeeded.
