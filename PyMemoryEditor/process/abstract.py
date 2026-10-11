@@ -1284,16 +1284,10 @@ class AbstractProcess(ABC):
                     if module_bases is None:
                         # The same first-wins rule as PointerPath.rebase.
                         module_bases = first_module_bases(self.get_modules())
-                    base = module_bases.get(saved.module)
-                    if base is None:
+                    rebased = saved._rebased_onto(module_bases)
+                    if rebased is None:
                         continue  # the path's module isn't loaded in this run
-                    live = PointerPath(
-                        base_address=base + saved.module_offset,
-                        offsets=saved.offsets,
-                        module=saved.module,
-                        module_offset=saved.module_offset,
-                        ptr_size=saved.ptr_size,
-                    )
+                    live = rebased
                 else:
                     live = saved  # no module: best-effort with the stored base
 

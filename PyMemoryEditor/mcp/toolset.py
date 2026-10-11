@@ -1392,12 +1392,9 @@ class MemoryToolset:
                 if predicate(decode_scan_target(raw, byte_order, pytype)):
                     kept.append(address)
 
-            # A refine reads every address once, with no batch boundary to
-            # check at; a close that arrived meanwhile must not end in a new
-            # scan id on a session the model can no longer use.
-            if session.closing.is_set():
-                raise _closed_mid_operation(session, "refine_scan")
-
+            # A close that arrived while the addresses were read is refused
+            # by new_scan, so no scan id points at a session the model can no
+            # longer use.
             scan = self.store.new_scan(
                 session,
                 value_type=previous.value_type,
@@ -1803,7 +1800,7 @@ class MemoryToolset:
             # region-walking tool translates.
             regions = session.snapshot_regions(refresh=True)
             try:
-                for path in session.process.scan_pointer_paths(
+                walk = session.process.scan_pointer_paths(
                     target,
                     max_depth=max_depth,
                     max_offset=max_offset,
@@ -1811,14 +1808,9 @@ class MemoryToolset:
                     memory_regions=regions,
                     progress_callback=progress,
                     should_stop=should_stop,
-                ):
-                    paths.append(
-                        {
-                            **path.to_dict(),
-                            "recipe": str(path),
-                            "static": path.module is not None,
-                        }
-                    )
+                )
+                for path in walk:
+                    paths.append(_pointer_path_row(path))
                     # `should_stop` above ends the walk itself on a close or
                     # the deadline, even deep between two yields; checking here
                     # too stops a productive walk without waiting for the next
@@ -1827,7 +1819,13 @@ class MemoryToolset:
                     if session.closing.is_set():
                         break
                     if monotonic() >= deadline and len(paths) < max_results:
-                        walk_stopped_by_deadline = True
+                        # Past the budget with room for more: whether that cut
+                        # the walk short depends on whether anything is left.
+                        # One more step answers it — and keeps that path.
+                        extra = next(walk, None)
+                        if extra is not None:
+                            paths.append(_pointer_path_row(extra))
+                            walk_stopped_by_deadline = True
                         break
                 # The walk ends the same way whether it ran out of graph or was
                 # stopped, so tell the two apart from the cause.
@@ -2304,6 +2302,15 @@ def _clamp_pointer_arg(name: str, value: Any) -> int:
     low, high = POINTER_SCAN_LIMITS[name]
     resolved = parse_int_arg(value, name, default=POINTER_SCAN_DEFAULTS[name])
     return min(max(resolved, low), high)
+
+
+def _pointer_path_row(path: Any) -> Dict[str, Any]:
+    """One ``find_pointer_paths`` result row."""
+    return {
+        **path.to_dict(),
+        "recipe": str(path),
+        "static": path.module is not None,
+    }
 
 
 def _closed_mid_operation(session: Session, action: str) -> SessionError:

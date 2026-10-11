@@ -290,16 +290,8 @@ class PointerRescanWorker(QThread):
     def _rebase(self, saved: PointerPath, module_bases: dict) -> Optional[PointerPath]:
         """Move a saved path onto the live module base, or None if not rebasable."""
         if saved.module is not None and saved.module_offset is not None:
-            base = module_bases.get(saved.module)
-            if base is None:
-                return None  # module not loaded in this run — drop the path
-            return PointerPath(
-                base_address=base + saved.module_offset,
-                offsets=saved.offsets,
-                module=saved.module,
-                module_offset=saved.module_offset,
-                ptr_size=saved.ptr_size,
-            )
+            # None when the module isn't loaded in this run — drop the path.
+            return saved._rebased_onto(module_bases)
         # No module: the absolute base is only a best-effort guess post-restart.
         return saved
 
@@ -985,23 +977,17 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         # For display, rebase each survivor onto the current process and read its
         # value — best effort; a path that can't resolve now is still a valid
         # member of the intersection and is kept (shown dimmed / "—").
-        module_bases = first_module_bases(self._process.get_modules())
+        try:
+            module_bases = first_module_bases(self._process.get_modules())
+        except Exception:  # noqa: BLE001 — display only; the target may be gone
+            # Without the module list every survivor is shown unresolved ("—"),
+            # which is what the per-path guard below does for a single one.
+            module_bases = {}
         spec, length = self._current_spec()
 
         rows: List[_ResultRow] = []
         for saved in survivors:
-            base = module_bases.get(saved.module)
-            live = (
-                PointerPath(
-                    base_address=base + saved.module_offset,
-                    offsets=saved.offsets,
-                    module=saved.module,
-                    module_offset=saved.module_offset,
-                    ptr_size=saved.ptr_size,
-                )
-                if base is not None and saved.module_offset is not None
-                else saved
-            )
+            live = saved._rebased_onto(module_bases) or saved
             try:
                 resolved = live.resolve(self._process)
                 value = self._process.read_process_memory(resolved, spec.pytype, length)

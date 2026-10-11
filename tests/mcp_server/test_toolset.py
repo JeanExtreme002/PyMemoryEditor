@@ -2198,6 +2198,165 @@ class TestClosingABusySession:
         assert result["count"] == 1
         assert result["timed_out"] is False
 
+    def test_the_last_path_arriving_past_the_deadline_is_not_a_timeout(
+        self, make_toolset
+    ):
+        """Without max_results: a walk whose final path lands just after the
+        budget ran out has still found everything."""
+        import time
+
+        from PyMemoryEditor import PointerPath
+
+        def path(offset):
+            return PointerPath(
+                base_address=WRITABLE_BASE, offsets=(offset,),
+                module="game", module_offset=0, ptr_size=8,
+            )
+
+        class LastOneLate(FakeProcess):
+            def scan_pointer_paths(self, target_address, **kwargs):
+                kwargs["progress_callback"](1.0)
+                yield path(8)
+                yield path(16)
+                time.sleep(0.3)  # past the 0.2 s budget
+                yield path(24)
+
+        toolset = make_toolset(config(max_scan_seconds=0.2))
+        toolset._open_process = lambda **_kwargs: LastOneLate()
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        result = toolset.find_pointer_paths(session_id, hex(WRITABLE_BASE))
+
+        assert result["count"] == 3
+        assert result["timed_out"] is False
+
+    def test_a_walk_with_more_left_past_the_deadline_is_a_timeout(self, make_toolset):
+        import itertools
+        import time
+
+        from PyMemoryEditor import PointerPath
+
+        class Endless(FakeProcess):
+            def scan_pointer_paths(self, target_address, **kwargs):
+                kwargs["progress_callback"](1.0)
+                for offset in itertools.count(8, 8):
+                    time.sleep(0.05)
+                    yield PointerPath(
+                        base_address=WRITABLE_BASE, offsets=(offset,),
+                        module="game", module_offset=0, ptr_size=8,
+                    )
+
+        toolset = make_toolset(config(max_scan_seconds=0.2))
+        toolset._open_process = lambda **_kwargs: Endless()
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        result = toolset.find_pointer_paths(session_id, hex(WRITABLE_BASE))
+
+        assert result["timed_out"] is True
+        assert result["timed_out_phase"] == "path_search"
+        assert result["count"] >= 1
+
+    def test_a_close_racing_new_scan_never_stores_a_result(self):
+        """`close` sets `closing` under the store lock and `new_scan` checks
+        and stores under it, so no interleaving leaves a scan on a session
+        that is already closed."""
+        import os
+
+        from PyMemoryEditor.mcp.session import SessionStore
+
+        store = SessionStore()
+        session = store.open(FakeProcess(), os.getpid(), "a")
+        store.close(session.session_id, wait=0.05)
+
+        with pytest.raises(SessionError, match="was closed"):
+            store.new_scan(
+                session, value_type="int", bufflength=4, addresses=[1],
+                description="x",
+            )
+        assert session.scan_ids == ()
+
+    def test_a_handle_being_released_is_counted_from_the_moment_of_close(self):
+        """No window where a busy session is in neither the open nor the
+        draining list: the slot is held while close waits for the lock."""
+        import os
+        import threading
+
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS, SessionStore
+
+        live = os.getpid()
+        store = SessionStore()
+        busy = store.open(FakeProcess(), live, "busy")
+        for _ in range(MAX_OPEN_SESSIONS - 1):
+            store.open(FakeProcess(pid=live), live, "other")
+
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with busy.lock:
+                held.set()
+                release.wait(5)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        assert held.wait(5)
+
+        closer = threading.Thread(
+            target=lambda: store.close(busy.session_id, wait=2.0), daemon=True
+        )
+        closer.start()
+        try:
+            # While close is still waiting on the busy lock.
+            for _ in range(100):
+                if busy.closing.is_set():
+                    break
+                threading.Event().wait(0.01)
+            assert busy.closing.is_set()
+            assert store.capacity_refusal(live) is not None
+        finally:
+            release.set()
+            holder.join(5)
+            closer.join(5)
+        assert store.capacity_refusal(live) is None
+
+    def test_the_refusal_explains_a_server_full_of_closing_sessions(self):
+        import os
+        import threading
+
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS, SessionStore
+
+        live = os.getpid()
+        store = SessionStore()
+        sessions = [
+            store.open(FakeProcess(pid=live), live, "s")
+            for _ in range(MAX_OPEN_SESSIONS)
+        ]
+        release = threading.Event()
+        holders = []
+        for session in sessions:
+            held = threading.Event()
+
+            def hold(session=session, held=held):
+                with session.lock:
+                    held.set()
+                    release.wait(5)
+
+            holder = threading.Thread(target=hold, daemon=True)
+            holder.start()
+            assert held.wait(5)
+            holders.append(holder)
+        try:
+            for session in sessions:
+                store.close(session.session_id, wait=0.01)
+            refusal = store.capacity_refusal(live)
+            assert refusal is not None
+            assert "all of them are live" not in refusal
+            assert "Open: none" not in refusal
+            assert "retry shortly" in refusal
+        finally:
+            release.set()
+            for holder in holders:
+                holder.join(5)
+
     def test_a_refine_on_a_session_closed_meanwhile_stores_nothing(self, make_toolset):
         toolset = make_toolset(config())
         process = FakeProcess()

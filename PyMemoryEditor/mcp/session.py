@@ -402,16 +402,6 @@ class SessionStore:
         if self._handles_held_locked() < MAX_OPEN_SESSIONS:
             return None
 
-        draining = len(self._draining)
-        still_closing = (
-            " %d of them %s already closed but still finishing an operation; "
-            "%s handle is released as soon as it stops."
-            % (draining, "is" if draining == 1 else "are",
-               "its" if draining == 1 else "each")
-            if draining
-            else ""
-        )
-
         # No "close the oldest": the oldest is usually the target the whole
         # session has been refining, and close_process discards its scan
         # results too. The list is given instead, so the choice is made on
@@ -426,23 +416,45 @@ class SessionStore:
             if existing
             else ""
         )
-        return (
-            "This server already has %d processes open, which is the "
-            "limit, and all of them are live. Close whichever you are "
-            "done with (close_process also discards that session's scan "
-            "results) and attach again. Open: %s.%s%s"
-            % (
-                MAX_OPEN_SESSIONS,
-                ", ".join(
-                    "%s (%s, pid %d, %d scan%s)"
-                    % (sid, session.name or "?", session.pid,
-                       len(session.scan_ids),
-                       "" if len(session.scan_ids) == 1 else "s")
-                    for sid, session in self._sessions.items()
-                ) or "none",
-                still_closing,
-                already,
+        listing = ", ".join(
+            "%s (%s, pid %d, %d scan%s)"
+            % (sid, session.name or "?", session.pid,
+               len(session.scan_ids),
+               "" if len(session.scan_ids) == 1 else "s")
+            for sid, session in self._sessions.items()
+        )
+
+        draining = len(self._draining)
+        if not draining:
+            return (
+                "This server already has %d processes open, which is the "
+                "limit, and all of them are live. Close whichever you are "
+                "done with (close_process also discards that session's scan "
+                "results) and attach again. Open: %s.%s"
+                % (MAX_OPEN_SESSIONS, listing, already)
             )
+
+        # Closed sessions whose handle a running operation still holds: they
+        # have no id to close, so the only remedy for them is to wait.
+        waiting = (
+            "%d closed session%s still finishing an operation; %s handle is "
+            "released as soon as that operation stops, so retry shortly"
+            % (draining, "" if draining == 1 else "s",
+               "its" if draining == 1 else "each")
+        )
+        if not self._sessions:
+            return (
+                "This server is at its limit of %d process handles: %s."
+                % (MAX_OPEN_SESSIONS, waiting)
+            )
+        return (
+            "This server is at its limit of %d process handles: %d open "
+            "session%s and %s. Or close whichever open session you are done "
+            "with (close_process also discards its scan results) and attach "
+            "again. Open: %s.%s"
+            % (MAX_OPEN_SESSIONS, len(self._sessions),
+               "" if len(self._sessions) == 1 else "s",
+               waiting, listing, already)
         )
 
     def _handles_held_locked(self) -> int:
@@ -491,29 +503,30 @@ class SessionStore:
         :raises SessionError: if the session was closed while the scan ran —
             its id would point at a session the model can no longer reach.
         """
-        if session.closing.is_set():
-            raise SessionError(
-                'Session "%s" was closed while the scan was running, so its '
-                "results were discarded. Call open_process to attach again."
-                % session.session_id
-            )
         with self._lock:
+            # Checked and stored under the lock `close` sets `closing` under,
+            # so a close cannot land between the check and the store.
+            if session.closing.is_set():
+                raise SessionError(
+                    'Session "%s" was closed while the scan was running, so '
+                    "its results were discarded. Call open_process to attach "
+                    "again." % session.session_id
+                )
             scan_id = "scan-%d" % next(self._scan_ids)
-
-        return session.add_scan(
-            ScanResult(
-                scan_id=scan_id,
-                session_id=session.session_id,
-                value_type=value_type,
-                bufflength=bufflength,
-                addresses=addresses,
-                description=description,
-                truncated=truncated,
-                timed_out=timed_out,
-                steps=tuple(steps) or (description,),
-                elided_steps=elided_steps,
+            return session.add_scan(
+                ScanResult(
+                    scan_id=scan_id,
+                    session_id=session.session_id,
+                    value_type=value_type,
+                    bufflength=bufflength,
+                    addresses=addresses,
+                    description=description,
+                    truncated=truncated,
+                    timed_out=timed_out,
+                    steps=tuple(steps) or (description,),
+                    elided_steps=elided_steps,
+                )
             )
-        )
 
     def find_scan(self, scan_id: str) -> Tuple[Session, ScanResult]:
         """Resolve a scan id to its owning session without naming the session.
@@ -545,21 +558,25 @@ class SessionStore:
         """
         with self._lock:
             session = self._sessions.pop(session_id, None)
+            if session is not None:
+                # Set before trying the session lock, so a holder that
+                # releases at any point from here on closes the handle itself;
+                # there is no window where both sides assume the other will do
+                # it. Under the store lock, so `new_scan` cannot slip a result
+                # in after this point.
+                session.closing.set()
+                # Counted against the cap until the handle is really released
+                # (`_handles_held_locked` drops it then) — including while we
+                # wait for the lock below.
+                self._draining.append(session)
 
         if session is None:
             raise SessionError('Unknown session id "%s" (already closed?).' % session_id)
-
-        # Set before trying the lock, so a holder that releases at any point
-        # from here on closes the handle itself; there is no window where both
-        # sides assume the other will do it.
-        session.closing.set()
 
         if session.lock.acquire(timeout=max(wait, 0.0)):
             # Released through SessionLock.release, which closes the handle.
             session.lock.release()
         else:
-            with self._lock:
-                self._draining.append(session)
             _logger.warning(
                 "Session %s is busy; its handle will close when the running "
                 "operation finishes.", session_id,

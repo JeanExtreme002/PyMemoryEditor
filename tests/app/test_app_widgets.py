@@ -188,13 +188,21 @@ def test_run_after_detached_workers_waits_for_a_wedged_worker(qapp):
     worker = _Wedged()
     worker.start()
     detach_worker(worker)
+    joined = False
     try:
         calls = []
-        run_after_detached_workers(lambda: calls.append("closed"))
+        threads = []
+
+        def close():
+            calls.append("closed")
+            threads.append(threading.current_thread())
+
+        run_after_detached_workers(close)
         assert calls == []
 
         release.set()
-        assert worker.wait(5000)
+        joined = worker.wait(5000)
+        assert joined
         # `finished` is delivered to the GUI thread as a queued call.
         for _ in range(50):
             QCoreApplication.processEvents()
@@ -202,7 +210,13 @@ def test_run_after_detached_workers_waits_for_a_wedged_worker(qapp):
                 break
             QThread.msleep(10)
         assert calls == ["closed"]
+        # On the GUI thread, never the worker's: the close must not race the
+        # GUI setting up the next process.
+        assert threads == [threading.main_thread()]
         assert worker not in _DETACHED_WORKERS
     finally:
         release.set()
-        worker.wait(5000)
+        # Once joined, the reaper may already have deleted the QThread; only
+        # an early failure leaves a running thread to wait for.
+        if not joined:
+            worker.wait(5000)

@@ -154,16 +154,33 @@ class PointerPath:
                 "custom static range); its base_address is only valid for the "
                 "run it was found in."
             )
-        base = first_module_bases(process.get_modules()).get(self.module)
-        if base is not None:
-            return PointerPath(
-                base_address=base + self.module_offset,
-                offsets=self.offsets,
-                module=self.module,
-                module_offset=self.module_offset,
-                ptr_size=self.ptr_size,
-            )
+        # The first match, the same pick as `first_module_bases` — without
+        # building the whole name map for a single lookup.
+        for module in process.get_modules():
+            if module.name == self.module:
+                return self._at_module_base(module.base_address)
         raise LookupError("Module %r is not loaded in the target process." % self.module)
+
+    def _at_module_base(self, module_base: int) -> "PointerPath":
+        """This recipe with its module loaded at ``module_base``."""
+        assert self.module_offset is not None
+        return PointerPath(
+            base_address=module_base + self.module_offset,
+            offsets=self.offsets,
+            module=self.module,
+            module_offset=self.module_offset,
+            ptr_size=self.ptr_size,
+        )
+
+    def _rebased_onto(self, module_bases: Dict[str, int]) -> Optional["PointerPath"]:
+        """This recipe rebased with a :func:`first_module_bases` map, or
+        ``None`` when it has no module or that module is not in the map.
+        Callers that rebase many paths build the map once and choose their
+        own fallback for ``None``."""
+        if self.module is None or self.module_offset is None:
+            return None
+        base = module_bases.get(self.module)
+        return None if base is None else self._at_module_base(base)
 
     def to_dict(self) -> dict:
         """

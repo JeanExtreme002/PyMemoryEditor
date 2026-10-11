@@ -9,7 +9,7 @@ previously appeared duplicated across several dialog modules.
 import threading
 from typing import Any, Callable, Iterable, List, Optional, Tuple
 
-from PySide6.QtCore import QObject, Qt, QThread
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, QTimer
 from PySide6.QtGui import QStandardItem
 
 
@@ -105,6 +105,10 @@ def run_after_detached_workers(callback: Callable[[], None]) -> None:
     # isFinished() sweep below runs on this one: guard the bookkeeping so the
     # callback (a handle close) runs exactly once.
     guard = threading.Lock()
+    # Whichever thread notices the last worker finishing, the callback is
+    # posted to the GUI thread (the application object lives there), so it
+    # never runs concurrently with the GUI setting up the next process.
+    gui = QCoreApplication.instance()
 
     def _on_finished(worker: QThread) -> None:
         nonlocal done
@@ -113,7 +117,10 @@ def run_after_detached_workers(callback: Callable[[], None]) -> None:
             if remaining or done:
                 return
             done = True
-        callback()
+        if gui is None:
+            callback()
+        else:
+            QTimer.singleShot(0, gui, callback)
 
     for worker in pending:
         worker.finished.connect(lambda w=worker: _on_finished(w))
