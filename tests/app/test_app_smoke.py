@@ -654,6 +654,57 @@ def test_pointer_scan_dialog_constructs_and_prefills(qtbot):
         process.close()
 
 
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_compare_view_says_why_values_are_missing_when_modules_fail(
+    qtbot, tmp_path, monkeypatch
+):
+    """Comparing saved scans against a target whose modules can't be listed
+    (it exited, say) keeps the intersection, and says why no value is shown
+    instead of leaving a table of dimmed rows unexplained."""
+    import os
+
+    from PySide6.QtWidgets import QApplication, QFileDialog
+
+    from PyMemoryEditor import OpenProcess, PointerPath
+    from PyMemoryEditor.app.pointer_scan_dialog import PointerScanDialog
+
+    QApplication.instance() or QApplication([])
+    path = PointerPath(
+        base_address=0x1000, offsets=(0x10,), module="game.exe",
+        module_offset=0x1000, ptr_size=8,
+    )
+    files = []
+    for index in range(2):
+        target = tmp_path / ("scan%d.json" % index)
+        process = OpenProcess(pid=os.getpid())
+        try:
+            process.save_pointer_paths([path], str(target))
+        finally:
+            process.close()
+        files.append(str(target))
+
+    process = OpenProcess(pid=os.getpid())
+    try:
+        def no_modules():
+            raise OSError("target exited")
+
+        monkeypatch.setattr(process, "get_modules", no_modules)
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileNames", lambda *a, **k: (files, "")
+        )
+        dialog = PointerScanDialog(process)
+        qtbot.addWidget(dialog)
+        dialog._on_compare_saved()
+
+        assert dialog._model.rowCount() == 1
+        label = dialog._count_label.text()
+        assert "1 path(s) common to 2 scans." in label
+        assert "target exited" in label
+        dialog.close()
+    finally:
+        process.close()
+
+
 # --- excepthook ------------------------------------------------------------- #
 
 

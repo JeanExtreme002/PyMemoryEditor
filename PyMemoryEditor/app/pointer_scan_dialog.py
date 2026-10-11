@@ -977,12 +977,18 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         # For display, rebase each survivor onto the current process and read its
         # value — best effort; a path that can't resolve now is still a valid
         # member of the intersection and is kept (shown dimmed / "—").
+        unavailable = ""
         try:
             module_bases = first_module_bases(self._process.get_modules())
-        except Exception:  # noqa: BLE001 — display only; the target may be gone
+        except Exception as exc:  # noqa: BLE001 — display only; the target may be gone
             # Without the module list every survivor is shown unresolved ("—"),
-            # which is what the per-path guard below does for a single one.
+            # which is what the per-path guard below does for a single one —
+            # but say why, or a table of dimmed rows reads as "nothing works".
             module_bases = {}
+            unavailable = (
+                f" Values not shown: the target's modules could not be listed "
+                f"({type(exc).__name__}: {exc})."
+            )
         spec, length = self._current_spec()
 
         rows: List[_ResultRow] = []
@@ -1000,6 +1006,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         self._append_rows(rows)
         self._count_label.setText(
             f"{len(survivors):,} path(s) common to {len(filenames)} scans."
+            + unavailable
         )
         self._export_btn.setEnabled(True)
 
