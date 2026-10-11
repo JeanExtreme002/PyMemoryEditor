@@ -83,6 +83,9 @@ def test_denied_maps_file_blames_ownership_not_ptrace_scope(monkeypatch):
     message = str(excinfo.value)
     assert "another user or is not dumpable" in message
     assert "ptrace_scope" not in message
+    # The rewrapped error keeps the kernel's errno (and chains the original).
+    assert excinfo.value.errno == errno.EACCES
+    assert isinstance(excinfo.value.__cause__, PermissionError)
 
 
 def test_denied_task_listing_raises_instead_of_yielding_nothing(monkeypatch):
@@ -91,8 +94,11 @@ def test_denied_task_listing_raises_instead_of_yielding_nothing(monkeypatch):
 
     monkeypatch.setattr(lin.os, "listdir", denied_listdir)
 
-    with pytest.raises(PermissionError, match="Cannot list"):
+    with pytest.raises(PermissionError, match="Cannot list") as excinfo:
         list(lin.get_threads(os.getpid()))
+
+    assert excinfo.value.errno == errno.EACCES
+    assert isinstance(excinfo.value.__cause__, PermissionError)
 
 
 def test_vanished_task_directory_still_yields_nothing(monkeypatch):

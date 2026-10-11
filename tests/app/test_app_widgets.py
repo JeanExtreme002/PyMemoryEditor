@@ -153,3 +153,96 @@ def test_format_size_uses_binary_units(size, expected):
     from PyMemoryEditor.app._widgets import format_size
 
     assert format_size(size) == expected
+
+
+# --- releasing a process after detached workers ---------------------------- #
+
+
+def test_run_after_detached_workers_runs_at_once_when_none_is_running(qapp):
+    from PyMemoryEditor.app._widgets import run_after_detached_workers
+
+    calls = []
+    run_after_detached_workers(lambda: calls.append("closed"))
+    assert calls == ["closed"]
+
+
+def test_run_after_detached_workers_waits_for_a_wedged_worker(qapp):
+    """Changing process must not close the old handle under a worker that is
+    still inside a syscall on it: the close waits for the worker to finish."""
+    import threading
+
+    from PySide6.QtCore import QCoreApplication, QThread
+
+    from PyMemoryEditor.app._widgets import (
+        _DETACHED_WORKERS,
+        detach_worker,
+        run_after_detached_workers,
+    )
+
+    release = threading.Event()
+
+    class _Wedged(QThread):
+        def run(self):
+            release.wait(5)
+
+    worker = _Wedged()
+    worker.start()
+    detach_worker(worker)
+    joined = False
+    try:
+        calls = []
+        threads = []
+
+        def close():
+            calls.append("closed")
+            threads.append(threading.current_thread())
+
+        run_after_detached_workers(close)
+        assert calls == []
+
+        release.set()
+        joined = worker.wait(5000)
+        assert joined
+        # `finished` is delivered to the GUI thread as a queued call.
+        for _ in range(50):
+            QCoreApplication.processEvents()
+            if calls:
+                break
+            QThread.msleep(10)
+        assert calls == ["closed"]
+        # On the GUI thread, never the worker's: the close must not race the
+        # GUI setting up the next process.
+        assert threads == [threading.main_thread()]
+        assert worker not in _DETACHED_WORKERS
+    finally:
+        release.set()
+        # Once joined, the reaper may already have deleted the QThread; only
+        # an early failure leaves a running thread to wait for.
+        if not joined:
+            worker.wait(5000)
+
+
+def test_detached_workers_running_reports_a_wedged_worker(qapp):
+    """The app-exit path leaves the handle to the OS while this is true."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    from PyMemoryEditor.app._widgets import detach_worker, detached_workers_running
+
+    release = threading.Event()
+
+    class _Wedged(QThread):
+        def run(self):
+            release.wait(5)
+
+    assert detached_workers_running() is False
+    worker = _Wedged()
+    worker.start()
+    detach_worker(worker)
+    try:
+        assert detached_workers_running() is True
+    finally:
+        release.set()
+        worker.wait(5000)
+    assert detached_workers_running() is False

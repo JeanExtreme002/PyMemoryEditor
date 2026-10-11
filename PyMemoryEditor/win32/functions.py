@@ -16,6 +16,7 @@ from ..process.errors import ProcessIDNotExistsError
 from ..process.module_info import ModuleInfo
 from ..process.region import (
     MemoryRegion,
+    MemoryRegionSnapshot,
     default_address_filter,
     default_scan_filter,
     make_region,
@@ -35,13 +36,11 @@ from ..util import (
 )
 from ..util.pattern import PatternLike, compile_pattern
 
-from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum
+from .enums import MemoryAllocationStatesEnum, MemoryProtectionsEnum, MemoryTypesEnum
 from .types import (
     MEMORY_BASIC_INFORMATION,
-    MEMORY_BASIC_INFORMATION_32,
-    MEMORY_BASIC_INFORMATION_64,
-    MODULEENTRY32,
-    PROCESSENTRY32,
+    MODULEENTRY32W,
+    PROCESSENTRY32W,
     SYSTEM_INFO,
     TH32CS_SNAPMODULE,
     TH32CS_SNAPMODULE32,
@@ -106,9 +105,9 @@ kernel32.WriteProcessMemory.argtypes = (
 kernel32.WriteProcessMemory.restype = ctypes.wintypes.BOOL
 
 kernel32.VirtualQueryEx.argtypes = (
-    # The output struct varies between 32-bit and 64-bit layouts; declare the
-    # buffer as a raw void pointer and rely on the caller passing a correctly
-    # sized struct (see mbi_class_for_handle).
+    # The buffer is the caller's native MEMORY_BASIC_INFORMATION (see
+    # mbi_class_for_handle); it is declared as a raw void pointer so callers
+    # (and tests) can pass any byref()'d struct of that size.
     ctypes.wintypes.HANDLE,
     ctypes.wintypes.LPCVOID,
     ctypes.c_void_p,
@@ -155,29 +154,32 @@ kernel32.Thread32Next.argtypes = (
 )
 kernel32.Thread32Next.restype = ctypes.wintypes.BOOL
 
-kernel32.Module32First.argtypes = (
+# Toolhelp32 module/process walks use the Unicode ("W") entry points so names
+# and paths arrive as UTF-16 instead of being squeezed through the ANSI code
+# page. Module32First/Process32First (no suffix) are the ANSI variants.
+kernel32.Module32FirstW.argtypes = (
     ctypes.wintypes.HANDLE,
-    ctypes.POINTER(MODULEENTRY32),
+    ctypes.POINTER(MODULEENTRY32W),
 )
-kernel32.Module32First.restype = ctypes.wintypes.BOOL
+kernel32.Module32FirstW.restype = ctypes.wintypes.BOOL
 
-kernel32.Module32Next.argtypes = (
+kernel32.Module32NextW.argtypes = (
     ctypes.wintypes.HANDLE,
-    ctypes.POINTER(MODULEENTRY32),
+    ctypes.POINTER(MODULEENTRY32W),
 )
-kernel32.Module32Next.restype = ctypes.wintypes.BOOL
+kernel32.Module32NextW.restype = ctypes.wintypes.BOOL
 
-kernel32.Process32First.argtypes = (
+kernel32.Process32FirstW.argtypes = (
     ctypes.wintypes.HANDLE,
-    ctypes.POINTER(PROCESSENTRY32),
+    ctypes.POINTER(PROCESSENTRY32W),
 )
-kernel32.Process32First.restype = ctypes.wintypes.BOOL
+kernel32.Process32FirstW.restype = ctypes.wintypes.BOOL
 
-kernel32.Process32Next.argtypes = (
+kernel32.Process32NextW.argtypes = (
     ctypes.wintypes.HANDLE,
-    ctypes.POINTER(PROCESSENTRY32),
+    ctypes.POINTER(PROCESSENTRY32W),
 )
-kernel32.Process32Next.restype = ctypes.wintypes.BOOL
+kernel32.Process32NextW.restype = ctypes.wintypes.BOOL
 
 # LPVOID VirtualAllocEx(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize,
 #                       DWORD flAllocationType, DWORD flProtect);
@@ -257,34 +259,28 @@ _OS_IS_64BIT = (
 
 def mbi_class_for_handle(process_handle: int):
     """
-    Return the appropriate MEMORY_BASIC_INFORMATION layout for the target process.
+    Return the MEMORY_BASIC_INFORMATION layout ``VirtualQueryEx`` fills in.
 
-    On a 64-bit host attached to a 32-bit target (a "WOW64" process), the
-    Windows kernel still returns a 32-bit layout via VirtualQueryEx — using the
-    64-bit struct corrupts the fields. IsWow64Process tells us which one to use.
+    That is always the layout of the *calling* process (the running Python),
+    whatever the target's bitness: ``VirtualQueryEx`` forwards to
+    ``NtQueryVirtualMemory(MemoryBasicInformation)``, which rejects any buffer
+    smaller than the caller's native ``MEMORY_BASIC_INFORMATION`` with
+    ``STATUS_INFO_LENGTH_MISMATCH`` (``ERROR_BAD_LENGTH``) and otherwise writes
+    that native layout. From a 64-bit Python that is the 48-byte
+    ``MEMORY_BASIC_INFORMATION_64`` even for a 32-bit (WOW64) target — whose
+    addresses simply fit in the wider fields; from a 32-bit Python it is the
+    28-byte ``MEMORY_BASIC_INFORMATION_32``.
+
+    The explicit ``MEMORY_BASIC_INFORMATION32`` / ``64`` forms in ``winnt.h``
+    exist for debuggers decoding a foreign-architecture target's data (dumps,
+    debug-engine queries), not for ``VirtualQueryEx``. Passing the 28-byte
+    form from a 64-bit Python made every query of a WOW64 target fail, so the
+    region walk — and every scan of a 32-bit process — raised.
+
+    ``process_handle`` is accepted for backwards compatibility; the answer no
+    longer depends on the target.
     """
-    if not _HOST_IS_64BIT:
-        return MEMORY_BASIC_INFORMATION_32
-
-    is_wow64 = ctypes.wintypes.BOOL(0)
-    ok = kernel32.IsWow64Process(process_handle, ctypes.byref(is_wow64))
-    if not ok:
-        # Conservatively fall back to the host-bitness default rather than fail
-        # — the caller may not need region info at all. Warn, though: if the
-        # target really is a 32-bit (WOW64) process, the wrong MBI layout makes
-        # VirtualQueryEx return silently-corrupted region fields, which then
-        # poison every is_readable/is_writable filter and scan result.
-        _logger.warning(
-            "IsWow64Process failed (err=%d); assuming the target matches the "
-            "host bitness for region queries. Region fields may be wrong if the "
-            "target is actually a 32-bit (WOW64) process.",
-            ctypes.get_last_error(),
-        )
-        return MEMORY_BASIC_INFORMATION
-
-    return (
-        MEMORY_BASIC_INFORMATION_32 if is_wow64.value else MEMORY_BASIC_INFORMATION_64
-    )
+    return MEMORY_BASIC_INFORMATION
 
 
 def _detect_process_64bit(process_handle: int) -> Optional[bool]:
@@ -357,6 +353,21 @@ _HANDLE_LEVEL_ERRORS = frozenset((_ERROR_ACCESS_DENIED, _ERROR_INVALID_HANDLE))
 _REGION_MAX_CONSECUTIVE_FAILURES = 64
 
 
+# Message for OpenProcess failing with ERROR_ACCESS_DENIED. The library never
+# enables SeDebugPrivilege on its own (that is a security decision for the
+# caller), so the hint lists what the caller can change.
+_OPEN_PROCESS_ACCESS_DENIED_HINT = (
+    "OpenProcess failed for pid %d: access denied. The target likely runs "
+    "elevated, as another user or as a service, or is a protected process "
+    "(anti-cheat, antivirus, system). Run Python as Administrator; SYSTEM "
+    "services may still refuse unless your code enables SeDebugPrivilege "
+    "(PyMemoryEditor never does), and protected processes cannot be opened "
+    "for memory access from user mode. Requesting fewer rights (e.g. "
+    "PROCESS_VM_READ | PROCESS_QUERY_INFORMATION) helps when only write "
+    "access is refused."
+)
+
+
 def _raise_last_error(api_name: str) -> None:
     """Raise an OSError populated with the current GetLastError() value."""
     code = ctypes.get_last_error()
@@ -413,6 +424,22 @@ def _raise_region_walk_failure(
     )
 
 
+def _region_may_have_mapped_file(region) -> bool:
+    """
+    Whether ``GetMappedFileNameW`` can name the file behind ``region``.
+
+    Only a view of a section — ``MEM_IMAGE`` or ``MEM_MAPPED`` — has a backing
+    file. A ``MEM_FREE`` range belongs to no allocation (its ``Type`` is
+    undefined), and ``MEM_PRIVATE`` memory (heaps, stacks, ``VirtualAlloc``
+    reservations, committed or reserved) is never file-backed, so the call is
+    guaranteed to fail there. Those are most of a process's regions; skipping
+    them saves one cross-process system call per region on every walk.
+    """
+    if region.State == MemoryAllocationStatesEnum.MEM_FREE:
+        return False
+    return region.Type != MemoryTypesEnum.MEM_PRIVATE
+
+
 def _get_mapped_filename(process_handle: int, address: int) -> str:
     """Return the NT device path backing *address*, or ``""`` on failure.
 
@@ -435,9 +462,10 @@ def GetMemoryRegions(process_handle: int, pid: int = 0) -> Generator[MemoryRegio
     """
     Yield a :class:`MemoryRegion` for every region in the target's address space.
 
-    Picks the right MEMORY_BASIC_INFORMATION layout (32-bit vs 64-bit) for the
-    target process to handle the WOW64 case (64-bit Python attached to a 32-bit
-    target). VirtualQueryEx is dispatched against `mbi_class` accordingly.
+    ``VirtualQueryEx`` always fills the running Python's native
+    MEMORY_BASIC_INFORMATION layout (see :func:`mbi_class_for_handle`), so a
+    64-bit Python walks a 32-bit (WOW64) target with the same 48-byte struct
+    it uses for a 64-bit one.
 
     ``VirtualQueryEx`` returning 0 used to terminate enumeration unconditionally,
     silently truncating the region list whenever the kernel hiccuped on a
@@ -456,11 +484,13 @@ def GetMemoryRegions(process_handle: int, pid: int = 0) -> Generator[MemoryRegio
 
     The walk bounds come from ``GetNativeSystemInfo`` rather than
     ``GetSystemInfo`` so that, from a 64-bit Python attached to a 32-bit target,
-    the ceiling reflects the host's full address space. For a 32-bit target the
-    extra range is empty — ``VirtualQueryEx`` returns ERROR_INVALID_PARAMETER
-    past the 32-bit boundary and the loop terminates there — so using the native
-    ceiling never over-enumerates. (From a 64-bit Python the two infos are
-    identical for the address-range fields anyway.)
+    the ceiling reflects the host's full address space. A 64-bit caller sees a
+    32-bit target's *whole* address space, so above the 4 GB line the walk
+    reports a large free range plus the 64-bit WOW64 runtime the system maps
+    there (the 64-bit ``ntdll.dll``, ``wow64*.dll``, 64-bit PEB/TEBs) — real
+    regions of that process, just never touched by its 32-bit code. (From a
+    64-bit Python the two infos are identical for the address-range fields
+    anyway.)
 
     Note this does *not* extend the walk for a 32-bit (WOW64) Python attached to
     a 64-bit target. ``lpMaximumApplicationAddress`` is ``c_void_p`` (4 bytes in
@@ -514,7 +544,11 @@ def GetMemoryRegions(process_handle: int, pid: int = 0) -> Generator[MemoryRegio
 
         yield make_region(
             address=current_address, size=region.RegionSize, struct=region,
-            path=_get_mapped_filename(process_handle, current_address),
+            path=(
+                _get_mapped_filename(process_handle, current_address)
+                if _region_may_have_mapped_file(region)
+                else ""
+            ),
         )
 
         if region.RegionSize == 0:
@@ -542,6 +576,12 @@ def GetProcessHandle(access_right: int, inherit: bool, pid: int) -> int:
     handle = kernel32.OpenProcess(access_right, inherit, pid)
 
     if not handle:
+        code = ctypes.get_last_error()
+        if code == _ERROR_ACCESS_DENIED:
+            # ctypes.WinError(5, ...) is a PermissionError carrying
+            # winerror=5, exactly as before — only the message gains the
+            # likely causes, since a bare "Access is denied" gives no lead.
+            raise ctypes.WinError(code, _OPEN_PROCESS_ACCESS_DENIED_HINT % pid)
         _raise_last_error("OpenProcess")
 
     return handle
@@ -829,7 +869,11 @@ def SearchValuesByAddresses(
             # Linux/macOS). All three backends now agree: just readable.
             if default_address_filter(region)
         ]
-    else:
+    elif not isinstance(memory_regions, MemoryRegionSnapshot):
+        # Materialize one-shot iterables (the walk indexes and measures the
+        # list). A MemoryRegionSnapshot is passed through untouched: copying it
+        # into a plain list would drop the "already sorted" tag and make
+        # ``iter_values_for_addresses`` re-sort it on every refine pass.
         memory_regions = list(memory_regions)
 
     def read_chunk(address: int, size: int):
@@ -911,7 +955,7 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
     Yield a :class:`ModuleInfo` for every module loaded in the target process.
 
     Uses ``CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32)``
-    followed by Module32First/Next — the documented user-mode way to enumerate
+    followed by Module32FirstW/NextW — the documented user-mode way to enumerate
     modules without an extra dependency. Unlike the thread snapshot, the module
     snapshot is per-process, so the pid is passed through and honored.
     ``TH32CS_SNAPMODULE32`` is OR-ed in so a 64-bit Python can still see the
@@ -928,23 +972,26 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
     if not snapshot or snapshot == ctypes.wintypes.HANDLE(-1).value:
         _raise_last_error("CreateToolhelp32Snapshot")
 
-    entry = MODULEENTRY32()
+    entry = MODULEENTRY32W()
     entry.dwSize = ctypes.sizeof(entry)
 
     try:
-        if not kernel32.Module32First(snapshot, ctypes.byref(entry)):
+        if not kernel32.Module32FirstW(snapshot, ctypes.byref(entry)):
             # Empty snapshot is legal (target exited / not yet initialized).
             _logger.debug(
-                "GetModules: Module32First returned 0 (snapshot empty for pid=%d)",
+                "GetModules: Module32FirstW returned 0 (snapshot empty for pid=%d)",
                 pid,
             )
             return
 
         while True:
-            # szModule / szExePath are c_char arrays — accessing them returns
-            # the NUL-terminated bytes directly.
-            name = entry.szModule.decode("utf-8", errors="replace")
-            path = entry.szExePath.decode("utf-8", errors="replace")
+            # szModule / szExePath are c_wchar arrays — accessing them returns
+            # the NUL-terminated str directly. Toolhelp itself fills module
+            # entries from the loader's ANSI module list, though, so characters
+            # outside the system code page arrive here as "?" (process names,
+            # from the kernel's Unicode list, are exact).
+            name = entry.szModule
+            path = entry.szExePath
             yield ModuleInfo(
                 name=name,
                 path=path or name,
@@ -952,7 +999,7 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
                 size=int(entry.modBaseSize),
                 raw=int(entry.hModule or 0),
             )
-            if not kernel32.Module32Next(snapshot, ctypes.byref(entry)):
+            if not kernel32.Module32NextW(snapshot, ctypes.byref(entry)):
                 break
     finally:
         kernel32.CloseHandle(snapshot)
@@ -963,7 +1010,7 @@ def GetProcesses() -> Generator[Tuple[int, str], None, None]:
     Yield ``(pid, name)`` for every process in the system.
 
     Uses ``CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS)`` followed by
-    Process32First/Next — the documented user-mode way to enumerate processes
+    Process32FirstW/NextW — the documented user-mode way to enumerate processes
     without an extra dependency, mirroring how GetThreads/GetModules already
     work. ``szExeFile`` is the executable name only (no path).
     """
@@ -971,19 +1018,19 @@ def GetProcesses() -> Generator[Tuple[int, str], None, None]:
     if not snapshot or snapshot == ctypes.wintypes.HANDLE(-1).value:
         _raise_last_error("CreateToolhelp32Snapshot")
 
-    entry = PROCESSENTRY32()
+    entry = PROCESSENTRY32W()
     entry.dwSize = ctypes.sizeof(entry)
 
     try:
-        if not kernel32.Process32First(snapshot, ctypes.byref(entry)):
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
             # Empty snapshot is theoretically possible; log and bail.
-            _logger.debug("GetProcesses: Process32First returned 0 (empty snapshot)")
+            _logger.debug("GetProcesses: Process32FirstW returned 0 (empty snapshot)")
             return
 
         while True:
-            name = entry.szExeFile.decode("utf-8", errors="replace")
-            yield int(entry.th32ProcessID), name
-            if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+            # c_wchar array: already a str, exactly as Windows stores it.
+            yield int(entry.th32ProcessID), entry.szExeFile
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
                 break
     finally:
         kernel32.CloseHandle(snapshot)

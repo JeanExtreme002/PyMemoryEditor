@@ -31,8 +31,10 @@ Or register it with a client — Claude Code::
 
 No flags are needed, because consent is asked for where it can actually be
 given: attaching to a process the operator did not pre-approve **asks the
-user**, and every ``write_value`` call is confirmed by their client.
-``--read-only`` drops the write tool entirely, ``--allow-process NAME``
+user**, and ``write_value`` carries the ``anthropic/requiresUserInteraction``
+hint, so clients that honour it (Claude Code, for one) ask before every write.
+Other clients may not, so pass ``--read-only`` if yours auto-approves tools:
+it drops the write tool entirely. ``--allow-process NAME``
 pre-approves a target so it stops prompting, and ``--allow-any-process`` turns
 prompting off for scripted runs. Read :doc:`the MCP guide </mcp>` before
 pointing it at anything you care about — it runs with your privileges and it is

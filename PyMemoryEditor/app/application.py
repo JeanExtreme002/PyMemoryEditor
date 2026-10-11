@@ -561,6 +561,7 @@ def main(argv=None):
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
 
+    from ._widgets import detached_workers_running
     from .main_window import MainWindow
     from .open_process_dialog import OpenProcessDialog
 
@@ -591,12 +592,18 @@ def main(argv=None):
         with _scoped_excepthook(_qt_excepthook):
             app.exec()
     finally:
-        try:
-            # `process` is only the handle the picker opened; File → Change
-            # Process… released that one and attached the window to another.
-            window.process.close()
-        except Exception:
-            pass
+        # A worker that blew its join on close is detached, not stopped, and
+        # may still be inside a syscall on this handle; closing it now could
+        # hand its value to an unrelated object mid-write. The process is
+        # exiting, so leave it to the OS, which releases every handle then.
+        if not detached_workers_running():
+            try:
+                # `process` is only the handle the picker opened; File →
+                # Change Process… released that one and attached the window
+                # to another.
+                window.process.close()
+            except Exception:
+                pass
 
 
 def main_cli(argv=None):

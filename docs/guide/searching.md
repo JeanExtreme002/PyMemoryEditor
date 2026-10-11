@@ -163,8 +163,9 @@ keyword when you omit it: `search_by_value_between(int, start=100, end=200)`.
 ## Search by addresses
 
 When you already know **which addresses to check** (typically because you
-scanned earlier), `search_by_addresses` is the right tool — it reads each
-memory **page** only once and pulls every requested address out of it.
+scanned earlier), `search_by_addresses` is the right tool — it groups nearby
+addresses into one read, so each memory **page** is read only once, and only
+the stretches of memory that hold a requested value are read at all.
 
 ```python
 addresses = [0x10000, 0x10010, 0x10020, ...]
@@ -174,9 +175,11 @@ for address, value in process.search_by_addresses(int, 4, addresses):
 ```
 
 If an address isn't backed by any mapped region (it falls in a gap, or its
-`[address, address+bufflength)` runs past the end of its region), the value is
-**always** `None` — `raise_error` does not turn that into an exception, because
-there is nothing there to read. `raise_error=True` only affects an address that
+`[address, address+bufflength)` runs past the end of its region into a gap or
+an unreadable region), the value is **always** `None` — `raise_error` does not
+turn that into an exception, because there is nothing there to read. A value
+that runs into the *next* region, when that region starts right where this one
+ends and is readable, is read normally — just as `read_process_memory` would. `raise_error=True` only affects an address that
 *is* inside a mapped region but whose read fails (e.g. the page vanished): then
 it raises `OSError` instead of yielding `None`.
 
@@ -313,14 +316,15 @@ for address in process.search_by_value(str, 6, "PLAYER"):
     print(hex(address))
 ```
 
-Ordering for the comparison modes differs by type:
+Both compare **lexicographically** (big-endian, first byte most significant)
+in the comparison modes — the order Python itself uses for two `bytes` or
+`str` values, so comparing what you read back agrees with the scan:
 
-- **`str`** compares the UTF-8 bytes **lexicographically** (big-endian), so
-  `"AA" < "AB" < "B"`. The shorter of two values is NUL-padded to `bufflength`
-  before comparing, and a reversed `VALUE_BETWEEN` range (`start > end`) simply
-  matches nothing.
-- **`bytes`** compares using your system's `byteorder` — something to keep in
-  mind when using `BIGGER_THAN` / `SMALLER_THAN` on raw bytes.
+- **`str`** compares its UTF-8 bytes, so `"AA" < "AB" < "B"`.
+- **`bytes`** compares the raw bytes, so `b"\x00\x01" < b"\x01\x00"`.
+
+The shorter of two values is NUL-padded to `bufflength` before comparing, and a
+reversed `VALUE_BETWEEN` range (`start > end`) simply matches nothing.
 
 ```{seealso}
 - [Pattern scan](pattern-scan.md) — find data by **shape** with regex and AOB

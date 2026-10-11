@@ -185,3 +185,163 @@ def test_write_straddling_a_page_boundary_restores_both_pages():
             process.close()
     finally:
         _libsystem.munmap(address, size)
+
+
+# --- protect-flip across regions with different protections -----------------
+#
+# The flip used to read the protection of the region holding `address` only,
+# then restore that one value across the whole page-aligned span. A write that
+# crosses into a neighbouring region with a different protection therefore
+# left the neighbour with the *wrong* protection: an RW neighbour came back
+# read-only, a read-only one came back writable. Each case below allocates two
+# adjacent pages in the test's own task (mach_vm_allocate), re-protects them
+# into two regions, writes across the boundary, and checks each page.
+
+
+def _two_page_regions(first_protection, second_protection):
+    """Allocate two adjacent pages and give each its own protection."""
+    from PyMemoryEditor.macos import functions as mac
+    from PyMemoryEditor.macos.libsystem import libsystem, mach_task_self_
+
+    task = mach_task_self_.value
+    page = mac._PAGE_SIZE
+    address = mac.allocate_memory(task, 2 * page)
+    for base, protection in ((address, first_protection), (address + page, second_protection)):
+        kr = libsystem.mach_vm_protect(task, base, page, 0, protection)
+        if kr != 0:
+            mac.free_memory(task, address, 2 * page)
+            pytest.skip("mach_vm_protect(0x%x) refused here (kr=%d)" % (protection, kr))
+    return task, address, page
+
+
+def _protection_at(task, address):
+    from PyMemoryEditor.macos import functions as mac
+
+    found = mac._basic_region_at(task, address)
+    assert found is not None
+    start, size, info = found
+    assert start <= address < start + size
+    return info.protection
+
+
+_R = 0x1
+_RW = 0x3
+_RX = 0x5
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    (
+        (_R, _RW),  # neighbour must stay writable
+        (_RW, _R),  # neighbour must not be left writable
+        (_R, _RX),  # neighbour must keep EXECUTE
+    ),
+)
+def test_a_write_across_two_regions_restores_each_regions_protection(first, second):
+    from PyMemoryEditor.macos import functions as mac
+
+    task, address, page = _two_page_regions(first, second)
+    try:
+        assert _protection_at(task, address) == first
+        assert _protection_at(task, address + page) == second
+
+        payload = b"\x11\x22\x33\x44\x55\x66\x77\x88"
+        start = address + page - 4
+        buffer = ctypes.create_string_buffer(payload, len(payload))
+        mac._mach_write(task, start, ctypes.addressof(buffer), len(payload))
+
+        assert mac.read_process_memory(task, start, bytes, len(payload)) == payload
+        assert _protection_at(task, address) == first
+        assert _protection_at(task, address + page) == second
+    finally:
+        mac.free_memory(task, address, 2 * page)
+
+
+class _ProtectSpy:
+    """Wrap ``mach_vm_protect`` to record calls and optionally refuse some."""
+
+    def __init__(self, real, refuse=None):
+        self.real = real
+        self.refuse = refuse or (lambda address, protection: False)
+        self.calls = []
+
+    def __call__(self, task, address, size, set_maximum, protection):
+        self.calls.append((address, size, protection))
+        if self.refuse(address, protection):
+            return 2  # KERN_PROTECTION_FAILURE
+        return self.real(task, address, size, set_maximum, protection)
+
+
+def test_the_flip_keeps_execute_when_the_kernel_allows_it(monkeypatch):
+    """
+    An RX page is first elevated *with* EXECUTE (so a thread running there
+    doesn't fault mid-write); when W^X refuses RWX — the norm on Apple
+    Silicon — it falls back to READ|WRITE|COPY and still restores RX.
+    """
+    from PyMemoryEditor.macos import functions as mac
+    from PyMemoryEditor.macos.types import VM_PROT_COPY, VM_PROT_EXECUTE, VM_PROT_WRITE
+
+    task, address, page = _two_page_regions(_RX, _RX)
+    spy = _ProtectSpy(mac.libsystem.mach_vm_protect)
+    monkeypatch.setattr(mac.libsystem, "mach_vm_protect", spy)
+    try:
+        buffer = ctypes.c_uint32(0x4DEADBEE)
+        mac._mach_write(task, address + 16, ctypes.addressof(buffer), 4)
+
+        elevations = [call for call in spy.calls if call[2] & VM_PROT_WRITE]
+        assert elevations[0][2] == _RX | VM_PROT_WRITE | VM_PROT_COPY
+        if len(elevations) > 1:  # RWX refused: fallback without EXECUTE
+            assert elevations[1][2] == (_R | VM_PROT_WRITE | VM_PROT_COPY)
+            assert not elevations[1][2] & VM_PROT_EXECUTE
+        assert spy.calls[-1][2] == _RX  # restored
+
+        monkeypatch.undo()
+        assert mac.read_process_memory(task, address + 16, bytes, 4) == bytes(buffer)
+        assert _protection_at(task, address) == _RX
+    finally:
+        monkeypatch.undo()
+        mac.free_memory(task, address, 2 * page)
+
+
+def test_a_non_executable_page_is_never_elevated_with_execute(monkeypatch):
+    from PyMemoryEditor.macos import functions as mac
+    from PyMemoryEditor.macos.types import VM_PROT_EXECUTE
+
+    task, address, page = _two_page_regions(_R, _R)
+    spy = _ProtectSpy(mac.libsystem.mach_vm_protect)
+    monkeypatch.setattr(mac.libsystem, "mach_vm_protect", spy)
+    try:
+        buffer = ctypes.c_uint32(7)
+        mac._mach_write(task, address, ctypes.addressof(buffer), 4)
+        assert spy.calls
+        assert not any(call[2] & VM_PROT_EXECUTE for call in spy.calls)
+    finally:
+        monkeypatch.undo()
+        mac.free_memory(task, address, 2 * page)
+
+
+def test_a_failed_elevate_rolls_back_the_regions_already_elevated(monkeypatch):
+    """
+    If the second region can't be made writable, the first — already elevated
+    — must be put back before the error surfaces, not left writable.
+    """
+    from PyMemoryEditor.macos import functions as mac
+    from PyMemoryEditor.macos.types import VM_PROT_WRITE
+
+    task, address, page = _two_page_regions(_R, _RX)
+    second = address + page
+    spy = _ProtectSpy(
+        mac.libsystem.mach_vm_protect,
+        refuse=lambda addr, protection: addr == second and protection & VM_PROT_WRITE,
+    )
+    monkeypatch.setattr(mac.libsystem, "mach_vm_protect", spy)
+    try:
+        buffer = ctypes.create_string_buffer(b"\x01" * 8, 8)
+        with pytest.raises(OSError, match="could not elevate"):
+            mac._mach_write(task, second - 4, ctypes.addressof(buffer), 8)
+        monkeypatch.undo()
+        assert _protection_at(task, address) == _R
+        assert _protection_at(task, second) == _RX
+    finally:
+        monkeypatch.undo()
+        mac.free_memory(task, address, 2 * page)

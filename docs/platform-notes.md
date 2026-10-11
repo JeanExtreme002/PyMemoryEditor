@@ -60,14 +60,23 @@ OpenProcess(name="game.exe", permission=ProcessOperationsEnum.PROCESS_ALL_ACCESS
 
 ### Running as Administrator
 
-To attach to **protected processes** (system services, anti-cheat-guarded
-processes, elevated apps), run your terminal **as Administrator**.
+To attach to **elevated apps, services or another user's processes**, run your
+terminal **as Administrator**. Opening such a process without it fails with
+`PermissionError` (`winerror == 5`), and the message lists the likely causes.
+
+SYSTEM services can still refuse an administrator unless your own code enables
+`SeDebugPrivilege` — PyMemoryEditor never enables privileges for you. Protected
+processes (anti-cheat, antivirus, PPL system processes) cannot be opened for
+memory access from user mode at all.
 
 ### Memory allocation
 
 `allocate_memory` defaults to `PAGE_EXECUTE_READWRITE` so the region is
 usable for both data and injected code. Pass an explicit
 `MemoryProtectionsEnum` value to narrow it.
+
+`free_memory` releases only what this object allocated unless you pass an
+explicit `size=` — see [Allocating and freeing](guide/allocate-free.md).
 
 ---
 
@@ -114,6 +123,18 @@ A `PermissionError` raised while *opening* the process (reading
 `ptrace_scope`, so the denial means the target belongs to another user or is
 not dumpable (setuid binaries, `prctl(PR_SET_DUMPABLE, 0)`). Run as root or
 as the target's owner.
+
+### Process identity
+
+Linux addresses a process by pid, so the backend binds to the original process
+when it opens it — with a pidfd (kernel 5.3+), or with the process start time
+from `/proc/<pid>/stat` where pidfds are unavailable (older kernels, strict
+seccomp profiles). Once that process has exited, writes, scans and
+region/module/thread listings raise `ProcessIDNotExistsError`, even if a new
+process has been given the same pid. Single-value reads are checked too when a
+pidfd is available; without one they skip the check for speed, and a read of
+an exited target fails with the kernel's `OSError` (`ESRCH`). `close()`
+releases the pidfd.
 
 ### Writes to read-only pages
 
@@ -177,7 +198,13 @@ with OpenProcess(pid=os.getpid()) as process:
 
 `write_process_memory` on a **read-only page** transparently elevates the
 page protection via `mach_vm_protect` (with `VM_PROT_COPY`), performs the
-write, and tries to restore the original protection.
+write, and tries to restore the original protection — region by region, when
+the write crosses into a neighbour with a different protection.
+
+An executable page keeps `EXECUTE` during the write where the kernel allows
+RWX. Under W^X (Apple Silicon, the hardened runtime) it does not, so the page
+is briefly non-executable, and a target thread executing on that exact page
+during the write can crash.
 
 **If the restore step fails** (e.g. the target task disappears mid-call),
 the library emits a `ResourceWarning` and the target page is left more

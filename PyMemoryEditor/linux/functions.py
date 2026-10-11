@@ -10,6 +10,7 @@ import ctypes
 import errno as errno_mod
 import logging
 import os
+import signal
 from ctypes import addressof, sizeof
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
@@ -20,6 +21,7 @@ from ..process.region import (
     MemoryRegion,
     default_address_filter,
     default_scan_filter,
+    MemoryRegionSnapshot,
     make_region,
 )
 from ..process.scanning import (
@@ -82,6 +84,11 @@ _PTRACE_SCOPE_HINT = (
     "child of this process), or the target belongs to another user / is not "
     "dumpable (setuid), which only root can read. Running as root covers both."
 )
+
+
+def _errno_or(exc: OSError, default: int) -> int:
+    """``exc.errno``, or ``default`` when the exception was raised without one."""
+    return exc.errno if exc.errno is not None else default
 
 
 def _syscall_error(op: str, errno: int, remote_address: int, length: int) -> OSError:
@@ -225,10 +232,11 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
         # prctl(PR_SET_DUMPABLE, 0)). The ptrace_scope hint belongs to the
         # EPERM from process_vm_readv/writev, not to this path.
         raise PermissionError(
+            _errno_or(exc, errno_mod.EACCES),
             "Cannot read %s: %s. The target process belongs to another user "
             "or is not dumpable; run as root or as the owner of the target."
-            % (mapping_filename, exc)
-        )
+            % (mapping_filename, exc),
+        ) from exc
 
     with mapping_file:
         for line in mapping_file:
@@ -552,7 +560,11 @@ def search_values_by_addresses(
         memory_regions = [
             region for region in get_memory_regions(pid) if default_address_filter(region)
         ]
-    else:
+    elif not isinstance(memory_regions, MemoryRegionSnapshot):
+        # Materialize any other iterable (it is indexed and walked more than
+        # once), but pass a snapshot through untouched: `list(...)` would drop
+        # its type tag and make `_ensure_sorted_by_address` re-sort an
+        # already-sorted region map on every refine scan.
         memory_regions = list(memory_regions)
 
     yield from iter_values_for_addresses(
@@ -615,10 +627,11 @@ def get_threads(pid: int) -> Generator[ThreadInfo, None, None]:
         return
     except PermissionError as exc:
         raise PermissionError(
+            _errno_or(exc, errno_mod.EACCES),
             "Cannot list %s: %s. The target process belongs to another user "
             "or is not dumpable; run as root or as the owner of the target."
-            % (task_dir, exc)
-        )
+            % (task_dir, exc),
+        ) from exc
     except OSError as exc:
         _logger.debug("get_threads: could not list %s: %s", task_dir, exc)
         return
@@ -701,3 +714,97 @@ def process_exists(pid: int) -> bool:
     if pid < 0:
         return False
     return os.path.isdir("/proc/{}".format(pid))
+
+
+# --- Target identity (PID-reuse guard) --------------------------------------
+#
+# Unlike a Windows process handle or a macOS task port, nothing on the Linux
+# path pins the target: process_vm_readv / process_vm_writev and /proc take a
+# bare pid. Once the target exits and is reaped, the kernel may hand that pid
+# to an unrelated process, and every later call would silently act on it. The
+# helpers below let LinuxProcess bind to the *original* process at open time
+# and verify it before touching the target again.
+
+
+def open_pidfd(pid: int) -> Optional[int]:
+    """
+    Return a pidfd for ``pid`` (``pidfd_open(2)``, Linux 5.3+), or ``None``
+    when pidfds are unavailable: the kernel predates them (``ENOSYS``), a
+    seccomp policy blocks the syscall (``EPERM``, e.g. older container
+    runtimes), ``pid`` is a non-leader thread id (``EINVAL``), the fd table is
+    full, or this Python was built without ``os.pidfd_open`` /
+    ``signal.pidfd_send_signal``. Callers then fall back to
+    :func:`read_start_time`.
+
+    Raises :class:`~PyMemoryEditor.ProcessIDNotExistsError` when the process
+    is already gone (``ESRCH``) — it exited after the open-time existence
+    check.
+    """
+    pidfd_open = getattr(os, "pidfd_open", None)
+    if pidfd_open is None or not hasattr(signal, "pidfd_send_signal"):
+        return None
+    try:
+        return pidfd_open(pid, 0)
+    except ProcessLookupError:
+        raise ProcessIDNotExistsError(pid)
+    except OSError as exc:
+        _logger.debug(
+            "open_pidfd: pidfd_open(%d) failed (%s); falling back to the "
+            "/proc start-time check for PID-reuse detection.",
+            pid,
+            exc,
+        )
+        return None
+
+
+def pidfd_alive(pidfd: int) -> Optional[bool]:
+    """
+    Whether the process ``pidfd`` refers to still exists, via a null signal
+    (``pidfd_send_signal(pidfd, 0, NULL, 0)``): one syscall, no side effect.
+
+    The answer is about the original process, not its pid number — after the
+    target is reaped the call fails with ``ESRCH`` even if the pid has already
+    been reused. A zombie still counts as alive (it keeps its pid until it is
+    reaped), matching the ``kill(pid, 0)`` semantics of the base class.
+    ``EPERM`` (target owned by another user) also means "exists". Returns
+    ``None`` when the probe itself cannot answer (e.g. ``EINVAL`` for a
+    target outside this pid namespace), so the caller can fall back.
+    """
+    try:
+        signal.pidfd_send_signal(pidfd, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as exc:
+        _logger.debug("pidfd_alive: pidfd_send_signal failed: %s", exc)
+        return None
+    return True
+
+
+def read_start_time(pid: int) -> Optional[int]:
+    """
+    Return the process start time (field 22 of ``/proc/<pid>/stat``, in clock
+    ticks since boot), or ``None`` if the file can't be read or parsed (the
+    process is gone, or ``/proc`` is mounted with ``hidepid``).
+
+    ``(pid, start time)`` identifies a process uniquely — a recycled pid gets
+    a later start time — which makes it the PID-reuse guard on kernels
+    without pidfds.
+    """
+    try:
+        with open("/proc/{}/stat".format(pid), "rb") as fh:
+            raw_stat = fh.read()
+    except OSError:
+        return None
+
+    # `comm` is parenthesised and may itself contain spaces or ')': split
+    # after the *last* ')'. rest[0] is field 3 (state), so field 22 is rest[19].
+    close_paren = raw_stat.rfind(b")")
+    if close_paren == -1:
+        return None
+    rest = raw_stat[close_paren + 1 :].split()
+    try:
+        return int(rest[19])
+    except (IndexError, ValueError):
+        return None

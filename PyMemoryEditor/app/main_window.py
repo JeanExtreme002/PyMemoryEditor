@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess, __version__
 
 from ._icon import app_icon
-from ._widgets import detach_worker
+from ._widgets import detach_worker, run_after_detached_workers
 from .application import DEFAULT_THEME_ID, THEMES, apply_theme
 from .cheat_entry import CheatEntry
 from .cheat_table import CheatTable
@@ -910,13 +910,11 @@ class MainWindow(QMainWindow):
             old_cheat.shutdown()
         except Exception:
             pass
-        # Accepted window: a worker that blew its join is detached, not
-        # stopped, so it can still be inside a syscall here. The cheat poller
-        # writes, which is why it checks the stop flag per entry.
-        try:
-            old_process.close()
-        except Exception:
-            pass
+        # A worker that blew its join is detached, not stopped, so it can still
+        # be inside a syscall on the old handle. Release the handle only once
+        # every detached worker has finished; closing it now could hand its
+        # value to an unrelated object while the cheat poller is mid-write.
+        run_after_detached_workers(lambda p=old_process: _close_quietly(p))
         old_index = self._right_splitter.indexOf(old_cheat)
         self._cheat = CheatTable(self._process)
         self._cheat.pointer_scan_for_address.connect(self._open_pointer_scan_dialog)
@@ -1047,6 +1045,13 @@ class MainWindow(QMainWindow):
             detach_worker(worker)
         else:
             worker.deleteLater()
+
+
+def _close_quietly(process) -> None:
+    try:
+        process.close()
+    except Exception:  # noqa: BLE001 — the target may already be gone
+        pass
 
 
 def _safe_for_json(value) -> object:

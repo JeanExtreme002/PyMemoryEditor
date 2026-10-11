@@ -396,8 +396,18 @@ class WindowsProcess(AbstractProcess):
     def free_memory(self, address: int, size: int = 0) -> bool:
         self.__require_open()
         self.__require_operation()
-        # MEM_RELEASE frees the whole allocation regardless of size; the
-        # tracked size is dropped on success for bookkeeping parity.
+        # MEM_RELEASE tears down whatever VirtualAlloc'd block starts at
+        # `address` -- a heap segment or a thread stack just as readily as one
+        # of ours -- so an address this object did not allocate is refused
+        # unless the caller opts in with an explicit size, the same contract
+        # as macOS (where the size is needed anyway). The size itself is not
+        # passed on: MEM_RELEASE requires 0 and frees the whole allocation.
+        if address not in self.__allocations and size <= 0:
+            raise ValueError(
+                "Unknown allocation at 0x%X: it was not returned by this "
+                "object's allocate_memory. Pass an explicit size= to free a "
+                "region this object did not allocate." % address
+            )
         FreeMemory(self.__process_handle, address)
         self.__allocations.pop(address, None)
         return True

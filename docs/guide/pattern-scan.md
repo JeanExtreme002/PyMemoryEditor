@@ -71,6 +71,24 @@ for address in process.search_by_pattern(pattern, byte_length=32):
 
 Same rule: `byte_length=` is required.
 
+## Overlapping matches
+
+A **fixed-width** pattern — every IDA-style signature, and any regex whose
+matches are always the same length, like `rb"\x48\x8B.."` — reports every
+start offset, overlapping ones included, just like a value scan for the same
+bytes:
+
+```python
+# Memory holds 90 90 90 at 0x1000.
+list(process.search_by_pattern("90 90"))   # [0x1000, 0x1001]
+```
+
+A **variable-width** regex (`+`, `*`, `{m,n}`, alternatives of different
+lengths) follows Python's `re.finditer` instead: leftmost, non-overlapping
+matches. Restarting one byte later would re-report every suffix of a long match
+(`ohn@example.com` right after `john@example.com`). To get every start offset
+anyway, wrap the regex in a lookahead: `rb"(?=PLAYER_\d+)"`.
+
 ## Method signature
 
 ```{eval-rst}

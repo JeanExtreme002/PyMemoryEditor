@@ -25,17 +25,19 @@ allocation's size, so you don't have to:
 process.free_memory(address)
 ```
 
-On **macOS**, pass an explicit `size=` when freeing a region that this object
-**did not allocate** (e.g. one inherited from another script), since the size
-cannot be looked up from the local allocation table:
+On **macOS** and **Windows**, pass an explicit `size=` when freeing a region
+that this object **did not allocate** (e.g. one inherited from another script).
+Without it `free_memory` raises `ValueError` instead of releasing memory the
+target may still be using:
 
 ```python
 process.free_memory(address, size=4096)
 ```
 
-On **Windows** the `size` argument is always ignored — `MEM_RELEASE` frees the
-whole original allocation given only its base address, so a foreign region is
-freed the same way (and only if `address` is a true allocation base).
+On **Windows** the size is never passed to the OS — `MEM_RELEASE` frees the
+whole original allocation given only its base address — so there the explicit
+`size=` is only the deliberate opt-in, and `address` must be a true allocation
+base.
 
 ## Method signatures
 
@@ -60,11 +62,12 @@ freed the same way (and only if `address` is a true allocation base).
 
    :param int address: base address returned by :py:meth:`allocate_memory`.
    :param int size: size of the region in bytes. May be left ``0`` to reuse
-      the size recorded when the region was allocated (required on macOS,
-      ignored on Windows where ``MEM_RELEASE`` frees the whole allocation).
-      Pass an explicit size only to free a region this object did not
-      allocate.
+      the size recorded when the region was allocated. Pass an explicit size
+      only to free a region this object did not allocate (on Windows it is
+      not passed to the OS, since ``MEM_RELEASE`` frees the whole allocation).
    :returns: ``True`` on success.
+   :raises ValueError: on macOS and Windows, for a region this object did not
+      allocate when no ``size`` is given.
    :raises NotImplementedError: on Linux.
 ```
 

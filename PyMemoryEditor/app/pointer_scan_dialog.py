@@ -50,7 +50,10 @@ from PySide6.QtWidgets import (
 )
 
 from PyMemoryEditor import AbstractProcess, PointerPath
-from PyMemoryEditor.process.pointer_scan import intersect_pointer_paths
+from PyMemoryEditor.process.pointer_scan import (
+    first_module_bases,
+    intersect_pointer_paths,
+)
 
 from ._widgets import (
     MONOSPACE_FAMILY,
@@ -141,6 +144,9 @@ class PointerScanWorker(QThread):
                 writable_only=req.writable_only,
                 max_results=req.max_results,
                 progress_callback=self._on_map_progress,
+                # The walk can run a long time between two paths; this lets
+                # Stop end it there too, not only at the next yield.
+                should_stop=lambda: self._cancelled,
             )
 
             batch: List[_ResultRow] = []
@@ -246,7 +252,7 @@ class PointerRescanWorker(QThread):
     def run(self) -> None:
         try:
             # One name→base lookup so rebasing each saved path is O(1).
-            module_bases = {m.name: m.base_address for m in self._process.get_modules()}
+            module_bases = first_module_bases(self._process.get_modules())
 
             batch: List[_ResultRow] = []
             total = len(self._paths) or 1
@@ -284,16 +290,8 @@ class PointerRescanWorker(QThread):
     def _rebase(self, saved: PointerPath, module_bases: dict) -> Optional[PointerPath]:
         """Move a saved path onto the live module base, or None if not rebasable."""
         if saved.module is not None and saved.module_offset is not None:
-            base = module_bases.get(saved.module)
-            if base is None:
-                return None  # module not loaded in this run — drop the path
-            return PointerPath(
-                base_address=base + saved.module_offset,
-                offsets=saved.offsets,
-                module=saved.module,
-                module_offset=saved.module_offset,
-                ptr_size=saved.ptr_size,
-            )
+            # None when the module isn't loaded in this run — drop the path.
+            return saved._rebased_onto(module_bases)
         # No module: the absolute base is only a best-effort guess post-restart.
         return saved
 
@@ -979,23 +977,23 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         # For display, rebase each survivor onto the current process and read its
         # value — best effort; a path that can't resolve now is still a valid
         # member of the intersection and is kept (shown dimmed / "—").
-        module_bases = {m.name: m.base_address for m in self._process.get_modules()}
+        unavailable = ""
+        try:
+            module_bases = first_module_bases(self._process.get_modules())
+        except Exception as exc:  # noqa: BLE001 — display only; the target may be gone
+            # Without the module list every survivor is shown unresolved ("—"),
+            # which is what the per-path guard below does for a single one —
+            # but say why, or a table of dimmed rows reads as "nothing works".
+            module_bases = {}
+            unavailable = (
+                f" Values not shown: the target's modules could not be listed "
+                f"({type(exc).__name__}: {exc})."
+            )
         spec, length = self._current_spec()
 
         rows: List[_ResultRow] = []
         for saved in survivors:
-            base = module_bases.get(saved.module)
-            live = (
-                PointerPath(
-                    base_address=base + saved.module_offset,
-                    offsets=saved.offsets,
-                    module=saved.module,
-                    module_offset=saved.module_offset,
-                    ptr_size=saved.ptr_size,
-                )
-                if base is not None and saved.module_offset is not None
-                else saved
-            )
+            live = saved._rebased_onto(module_bases) or saved
             try:
                 resolved = live.resolve(self._process)
                 value = self._process.read_process_memory(resolved, spec.pytype, length)
@@ -1008,6 +1006,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         self._append_rows(rows)
         self._count_label.setText(
             f"{len(survivors):,} path(s) common to {len(filenames)} scans."
+            + unavailable
         )
         self._export_btn.setEnabled(True)
 

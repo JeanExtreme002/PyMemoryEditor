@@ -254,7 +254,7 @@ class AbstractProcess(ABC):
         The fields that each backend can fill in cheaply vary — see
         ``ThreadInfo`` for which attributes may be ``None`` per platform.
         The ``tid`` field's *meaning* is platform-specific (POSIX TID on
-        Linux, DWORD TID on Windows, Mach port name on macOS).
+        Linux, DWORD TID on Windows, system-wide thread id on macOS).
 
         A process that has exited is *not* reported uniformly: Linux and
         Windows enumerate nothing and yield an empty sequence (their sources —
@@ -852,12 +852,14 @@ class AbstractProcess(ABC):
 
         :param address: base address returned by :meth:`allocate_memory`.
         :param size: size of the region in bytes. May be left ``0`` to reuse
-            the size recorded when the region was allocated (required on macOS,
-            ignored on Windows where ``MEM_RELEASE`` frees the whole
-            allocation). Pass an explicit size only to free a region this
-            object did not allocate.
+            the size recorded when the region was allocated. Pass an explicit
+            size only to free a region this object did not allocate (on Windows
+            it is not passed to the OS, since ``MEM_RELEASE`` frees the whole
+            allocation).
         :return: ``True`` on success.
 
+        :raises ValueError: on macOS and Windows, for a region this object did
+            not allocate when no ``size`` is given.
         :raises NotImplementedError: on Linux (see :meth:`allocate_memory`).
         """
         raise NotImplementedError()
@@ -1005,6 +1007,7 @@ class AbstractProcess(ABC):
         max_results: Optional[int] = None,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
         progress_callback: Optional["Callable[[float], None]"] = None,
+        should_stop: Optional["Callable[[], bool]"] = None,
     ) -> Generator["PointerPath", None, None]:
         """
         Reverse pointer scan — Cheat Engine's "Pointer scan", the inverse of
@@ -1051,6 +1054,12 @@ class AbstractProcess(ABC):
             :meth:`snapshot_memory_regions` to skip region enumeration.
         :param progress_callback: optional ``callback(fraction)`` invoked as the
             pointer map is built (the long phase), ``fraction`` in ``[0, 1]``.
+        :param should_stop: optional ``should_stop()`` polled during the path
+            search; once it returns True the search ends early and no more
+            paths are yielded. The search can run a long time between two
+            yields, so this is how a caller with a deadline or a cancel button
+            bounds it. (To abort the map-building phase, raise from
+            ``progress_callback``.)
 
         Example
         -------
@@ -1120,8 +1129,10 @@ class AbstractProcess(ABC):
         def read_chunk(address: int, size: int) -> Optional[bytes]:
             try:
                 return self.read_process_memory(address, bytes, size)
-            except PyMemoryEditorError:
-                raise  # closed process: not a skippable page
+            except (PyMemoryEditorError, MemoryError):
+                # Closed process, or a host out of memory: neither is a
+                # skippable page, and skipping would leave the map incomplete.
+                raise
             except Exception:  # noqa: BLE001 — backend read errors vary
                 # A page that vanished mid-scan is skippable; a target that
                 # exited is not (every backend reports that read as a plain
@@ -1148,6 +1159,7 @@ class AbstractProcess(ABC):
             max_offset=max_offset,
             ptr_size=ptr_size,
             max_results=max_results,
+            should_stop=should_stop,
         )
 
     def save_pointer_paths(
@@ -1257,7 +1269,7 @@ class AbstractProcess(ABC):
             survivors = process.rescan_pointer_paths("scan.json", new_address)
             process.save_pointer_paths(survivors, "scan.json")
         """
-        from .pointer_scan import PointerPath
+        from .pointer_scan import PointerPath, first_module_bases
 
         if isinstance(paths, str):
             paths = self.load_pointer_paths(paths)
@@ -1270,27 +1282,19 @@ class AbstractProcess(ABC):
                 if saved.module is not None and saved.module_offset is not None:
                     # Look modules up once, only if a module-backed path needs it.
                     if module_bases is None:
-                        module_bases = {
-                            module.name: module.base_address
-                            for module in self.get_modules()
-                        }
-                    base = module_bases.get(saved.module)
-                    if base is None:
+                        # The same first-wins rule as PointerPath.rebase.
+                        module_bases = first_module_bases(self.get_modules())
+                    rebased = saved._rebased_onto(module_bases)
+                    if rebased is None:
                         continue  # the path's module isn't loaded in this run
-                    live = PointerPath(
-                        base_address=base + saved.module_offset,
-                        offsets=saved.offsets,
-                        module=saved.module,
-                        module_offset=saved.module_offset,
-                        ptr_size=saved.ptr_size,
-                    )
+                    live = rebased
                 else:
                     live = saved  # no module: best-effort with the stored base
 
                 if live.resolve(self) == target_address:
                     survivors.append(live)
-            except PyMemoryEditorError:
-                raise  # closed process: every path would "fail"
+            except (PyMemoryEditorError, MemoryError):
+                raise  # closed process / exhausted host: every path would "fail"
             except Exception:  # noqa: BLE001 — broken chain / unreadable page: drop it
                 self._raise_if_target_exited()
                 continue

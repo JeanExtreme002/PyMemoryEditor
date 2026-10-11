@@ -21,12 +21,19 @@ Two input shapes are accepted:
 
         compile_pattern(rb"\\x48\\x8B..\\x00\\x00")
 
-The function returns a compiled ``re.Pattern[bytes]`` ready to be used with
-``finditer`` against memory chunks read from the target.
+The function returns a compiled ``re.Pattern[bytes]`` ready to be run against
+memory chunks read from the target. A fixed-width pattern (every IDA-style
+signature) is scanned for *overlapping* matches, the way a value scan reports
+every offset; see :func:`is_fixed_width`.
 """
 
 import re
 from typing import List, Optional, Pattern, Tuple, Union
+
+try:  # The regex parser moved in 3.11; ``sre_parse`` is a deprecated alias there.
+    from re import _parser as _regex_parser  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - Python 3.10
+    import sre_parse as _regex_parser
 
 
 PatternLike = Union[str, bytes, "re.Pattern[bytes]"]
@@ -100,6 +107,30 @@ def compile_pattern(
     return re.compile(b"".join(parts), re.DOTALL), len(tokens)
 
 
+def is_fixed_width(pattern: "Pattern[bytes]") -> bool:
+    """True when every match of ``pattern`` is the same number of bytes long.
+
+    The pattern scan reports *overlapping* matches for such a pattern — ``90
+    90`` over ``90 90 90`` is found at offsets 0 and 1, exactly what a value
+    scan for ``b"\\x90\\x90"`` returns. Every IDA-style signature is fixed
+    width, as is a regex like ``rb"\\x48\\x8B.."``.
+
+    A variable-width regex keeps the usual ``re.finditer`` semantics (leftmost,
+    non-overlapping): restarting one byte after each match would also report
+    every suffix of a variable-length match (``"ohn@example.com"`` after
+    ``"john@example.com"``), which is noise, not a new match. Wrap such a
+    regex in a lookahead (``(?=...)``) to get every start offset.
+
+    Falls back to ``False`` (non-overlapping) if the pattern cannot be
+    analysed.
+    """
+    try:
+        low, high = _regex_parser.parse(pattern.pattern, pattern.flags).getwidth()
+    except Exception:  # noqa: BLE001 — private parser API; degrade, never fail a scan
+        return False
+    return bool(low == high)
+
+
 def tokenize_pattern(pattern: str) -> List[Optional[int]]:
     """Split an IDA-style hex pattern into one entry per byte.
 
@@ -134,8 +165,9 @@ def tokenize_pattern(pattern: str) -> List[Optional[int]]:
     return parsed
 
 
-# tokenize_pattern is deliberately absent: it exists so the scan and write
-# paths share one set of token rules, and nothing outside the package consumes
-# it. Exporting it would promise a documented, supported surface that neither
-# the guide nor the API reference describes.
+# tokenize_pattern and is_fixed_width are deliberately absent: the first exists
+# so the scan and write paths share one set of token rules, the second so the
+# pattern scan can pick its overlap rule, and nothing outside the package
+# consumes either. Exporting them would promise a documented, supported
+# surface that neither the guide nor the API reference describes.
 __all__ = ("compile_pattern", "PatternLike")

@@ -24,6 +24,7 @@ session keeps its most recent :data:`MAX_SCANS_PER_SESSION` result sets
 will ask for again), and each result set is capped at scan time.
 """
 
+import logging
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -38,11 +39,25 @@ from ..process.region import MemoryRegion, MemoryRegionSnapshot
 #: Result sets retained per session before the oldest is evicted.
 MAX_SCANS_PER_SESSION = 20
 
+#: How long ``close_process`` waits for a running operation to release the
+#: session before it stops waiting. The handle is not closed early: the
+#: operation that holds it closes it on its way out (see :class:`SessionLock`),
+#: so a slow pointer walk delays the close but can no longer hang it.
+CLOSE_WAIT_SECONDS = 5.0
+
+_logger = logging.getLogger("PyMemoryEditor")
+
 #: Processes one server keeps open at once. Refuses rather than evicting,
 #: unlike the scan cap above: a session owns an OS handle, and closing one out
 #: from under the model is not something it can detect. Bounds handle
 #: exhaustion, since nothing obliges a model to call ``close_process``.
 MAX_OPEN_SESSIONS = 8
+
+
+#: How long the dead-session reaper waits for a busy session's lock. It runs
+#: inside open_process, once per dead session, so it stays well under
+#: CLOSE_WAIT_SECONDS.
+REAP_WAIT_SECONDS = 0.25
 
 
 class SessionError(Exception):
@@ -70,6 +85,11 @@ class ScanResult:
     :param addresses: the matching addresses, ascending.
     :param description: human-readable summary of the scan that produced this
         set (``"int == 100"``), used to caption the refine chain.
+    :param steps: the comparisons the description is rendered from — the first
+        scan plus the most recent refines. Kept apart from ``description`` so a
+        refine can extend the chain without re-parsing the rendered text.
+    :param elided_steps: refines dropped from the middle of ``steps`` to keep
+        the description bounded.
     :param truncated: the scan hit the result cap and stopped early, so
         ``addresses`` is a *prefix* of the real match set.
     :param timed_out: the scan hit its wall-clock budget and stopped early —
@@ -84,6 +104,8 @@ class ScanResult:
     description: str
     truncated: bool = False
     timed_out: bool = False
+    steps: Tuple[str, ...] = ()
+    elided_steps: int = 0
 
     @property
     def count(self) -> int:
@@ -101,6 +123,60 @@ class ScanResult:
         return self.truncated or self.timed_out
 
 
+class SessionLock:
+    """The re-entrant lock serializing a session, aware of the session closing.
+
+    Behaves as a :class:`threading.RLock` (``with``, ``acquire(timeout=...)``,
+    ``release``) with two additions, both keyed off :attr:`Session.closing`:
+
+    * the outermost ``with`` on a session that is closing raises
+      :class:`SessionError` instead of running the operation, so a call queued
+      behind the one that held the lock does not start on a closing handle;
+    * the outermost ``release`` on a closing session closes the process handle
+      *before* letting go. That is how :meth:`SessionStore.close` avoids both
+      blocking forever on a long operation and closing the handle while a
+      syscall is still running on it: if it cannot get the lock in
+      :data:`CLOSE_WAIT_SECONDS`, it leaves the close to whoever holds it.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        # Only touched by the thread that holds `_lock`.
+        self._depth = 0
+        self._session: Optional["Session"] = None
+
+    def bind(self, session: "Session") -> None:
+        self._session = session
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if not self._lock.acquire(blocking, timeout):
+            return False
+        self._depth += 1
+        return True
+
+    def release(self) -> None:
+        try:
+            if self._depth == 1 and self._session is not None:
+                self._session._close_handle_if_closing()
+        finally:
+            self._depth -= 1
+            self._lock.release()
+
+    def __enter__(self) -> "SessionLock":
+        self.acquire()
+        session = self._session
+        if self._depth == 1 and session is not None and session.closing.is_set():
+            self.release()
+            raise SessionError(
+                'Session "%s" was closed. Call open_process to attach again.'
+                % session.session_id
+            )
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.release()
+
+
 @dataclass
 class Session:
     """One open process, plus the state that makes refining it cheap.
@@ -115,6 +191,9 @@ class Session:
         same handle is a race the library does not promise to survive. Holding
         the lock for the duration of a scan also gives the queued call a
         consistent view rather than a half-refined one.
+    :param closing: set once :meth:`SessionStore.close` has dropped the
+        session. Long operations poll it to stop early, and the lock uses it to
+        refuse new work and to close the handle when the last holder leaves.
     """
 
     session_id: str
@@ -122,9 +201,31 @@ class Session:
     pid: int
     name: str
     regions: Optional[MemoryRegionSnapshot] = None
-    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    lock: SessionLock = field(default_factory=SessionLock, repr=False)
+    closing: threading.Event = field(default_factory=threading.Event, repr=False)
     _scans: "Dict[str, ScanResult]" = field(default_factory=dict, repr=False)
     _scan_order: List[str] = field(default_factory=list, repr=False)
+    _handle_closed: bool = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.lock.bind(self)
+
+    @property
+    def handle_closed(self) -> bool:
+        """Whether the process handle has actually been released."""
+        return self._handle_closed
+
+    def _close_handle_if_closing(self) -> None:
+        """Close the handle once the session is closing. **Caller holds**
+        :attr:`lock`, so no operation can be running on the handle; that is
+        also what makes the check-and-set of ``_handle_closed`` safe."""
+        if not self.closing.is_set() or self._handle_closed:
+            return
+        self._handle_closed = True
+        try:
+            self.process.close()
+        except Exception:  # noqa: BLE001 — target may already be gone
+            pass
 
     def snapshot_regions(self, *, refresh: bool = False) -> MemoryRegionSnapshot:
         """Return this session's region snapshot, taking a fresh one if asked.
@@ -193,6 +294,10 @@ class SessionStore:
 
     def __init__(self) -> None:
         self._sessions: Dict[str, Session] = {}
+        # Sessions already closed whose handle a still-running operation will
+        # release when it finishes (see :meth:`close`). They no longer have an
+        # id, but they still hold an OS handle, so they count against the cap.
+        self._draining: List[Session] = []
         self._session_ids = count(1)
         self._scan_ids = count(1)
         self._lock = threading.Lock()
@@ -258,7 +363,11 @@ class SessionStore:
 
         for session_id in dead:
             try:
-                self.close(session_id)
+                # A short wait: this runs inside open_process, so it must not
+                # sit out CLOSE_WAIT_SECONDS per session, but a quick call that
+                # holds the lock for a moment should still free its slot now.
+                # A longer operation releases the handle by itself when done.
+                self.close(session_id, wait=REAP_WAIT_SECONDS)
             except SessionError:  # closed concurrently
                 pass
         return dead
@@ -277,7 +386,7 @@ class SessionStore:
         :meth:`open` would have made room.
         """
         with self._lock:
-            if len(self._sessions) < MAX_OPEN_SESSIONS:
+            if self._handles_held_locked() < MAX_OPEN_SESSIONS:
                 return None
 
         self._reap_dead()
@@ -300,7 +409,7 @@ class SessionStore:
         # every racing thread saw room, and the cap was exceeded.
         assert self._lock.locked(), "capacity must be judged under the lock"
 
-        if len(self._sessions) < MAX_OPEN_SESSIONS:
+        if self._handles_held_locked() < MAX_OPEN_SESSIONS:
             return None
 
         # No "close the oldest": the oldest is usually the target the whole
@@ -317,23 +426,53 @@ class SessionStore:
             if existing
             else ""
         )
-        return (
-            "This server already has %d processes open, which is the "
-            "limit, and all of them are live. Close whichever you are "
-            "done with (close_process also discards that session's scan "
-            "results) and attach again. Open: %s.%s"
-            % (
-                MAX_OPEN_SESSIONS,
-                ", ".join(
-                    "%s (%s, pid %d, %d scan%s)"
-                    % (sid, session.name or "?", session.pid,
-                       len(session.scan_ids),
-                       "" if len(session.scan_ids) == 1 else "s")
-                    for sid, session in self._sessions.items()
-                ),
-                already,
-            )
+        listing = ", ".join(
+            "%s (%s, pid %d, %d scan%s)"
+            % (sid, session.name or "?", session.pid,
+               len(session.scan_ids),
+               "" if len(session.scan_ids) == 1 else "s")
+            for sid, session in self._sessions.items()
         )
+
+        draining = len(self._draining)
+        if not draining:
+            return (
+                "This server already has %d processes open, which is the "
+                "limit, and all of them are live. Close whichever you are "
+                "done with (close_process also discards that session's scan "
+                "results) and attach again. Open: %s.%s"
+                % (MAX_OPEN_SESSIONS, listing, already)
+            )
+
+        # Closed sessions whose handle a running operation still holds: they
+        # have no id to close, so the only remedy for them is to wait.
+        waiting = (
+            "%d closed session%s still finishing an operation; %s handle is "
+            "released as soon as that operation stops, so retry shortly"
+            % (draining, "" if draining == 1 else "s",
+               "its" if draining == 1 else "each")
+        )
+        if not self._sessions:
+            return (
+                "This server is at its limit of %d process handles: %s."
+                % (MAX_OPEN_SESSIONS, waiting)
+            )
+        return (
+            "This server is at its limit of %d process handles: %d open "
+            "session%s and %s. Or close whichever open session you are done "
+            "with (close_process also discards its scan results) and attach "
+            "again. Open: %s.%s"
+            % (MAX_OPEN_SESSIONS, len(self._sessions),
+               "" if len(self._sessions) == 1 else "s",
+               waiting, listing, already)
+        )
+
+    def _handles_held_locked(self) -> int:
+        """OS handles this store still holds: open sessions plus closed ones
+        whose handle is waiting on a running operation. **Caller holds**
+        ``self._lock``."""
+        self._draining = [s for s in self._draining if not s.handle_closed]
+        return len(self._sessions) + len(self._draining)
 
     def get(self, session_id: str) -> Session:
         """Look up a session, or explain how to obtain a valid id."""
@@ -366,23 +505,38 @@ class SessionStore:
         description: str,
         truncated: bool = False,
         timed_out: bool = False,
+        steps: Sequence[str] = (),
+        elided_steps: int = 0,
     ) -> ScanResult:
-        """Build and store a result set under a freshly minted scan id."""
-        with self._lock:
-            scan_id = "scan-%d" % next(self._scan_ids)
+        """Build and store a result set under a freshly minted scan id.
 
-        return session.add_scan(
-            ScanResult(
-                scan_id=scan_id,
-                session_id=session.session_id,
-                value_type=value_type,
-                bufflength=bufflength,
-                addresses=addresses,
-                description=description,
-                truncated=truncated,
-                timed_out=timed_out,
+        :raises SessionError: if the session was closed while the scan ran —
+            its id would point at a session the model can no longer reach.
+        """
+        with self._lock:
+            # Checked and stored under the lock `close` sets `closing` under,
+            # so a close cannot land between the check and the store.
+            if session.closing.is_set():
+                raise SessionError(
+                    'Session "%s" was closed while the scan was running, so '
+                    "its results were discarded. Call open_process to attach "
+                    "again." % session.session_id
+                )
+            scan_id = "scan-%d" % next(self._scan_ids)
+            return session.add_scan(
+                ScanResult(
+                    scan_id=scan_id,
+                    session_id=session.session_id,
+                    value_type=value_type,
+                    bufflength=bufflength,
+                    addresses=addresses,
+                    description=description,
+                    truncated=truncated,
+                    timed_out=timed_out,
+                    steps=tuple(steps) or (description,),
+                    elided_steps=elided_steps,
+                )
             )
-        )
 
     def find_scan(self, scan_id: str) -> Tuple[Session, ScanResult]:
         """Resolve a scan id to its owning session without naming the session.
@@ -402,31 +556,57 @@ class SessionStore:
             "get one, or list the live sessions with server_info." % scan_id
         )
 
-    def close(self, session_id: str) -> Session:
-        """Close the target handle and forget the session."""
+    def close(self, session_id: str, *, wait: float = CLOSE_WAIT_SECONDS) -> Session:
+        """Forget the session and close its target handle.
+
+        The handle is closed under the session lock, so never while another
+        thread is mid-syscall on it. If an operation still holds the lock after
+        ``wait`` seconds, this returns without waiting further: the session is
+        already marked closing, the operation stops at its next check, and its
+        final release closes the handle (:class:`SessionLock`). Check
+        :attr:`Session.handle_closed` to tell the two outcomes apart.
+        """
         with self._lock:
             session = self._sessions.pop(session_id, None)
+            if session is not None:
+                # Set before trying the session lock, so a holder that
+                # releases at any point from here on closes the handle itself;
+                # there is no window where both sides assume the other will do
+                # it. Under the store lock, so `new_scan` cannot slip a result
+                # in after this point.
+                session.closing.set()
+                # Counted against the cap until the handle is really released
+                # (`_handles_held_locked` drops it then) — including while we
+                # wait for the lock below.
+                self._draining.append(session)
 
         if session is None:
             raise SessionError('Unknown session id "%s" (already closed?).' % session_id)
 
-        with session.lock:
-            try:
-                session.process.close()
-            except Exception:  # noqa: BLE001 — target may already be gone
-                pass
+        if session.lock.acquire(timeout=max(wait, 0.0)):
+            # Released through SessionLock.release, which closes the handle.
+            session.lock.release()
+        else:
+            _logger.warning(
+                "Session %s is busy; its handle will close when the running "
+                "operation finishes.", session_id,
+            )
 
         return session
 
-    def close_all(self) -> int:
-        """Close every open handle. Called on server shutdown."""
+    def close_all(self, *, wait: float = CLOSE_WAIT_SECONDS) -> int:
+        """Close every open handle. Called on server shutdown.
+
+        Never blocks on a busy session for longer than ``wait`` seconds each;
+        see :meth:`close`.
+        """
         with self._lock:
             session_ids = list(self._sessions)
 
         closed = 0
         for session_id in session_ids:
             try:
-                self.close(session_id)
+                self.close(session_id, wait=wait)
                 closed += 1
             except SessionError:
                 pass
@@ -519,7 +699,9 @@ def host_platform() -> str:
 
 
 __all__ = (
+    "CLOSE_WAIT_SECONDS",
     "MAX_OPEN_SESSIONS",
+    "SessionLock",
     "looks_alive",
     "MAX_SCANS_PER_SESSION",
     "ScanResult",

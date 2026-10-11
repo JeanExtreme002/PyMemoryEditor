@@ -115,7 +115,8 @@ with OpenProcess(name="game.exe") as process:
 
       - **Linux** — POSIX TID; same namespace as PID.
       - **Windows** — kernel-assigned DWORD thread id.
-      - **macOS** — Mach thread port name.
+      - **macOS** — system-wide thread id (``thread_info(THREAD_IDENTIFIER_INFO)``,
+        the value ``pthread_threadid_np`` returns).
 
    .. py:attribute:: start_address
       :no-index:
@@ -143,7 +144,9 @@ with OpenProcess(name="game.exe") as process:
       :type: Any
 
       Underlying platform handle (``THREADENTRY32`` on Windows, the TID path on
-      Linux, a Mach port int on macOS). Useful for advanced follow-up calls.
+      Linux, the Mach thread port name on macOS — an identifier only, the
+      send right is released before the thread is yielded). Useful for advanced
+      follow-up calls.
 ```
 
 ### The `main_thread` shortcut
