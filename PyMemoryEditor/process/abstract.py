@@ -374,6 +374,7 @@ class AbstractProcess(ABC):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
@@ -403,6 +404,18 @@ class AbstractProcess(ABC):
         :param writeable_only: if True, search only at writeable memory regions.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
+        :param aligned: numeric values (``int``, ``float``, ``bool``) at a
+            natural width (1, 2, 4 or 8 bytes) are compared at every slot
+            aligned to that width, counted from the start of each region --
+            the same slots every comparison mode uses, so a refine never drops
+            an address the first scan reported, and the way compilers lay
+            fields out. Pass ``False`` to compare at every byte instead, for a
+            value that may sit at a non-aligned address: a packed struct, a
+            number embedded in a byte buffer or string, memory from a custom
+            allocator. It costs the typed scan ``bufflength`` passes and
+            reports each match once. ``str``, ``bytes`` and an ``int`` at an
+            unusual width (3, 5, 6, 7) already match at any byte; the flag
+            does not affect them.
         :raises ValueError: if ``scan_type`` is ``VALUE_BETWEEN`` or
             ``NOT_VALUE_BETWEEN``, or if an ``int`` ``value`` does not fit in
             ``bufflength`` bytes.
@@ -462,16 +475,18 @@ class AbstractProcess(ABC):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
         for a value within the provided range, returning the found addresses.
 
-        See `search_by_value` for parameter semantics. ``bufflength`` is
-        likewise optional (defaults to ``None``): for ``str`` / ``bytes`` it is
-        inferred from the longest of ``start`` / ``end`` (the shorter endpoint
-        is NUL-padded to that width). Pass ``start`` / ``end`` by keyword when
-        omitting ``bufflength``: ``search_by_value_between(int, start=10, end=20)``.
+        See `search_by_value` for parameter semantics, including ``aligned``.
+        ``bufflength`` is likewise optional (defaults to ``None``): for ``str``
+        / ``bytes`` it is inferred from the longest of ``start`` / ``end`` (the
+        shorter endpoint is NUL-padded to that width). Pass ``start`` / ``end``
+        by keyword when omitting ``bufflength``:
+        ``search_by_value_between(int, start=10, end=20)``.
         """
         raise NotImplementedError()
 

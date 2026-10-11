@@ -142,7 +142,8 @@ print(byte_length)     # 5
    Low-level scan kernels used by the backends. Public for advanced use only —
    the high-level :py:meth:`search_by_value` / :py:meth:`search_by_pattern`
    methods are the recommended API. Both step numeric values at a natural
-   width (1, 2, 4, 8) by that width and everything else byte by byte, and both
+   width (1, 2, 4, 8) by that width and everything else byte by byte, both
+   accept ``aligned=False`` to step numeric values by byte as well, and both
    raise ``ValueError`` for an empty target.
 
 .. py:function:: make_predicate(scan_type, target, start, end)

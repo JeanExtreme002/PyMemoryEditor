@@ -217,6 +217,7 @@ class MacProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
@@ -234,6 +235,7 @@ class MacProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
             pid=self.pid,
         )
 
@@ -266,6 +268,7 @@ class MacProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
@@ -283,6 +286,7 @@ class MacProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
             pid=self.pid,
         )
 

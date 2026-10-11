@@ -704,6 +704,7 @@ def SearchAddressesByValue(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     pid: int = 0,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -744,6 +745,7 @@ def SearchAddressesByValue(
         scan_type,
         read_chunk,
         progress_information=progress_information,
+        aligned=aligned,
     )
 
 

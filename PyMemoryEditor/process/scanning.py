@@ -56,10 +56,9 @@ _logger = logging.getLogger("PyMemoryEditor")
 # tuple target (for VALUE_BETWEEN) while ``scan_memory_for_exact_value`` does
 # not — at runtime we only ever route VALUE_BETWEEN through ``scan_memory``,
 # but mypy needs the widened signature on the local binding.
-_SearchingMethod = Callable[
-    [Sequence, int, Any, int, ScanTypesEnum, Optional[Type]],
-    Iterable[int],
-]
+# (data, size, target, width, scan_type, pytype, *, aligned) -> offsets; both
+# kernels share this shape, so the dispatch below is a plain assignment.
+_SearchingMethod = Callable[..., Iterable[int]]
 
 
 T = TypeVar("T")
@@ -246,11 +245,13 @@ def iter_search_results(
     *,
     progress_information: bool = False,
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every chunk of every region and yield the addresses where
     ``scan_memory`` (or ``scan_memory_for_exact_value`` for EXACT/NOT_EXACT)
-    finds a match against ``target_value_bytes``.
+    finds a match against ``target_value_bytes``. ``aligned=False`` lets a
+    numeric value match at any byte offset (see the kernels).
 
     The three platform backends used to duplicate this loop verbatim — same
     chunking, same progress-info computation, same try/except classification.
@@ -301,8 +302,11 @@ def iter_search_results(
     # unusual width (3, 5, 6, 7 bytes), which has no natural alignment.
     # Numeric values at a natural width are stepped by that width and
     # ``iter_region_chunks`` aligns every chunk to it, so they can never
-    # straddle a boundary and need no overlap.
-    byte_granular = pytype in (str, bytes) or bufflength not in (1, 2, 4, 8)
+    # straddle a boundary and need no overlap -- unless ``aligned=False``
+    # lets them start at any byte, in which case they need it like text.
+    byte_granular = (
+        pytype in (str, bytes) or bufflength not in (1, 2, 4, 8) or not aligned
+    )
     byte_granular_overlap = bufflength - 1 if byte_granular else 0
 
     for region in memory_regions:
@@ -337,6 +341,7 @@ def iter_search_results(
                 bufflength,
                 scan_type,
                 pytype,
+                aligned=aligned,
             ):
                 # ``scan_memory_for_exact_value`` uses ``bytes.find`` over the
                 # full augmented buffer and can therefore return offsets that

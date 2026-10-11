@@ -32,7 +32,7 @@ memory.
 ### Method signature
 
 ```{eval-rst}
-.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None, aligned=True)
    :no-index:
 
    :param Type pytype: ``bool``, ``int``, ``float``, ``str`` or ``bytes``.
@@ -90,6 +90,19 @@ comparison mode, so refining an `EXACT_VALUE` scan with `NOT_EXACT_VALUE` or
 `bytes` values, and an `int` at an unusual width (3, 5, 6 or 7 bytes), have no
 natural alignment and can match at any byte. An empty `str` / `bytes` value is
 rejected with `ValueError`: a zero-width target would match everywhere.
+
+Pass `aligned=False` to compare a numeric value at every byte instead. Use it
+when the value may not sit at a multiple of its width: a packed struct, a
+number embedded in a byte buffer or string, memory from a custom allocator.
+It costs the typed scan one pass per byte of width and reports each match
+once; it has no effect on `str`, `bytes` or unusual widths, which already
+match at any byte.
+
+```python
+# A 4-byte int at an odd address: aligned scans skip it, this one finds it.
+for address in process.search_by_value(int, value=1337, aligned=False):
+    print(hex(address))
+```
 ```
 
 ```python
@@ -135,7 +148,7 @@ for address in process.search_by_value_between(
 ### Method signature
 
 ```{eval-rst}
-.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None, aligned=True)
    :no-index:
 ```
 

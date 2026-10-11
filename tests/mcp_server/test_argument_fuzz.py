@@ -167,18 +167,19 @@ class TestArgumentsNeverCrash:
     @given(
         value_type=VALUE_TYPES, value=VALUES, scan_type=SCAN_TYPES,
         end_value=VALUES, bufflength=WIDTHS, writable_only=st.booleans(),
+        aligned=st.booleans(),
     )
     @FUZZ
     def test_scan_value(
         self, fuzz_target, value_type, value, scan_type, end_value,
-        bufflength, writable_only,
+        bufflength, writable_only, aligned,
     ):
         toolset, session_id, _process = fuzz_target
         _survives(
             lambda: toolset.scan_value(
                 session_id, value_type, value, scan_type=scan_type,
                 end_value=end_value, bufflength=bufflength,
-                writable_only=writable_only,
+                writable_only=writable_only, aligned=aligned,
             )
         )
 

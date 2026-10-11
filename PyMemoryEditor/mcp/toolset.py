@@ -1056,6 +1056,7 @@ class MemoryToolset:
         end_value: str = "",
         bufflength: int = 0,
         writable_only: bool = True,
+        aligned: bool = True,
     ) -> Dict[str, Any]:
         """Scan the target's memory for a value. The first step of the loop.
 
@@ -1085,6 +1086,12 @@ class MemoryToolset:
             default). A value the program changes lives in writable memory, so
             this usually cuts the work and the false positives by an order of
             magnitude. Turn it off only when hunting constants.
+        :param aligned: ``true`` (default) compares a numeric value only at
+            addresses that are multiples of its width, which is where programs
+            keep numbers and what every refine assumes. Pass ``false`` to find
+            a number stored at any byte offset (packed data, a value inside a
+            byte buffer); it costs ``bufflength`` passes over memory. No
+            effect on ``str`` / ``bytes``.
 
         A scan stops early at the server's result cap or time budget; when it
         does, the result sets ``partial`` and explains what to narrow. Refining
@@ -1111,6 +1118,7 @@ class MemoryToolset:
                     not_between=(scan_name == "not_between"),
                     writeable_only=writable_only,
                     memory_regions=batch,
+                    aligned=aligned,
                 )
 
         else:
@@ -1124,6 +1132,7 @@ class MemoryToolset:
                     scan_type=scan_enum,
                     writeable_only=writable_only,
                     memory_regions=batch,
+                    aligned=aligned,
                 )
 
         with session.lock, self._target_errors(session, "scan_value"):

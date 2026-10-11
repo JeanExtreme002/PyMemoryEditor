@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import heapq
 import re
 import struct
 import sys
@@ -197,12 +198,14 @@ def scan_memory_for_exact_value(
     target_value_size: int,
     comparison: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     is_string: Union[bool, Type, None] = False,
+    *,
+    aligned: bool = True,
 ) -> Generator[int, None, None]:
     """
     Search for an exact (or not-exact) match of the target value in the memory region.
 
     Offsets are yielded in ascending order. The stepping policy depends on the
-    value type (see ``is_string`` below) and width:
+    value type (see ``is_string`` below), the width, and ``aligned``:
 
     * **Numeric at a natural width** (``int`` / ``bool`` at 1, 2, 4 or 8
       bytes; ``float`` at 4 or 8): only offsets aligned to
@@ -221,6 +224,11 @@ def scan_memory_for_exact_value(
       NOT_EXACT_VALUE every offset whose ``target_value_size``-byte window
       *overlaps* an exact match is suppressed too, so the bytes beside a match
       are not reported as independent hits.
+    * ``aligned=False`` makes a numeric value at a natural width step byte by
+      byte as well, so a value sitting at an address that is not a multiple
+      of its width (a packed struct, a field inside a byte buffer) is found.
+      It has no effect on text or on unusual widths, which already step by
+      byte.
 
     The 6th argument accepts either a ``pytype`` (the value type) or a plain
     ``is_string`` boolean for backward compatibility with the previous API.
@@ -243,18 +251,21 @@ def scan_memory_for_exact_value(
             target_value_size,
             comparison,
             float,
+            aligned=aligned,
         )
         return
 
     text = _is_text(is_string)
     size = target_value_size
-    step = 1 if text or size not in _NATURAL_WIDTHS else size
+    step = 1 if text or not aligned or size not in _NATURAL_WIDTHS else size
     data = _as_bytes(memory_region_data)
 
     def matches() -> Generator[int, None, None]:
         """Exact matches at ``step`` alignment, ascending. ``bytes.find``
         locates candidates in C; an unaligned hit resumes the search at the
-        next aligned slot (no aligned match can start strictly between)."""
+        next aligned slot (no aligned match can start strictly between). With
+        ``step == 1`` every hit is aligned and the search resumes one byte on,
+        so overlapping matches are all reported."""
         start = 0
         while True:
             found_index = data.find(target_value, start)
@@ -264,7 +275,7 @@ def scan_memory_for_exact_value(
                 start = (found_index // step + 1) * step
                 continue
             yield found_index
-            start = found_index + 1 if text else found_index + step
+            start = found_index + 1 if step == 1 else found_index + step
 
     if comparison is ScanTypesEnum.EXACT_VALUE:
         yield from matches()
@@ -396,6 +407,8 @@ def scan_memory(
     target_value_size: int,
     scan_type: ScanTypesEnum,
     pytype: Optional[Type] = None,
+    *,
+    aligned: bool = True,
 ) -> Generator[int, None, None]:
     """
     Search the memory region for values matching scan_type relative to target_value.
@@ -409,7 +422,11 @@ def scan_memory(
 
     Numeric values at a natural width (1, 2, 4 or 8 bytes) are stepped by
     that width; an unusual ``int`` width (3, 5, 6, 7) has no natural alignment
-    and is stepped byte by byte, like text.
+    and is stepped byte by byte, like text. ``aligned=False`` steps a numeric
+    value at a natural width byte by byte too: the typed fast path (struct or
+    NumPy) then runs once per byte phase ``0 .. width-1`` and the phases are
+    merged in ascending order, so the result is the same as a byte-by-byte
+    loop at a fraction of the cost.
 
     :raises ValueError: if the target (or either end of a range) is empty.
 
@@ -456,45 +473,66 @@ def scan_memory(
     # region for iter_unpack.
     if fmt is not None:
         buffer = _as_buffer(memory_region_data)
-        total = (len(buffer) // target_value_size) * target_value_size
-        if total == 0:
+
+        def typed_offsets(view: memoryview) -> Iterable[int]:
+            """Offsets within ``view`` (whose length is a multiple of the
+            width) where the decoded value satisfies ``scan_type``."""
+            # Optional NumPy fast path (the ``[speed]`` extra). When NumPy is
+            # installed, the per-element comparison loop below is replaced by
+            # a single vectorized comparison over the whole view — same
+            # offsets, same order, ~10-30x faster on the ordered scans.
+            # Returns None when NumPy is absent or the (pytype, size) pair has
+            # no fast path, in which case we fall through to the struct loop.
+            if scan_numpy.NUMPY_AVAILABLE:
+                offsets = scan_numpy.scan_offsets(
+                    view,
+                    target_value_size,
+                    scan_type,
+                    pytype,
+                    byte_order,
+                    target_value_decoded,
+                    start_target_value,
+                    end_target_value,
+                )
+                if offsets is not None:
+                    return offsets
+
+            # One predicate (built once, outside the loop) drives every
+            # scan_type, so the comparison semantics aren't duplicated per
+            # branch. The value production stays inlined (the C-level
+            # struct.iter_unpack), keeping the hot loop to a single Python
+            # call per element.
+            predicate = make_predicate(
+                scan_type, target_value_decoded, start_target_value, end_target_value
+            )
+
+            def struct_loop() -> Generator[int, None, None]:
+                offset = 0
+                for (value,) in struct.iter_unpack(fmt, view):
+                    if predicate(value):
+                        yield offset
+                    offset += target_value_size
+
+            return struct_loop()
+
+        if aligned:
+            total = (len(buffer) // target_value_size) * target_value_size
+            if total:
+                yield from typed_offsets(buffer[:total])
             return
 
-        # Optional NumPy fast path (the ``[speed]`` extra). When NumPy is
-        # installed, the per-element comparison loop below is replaced by a
-        # single vectorized comparison over the whole region — same offsets,
-        # same order, ~10-30x faster on the ordered scans. Returns None when
-        # NumPy is absent or the (pytype, size) pair has no fast path, in which
-        # case we fall through to the struct loop unchanged.
-        if scan_numpy.NUMPY_AVAILABLE:
-            offsets = scan_numpy.scan_offsets(
-                buffer[:total],
-                target_value_size,
-                scan_type,
-                pytype,
-                byte_order,
-                target_value_decoded,
-                start_target_value,
-                end_target_value,
-            )
-            if offsets is not None:
-                yield from offsets
-                return
+        # Byte-granular: a value may start at any byte. Run the typed scan
+        # once per byte phase (offsets k, k+width, k+2*width, ... for each
+        # k < width) and merge the ascending phase streams, so a packed or
+        # otherwise misaligned value is found at the typed path's speed.
+        def shifted(phase: int) -> Iterable[int]:
+            usable = ((len(buffer) - phase) // target_value_size) * target_value_size
+            if usable <= 0:
+                return ()
+            view = buffer[phase : phase + usable]
+            return (offset + phase for offset in typed_offsets(view))
 
-        # One predicate (built once, outside the loop) drives every scan_type,
-        # so the comparison semantics aren't duplicated per branch. The value
-        # production stays inlined (the C-level struct.iter_unpack), keeping the
-        # hot loop to a single Python call per element.
-        predicate = make_predicate(
-            scan_type, target_value_decoded, start_target_value, end_target_value
-        )
-        unpacker = struct.iter_unpack(fmt, buffer[:total])
-        offset = 0
-        step = target_value_size
-        for (value,) in unpacker:
-            if predicate(value):
-                yield offset
-            offset += step
+        yield from heapq.merge(*(shifted(phase) for phase in range(target_value_size)))
         return
 
     # Fallback: strings (byte-by-byte) or numeric with unusual sizes (3/6/7).
@@ -503,7 +541,7 @@ def scan_memory(
     data = _as_bytes(memory_region_data)
     step = (
         1
-        if is_string or pytype is bytes or target_value_size not in _NATURAL_WIDTHS
+        if is_string or pytype is bytes or not aligned or target_value_size not in _NATURAL_WIDTHS
         else target_value_size
     )
     end = memory_region_data_size - target_value_size + 1

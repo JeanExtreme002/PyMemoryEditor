@@ -614,3 +614,85 @@ def test_empty_target_is_rejected_by_both_scan_kernels(pytype):
         list(scan_memory(b"abcdef", 6, b"", 0, ScanTypesEnum.BIGGER_THAN, pytype))
     with pytest.raises(ValueError, match="must not be empty"):
         list(scan_memory(b"abcdef", 6, (b"", b"a"), 1, ScanTypesEnum.VALUE_BETWEEN, pytype))
+
+
+class TestAlignedFalse:
+    """``aligned=False`` restores byte-granular numeric scans as an opt-in."""
+
+    def test_exact_reports_the_unaligned_hit_too(self):
+        target = (1).to_bytes(4, "little")
+        assert list(
+            scan_memory_for_exact_value(
+                _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4,
+                ScanTypesEnum.EXACT_VALUE, int, aligned=False,
+            )
+        ) == [1, 8]
+
+    def test_not_exact_is_the_complement_over_every_byte_offset(self):
+        target = (1).to_bytes(4, "little")
+        not_exact = list(
+            scan_memory_for_exact_value(
+                _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4,
+                ScanTypesEnum.NOT_EXACT_VALUE, int, aligned=False,
+            )
+        )
+        assert not_exact == [0, 2, 3, 4, 5, 6, 7]
+
+    @pytest.mark.parametrize("numpy_on", [True, False])
+    def test_ordered_scan_includes_the_unaligned_hit(self, numpy_on, monkeypatch):
+        from PyMemoryEditor.util import scan_numpy
+
+        monkeypatch.setattr(
+            scan_numpy, "NUMPY_AVAILABLE", numpy_on and scan_numpy.NUMPY_AVAILABLE
+        )
+        target = (1).to_bytes(4, "little")
+        at_least = list(
+            scan_memory(
+                _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4,
+                ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE, int, aligned=False,
+            )
+        )
+        assert 1 in at_least
+        assert at_least == sorted(at_least)
+        # The aligned result is a subset: nothing is lost by widening.
+        aligned = list(
+            scan_memory(
+                _UNALIGNED_DECOY, len(_UNALIGNED_DECOY), target, 4,
+                ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE, int,
+            )
+        )
+        assert set(aligned) <= set(at_least)
+
+    def test_float_value_semantics_survive(self):
+        import struct
+
+        # 0xFF padding so no other 8-byte window decodes to zero.
+        payload = b"\xff" * 3 + struct.pack("<d", -0.0) + b"\xff" * 5
+        zero = struct.pack("<d", 0.0)
+        # -0.0 == 0.0 by value, found at the odd offset only when unaligned.
+        assert list(
+            scan_memory_for_exact_value(
+                payload, len(payload), zero, 8, ScanTypesEnum.EXACT_VALUE, float, aligned=False
+            )
+        ) == [3]
+        assert list(
+            scan_memory_for_exact_value(
+                payload, len(payload), zero, 8, ScanTypesEnum.EXACT_VALUE, float
+            )
+        ) == []
+
+    def test_flag_is_a_no_op_for_text(self):
+        data = b"xxabcxabcx"
+        for scan_type in (ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE):
+            assert list(
+                scan_memory_for_exact_value(data, len(data), b"abc", 3, scan_type, str)
+            ) == list(
+                scan_memory_for_exact_value(
+                    data, len(data), b"abc", 3, scan_type, str, aligned=False
+                )
+            )
+        assert list(
+            scan_memory(data, len(data), b"abc", 3, ScanTypesEnum.BIGGER_THAN, str)
+        ) == list(
+            scan_memory(data, len(data), b"abc", 3, ScanTypesEnum.BIGGER_THAN, str, aligned=False)
+        )

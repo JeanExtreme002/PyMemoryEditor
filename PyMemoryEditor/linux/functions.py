@@ -455,6 +455,7 @@ def search_addresses_by_value(
     writeable_only: bool = False,
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -485,6 +486,7 @@ def search_addresses_by_value(
         scan_type,
         _make_read_chunk(pid),
         progress_information=progress_information,
+        aligned=aligned,
         transient_error_check=_is_transient,
     )
 

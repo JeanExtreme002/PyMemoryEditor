@@ -733,6 +733,7 @@ def search_addresses_by_value(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     pid: int = 0,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every readable, non-shared region of the task and yield addresses
@@ -764,6 +765,7 @@ def search_addresses_by_value(
         scan_type,
         _make_read_chunk(task),
         progress_information=progress_information,
+        aligned=aligned,
         transient_error_check=_is_skippable_by_sweep,
     )
 

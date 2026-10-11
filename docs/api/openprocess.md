@@ -248,14 +248,14 @@ identical on every platform.
 ### Searching
 
 ```{eval-rst}
-.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None, aligned=True)
 
    Yield every address holding ``value`` (compared per ``scan_type``).
    ``bufflength`` is optional (numeric types use their default width; ``str`` /
    ``bytes`` infer it from ``value``) — pass ``value`` by keyword when omitting
    it. See :doc:`../guide/searching` for a full walkthrough.
 
-.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None, aligned=True)
 
    Yield every address whose value is in ``[start, end]`` (or outside, with
    ``not_between=True``).

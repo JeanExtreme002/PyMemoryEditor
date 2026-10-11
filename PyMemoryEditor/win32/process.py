@@ -271,6 +271,7 @@ class WindowsProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
         self.__require_read()
@@ -289,6 +290,7 @@ class WindowsProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
             pid=self.pid,
         )
 
@@ -322,6 +324,7 @@ class WindowsProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
         self.__require_read()
@@ -340,6 +343,7 @@ class WindowsProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
             pid=self.pid,
         )
 
