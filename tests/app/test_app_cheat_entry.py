@@ -569,9 +569,18 @@ def test_bulk_edit_writes_go_through_the_poll_worker(qapp, monkeypatch):
             entry.frozen = True  # Active rows are targeted by the bulk edit
             table.add_entry(entry)
 
+        # Record what is handed to the worker rather than reading its queue:
+        # the worker thread is live and drains that queue on its own tick, so
+        # inspecting it directly raced the drain (CI saw 0 or 1 of the 2).
+        queued = []
+        monkeypatch.setattr(
+            table._poller,
+            "request_write",
+            lambda address, pytype, length, value: queued.append((address, value)),
+        )
+
         table._on_edit_selected()
 
-        queued = [(addr, value) for addr, _pytype, _length, value in table._poller._pending_writes]
         assert queued == [(0x1000, 7), (0x2000, 7)]
         assert process.writes == []  # nothing ran on the UI thread
         assert [e.last_value for e in table._entries] == [7, 7]

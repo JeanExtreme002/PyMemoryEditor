@@ -210,8 +210,11 @@ class WindowsProcess(AbstractProcess):
     def _target_alive(self) -> bool:
         # An open handle keeps the pid reserved after the process exits, so a
         # pid probe would say "alive" forever; GetExitCodeProcess asks the
-        # handle itself. None means the handle lacks the query right -- fall
-        # back to the pid probe rather than guess.
+        # handle itself. None means the handle lacks the query right (only a
+        # custom narrowed `permission=` mask drops it). The pid probe is the
+        # only answer left then, and for an exited target it is the wrong one
+        # -- the scan treats that target's reads as vanished pages, as before
+        # this check existed.
         exited = _process_has_exited(self.__process_handle)
         if exited is None:
             return super()._target_alive()

@@ -543,7 +543,13 @@ class MainWindow(QMainWindow):
         if not addresses:
             return
         spec, length = self._scanner.current_spec_and_length()
-        self._cheat.add_addresses(addresses, spec, length, description="")
+        try:
+            self._cheat.add_addresses(addresses, spec, length, description="")
+        except ValueError as exc:
+            # The scanner's width field allows more than the cheat table's
+            # MAX_ENTRY_LENGTH; add_entry refuses such a width.
+            QMessageBox.warning(self, "Cheat Table", str(exc))
+            return
         self._status.showMessage(f"Added {len(addresses)} address(es) to cheat table.")
 
     def _open_memory_map(self) -> None:
@@ -635,7 +641,11 @@ class MainWindow(QMainWindow):
             spec_label=spec_label,
             length=int(length),
         )
-        self._cheat.add_entry(entry)
+        try:
+            self._cheat.add_entry(entry)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cheat Table", str(exc))
+            return
         self._status.showMessage(
             f"Added 0x{address:X} to cheat table (from {source})."
         )

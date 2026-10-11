@@ -113,7 +113,10 @@ class AbstractProcess(ABC):
         """
         Whether the target process still exists. The default asks the OS by
         pid; a backend whose handle keeps the pid reserved after the process
-        exits (Windows) overrides it with a handle-level check.
+        exits (Windows) overrides it with a handle-level check. A zombie (a
+        process that exited but whose parent has not reaped it yet) still
+        counts as existing on Linux and macOS, so its reads are treated as
+        vanished pages until it is reaped.
         """
         return pid_exists(self.pid)
 

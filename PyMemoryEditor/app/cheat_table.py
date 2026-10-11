@@ -273,7 +273,16 @@ class CheatTable(QWidget):
         length: int,
         description: str = "",
     ) -> None:
-        """Convenience used by the scanner panel to bulk-promote rows."""
+        """Convenience used by the scanner panel to bulk-promote rows.
+
+        :raises ValueError: if ``length`` is over ``MAX_ENTRY_LENGTH`` -- checked
+            once up front so a refusal adds none of the rows rather than some.
+        """
+        if int(length) > MAX_ENTRY_LENGTH:
+            raise ValueError(
+                "length %d is over the %d-byte maximum for a cheat-table entry"
+                % (int(length), MAX_ENTRY_LENGTH)
+            )
         for addr in addresses:
             self.add_entry(
                 CheatEntry(

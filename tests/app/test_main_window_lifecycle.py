@@ -165,3 +165,36 @@ def test_closing_with_entries_asks_and_can_be_cancelled(window, monkeypatch):
     event = QCloseEvent()
     window.closeEvent(event)
     assert event.isAccepted()
+
+
+def test_promoting_an_over_long_width_is_reported_not_raised(window, monkeypatch):
+    """
+    The scanner's width field allows more than the cheat table's
+    MAX_ENTRY_LENGTH; add_entry refuses such a width with ValueError. Raised
+    inside the promote slot that would only reach the user as the generic
+    excepthook dialog and leave part of the selection added.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    from PyMemoryEditor.app.cheat_table import MAX_ENTRY_LENGTH
+    from PyMemoryEditor.app.value_types import find_spec
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2])
+    )
+    monkeypatch.setattr(
+        window._scanner,
+        "current_spec_and_length",
+        lambda: (find_spec("String (UTF-8)"), MAX_ENTRY_LENGTH + 1),
+    )
+
+    window._promote_to_cheat_table([0x1000, 0x2000])
+
+    assert window._cheat.entry_count() == 0
+    assert len(warnings) == 1 and str(MAX_ENTRY_LENGTH) in warnings[0]
+
+    window._promote_resolved_address(0x3000, "String (UTF-8)", MAX_ENTRY_LENGTH + 1, "pointer chain")
+
+    assert window._cheat.entry_count() == 0
+    assert len(warnings) == 2

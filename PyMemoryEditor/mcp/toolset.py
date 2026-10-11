@@ -845,10 +845,11 @@ class MemoryToolset:
         if name:
             try:
                 current = self._name_for_pid(pid)
-            except ToolError:
-                # Enumeration failed (transient on Windows). The handle is
-                # already open and nothing else will close it: do so before
-                # reporting, or every retry leaks one.
+            except BaseException:
+                # Enumeration failed (a ToolError when it is the transient
+                # Windows snapshot failure; anything else is unexpected). The
+                # handle is already open and nothing else will close it: do so
+                # before propagating, or every retry leaks one.
                 _close_quietly(process)
                 raise
             if current and current.casefold() != name.casefold():
