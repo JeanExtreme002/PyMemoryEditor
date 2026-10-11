@@ -1,9 +1,15 @@
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 #
-# `open-pull-requests-limit: 0` disables routine version-update PRs (no weekly
-# bump churn). Dependabot security advisories still surface via the Security
-# tab and security-update PRs are unaffected by this limit, so vulnerabilities
-# in psutil et al. remain visible.
+# pip: `open-pull-requests-limit: 0` disables routine version-update PRs. The
+# library has no runtime dependencies and the extras (PySide6, psutil, mcp,
+# NumPy) are range-pinned in pyproject.toml, so weekly bump PRs would be
+# churn with nothing to merge. Security advisories still surface via the
+# Security tab and security-update PRs are unaffected by this limit; the
+# `audit` job in python-package.yml runs pip-audit weekly on top of that.
+#
+# github-actions: the workflows pin every action to a commit SHA (with the
+# tag in a trailing comment), so these PRs are the only way the pins move.
+# Grouped into one monthly PR to keep the noise at one review a month.
 
 version: 2
 
@@ -17,5 +23,9 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 0
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"

@@ -248,14 +248,14 @@ identical on every platform.
 ### Searching
 
 ```{eval-rst}
-.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value(pytype, bufflength=None, value=..., scan_type=ScanTypesEnum.EXACT_VALUE, *, progress_information=False, writeable_only=False, memory_regions=None, aligned=True)
 
    Yield every address holding ``value`` (compared per ``scan_type``).
    ``bufflength`` is optional (numeric types use their default width; ``str`` /
    ``bytes`` infer it from ``value``) — pass ``value`` by keyword when omitting
    it. See :doc:`../guide/searching` for a full walkthrough.
 
-.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None)
+.. py:method:: search_by_value_between(pytype, bufflength=None, start=..., end=..., *, not_between=False, progress_information=False, writeable_only=False, memory_regions=None, aligned=True)
 
    Yield every address whose value is in ``[start, end]`` (or outside, with
    ``not_between=True``).
@@ -325,6 +325,9 @@ identical on every platform.
 .. py:method:: load_pointer_paths(file)
 
    Load pointer paths previously saved with :py:meth:`save_pointer_paths`.
+   Raises ``ValueError`` (naming the file and the field) when the file is not
+   such an export — wrong ``format``, unsupported ``version``, or a missing /
+   malformed ``paths`` entry.
 
 .. py:method:: rescan_pointer_paths(paths, target_address)
 
@@ -333,6 +336,8 @@ identical on every platform.
 .. py:method:: compare_pointer_scans(*sources)
 
    Intersect several saved scans — return the paths present in *every* one.
+   Takes one or more sources (``ValueError`` with none); a single source
+   returns its module-backed paths unchanged.
 ```
 
 ### Allocation

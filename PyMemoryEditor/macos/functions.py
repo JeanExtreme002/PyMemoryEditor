@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from typing import Generator, Iterator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.errors import ProcessIDNotExistsError
 from ..process.module_info import ModuleInfo
 from ..process.region import (
     default_address_filter,
@@ -43,6 +44,7 @@ from .types import (
     KERN_NO_ACCESS,
     KERN_PROTECTION_FAILURE,
     KERN_SUCCESS,
+    MACH_SEND_INVALID_DEST,
     MEMORY_BASIC_INFORMATION,
     TASK_DYLD_INFO,
     TASK_DYLD_INFO_COUNT,
@@ -81,6 +83,13 @@ _logger = logging.getLogger("PyMemoryEditor")
 # simply make 4 small hops past a problem page, which is cheap. Sized small
 # enough that we do not accidentally skip a real adjacent region.
 _REGION_SKIP_BUMP = 0x1000
+
+# How many *consecutive* failed `mach_vm_region` calls the walk tolerates
+# before concluding the task itself is the problem. A genuine transient skip
+# is one page, maybe a handful; a dead task or an invalid port fails on every
+# address, and without this ceiling the walk would bump 4 KiB at a time across
+# the whole 64-bit address space.
+_REGION_MAX_CONSECUTIVE_FAILURES = 64
 
 # mach_vm_write's data_count parameter is `mach_msg_type_number_t` — a 32-bit
 # unsigned int per the Mach interface. A write larger than UINT32_MAX would
@@ -226,6 +235,24 @@ def _get_region_filename(pid: int, address: int) -> str:
     return buf.value.decode("utf-8", errors="replace")
 
 
+def _raise_region_walk_failure(pid: int, kr: int, address: int) -> None:
+    """
+    Turn a region walk that cannot make progress into the right exception.
+
+    A task that exited mid-walk is reported as
+    :class:`~PyMemoryEditor.ProcessIDNotExistsError` (the contract every
+    backend's ``get_memory_regions`` documents); anything else surfaces as an
+    ``OSError`` carrying the ``kern_return_t`` so the caller can see what the
+    kernel actually said instead of an empty or endless enumeration.
+    """
+    if pid and not process_exists(pid):
+        raise ProcessIDNotExistsError(pid)
+    raise OSError(
+        "mach_vm_region failed at 0x%X: %s (kr=%d). The task port is dead or "
+        "the region walk could not make progress." % (address, mach_error_message(kr), kr)
+    )
+
+
 def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None, None]:
     """
     Yield a :class:`MemoryRegion` describing each memory region of the task.
@@ -236,8 +263,16 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
     ``KERN_NO_ACCESS`` on a guard page, etc.) used to terminate enumeration
     too, silently truncating the region list. Now those are logged and the
     cursor is bumped one page so the walk keeps going.
+
+    That skip is bounded: :data:`MACH_SEND_INVALID_DEST` (the task behind the
+    port has exited) or more than :data:`_REGION_MAX_CONSECUTIVE_FAILURES`
+    failures in a row end the walk with
+    :class:`~PyMemoryEditor.ProcessIDNotExistsError` when ``pid`` is given and
+    the process is gone, or ``OSError`` otherwise — never an endless crawl
+    across the address space.
     """
     address = mach_vm_address_t(0)
+    consecutive_failures = 0
 
     while True:
         size = mach_vm_size_t(0)
@@ -258,6 +293,12 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
         if kr != KERN_SUCCESS:
             if kr == KERN_INVALID_ADDRESS:
                 return  # end of address space — the normal terminator
+            consecutive_failures += 1
+            if (
+                kr == MACH_SEND_INVALID_DEST
+                or consecutive_failures > _REGION_MAX_CONSECUTIVE_FAILURES
+            ):
+                _raise_region_walk_failure(pid, kr, address.value)
             _logger.debug(
                 "get_memory_regions: mach_vm_region skipped 0x%X (kr=%d, %s); "
                 "advancing one page",
@@ -265,6 +306,8 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
             )
             address.value += _REGION_SKIP_BUMP
             continue
+
+        consecutive_failures = 0
 
         # mach_vm_region returns a port name for the backing object; release it.
         if object_name.value:
@@ -689,6 +732,8 @@ def search_addresses_by_value(
     writeable_only: bool = False,
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    pid: int = 0,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every readable, non-shared region of the task and yield addresses
@@ -702,7 +747,7 @@ def search_addresses_by_value(
     target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
-        memory_regions if memory_regions is not None else get_memory_regions(task)
+        memory_regions if memory_regions is not None else get_memory_regions(task, pid)
     )
 
     filtered_regions = [
@@ -720,6 +765,7 @@ def search_addresses_by_value(
         scan_type,
         _make_read_chunk(task),
         progress_information=progress_information,
+        aligned=aligned,
         transient_error_check=_is_skippable_by_sweep,
     )
 
@@ -1059,6 +1105,7 @@ def search_addresses_by_pattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target task. See
@@ -1067,7 +1114,7 @@ def search_addresses_by_pattern(
     compiled, length = compile_pattern(pattern, byte_length=byte_length)
 
     source_regions = (
-        memory_regions if memory_regions is not None else get_memory_regions(task)
+        memory_regions if memory_regions is not None else get_memory_regions(task, pid)
     )
 
     filtered_regions = [
@@ -1093,6 +1140,7 @@ def search_values_by_addresses(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
+    pid: int = 0,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """
     Read values at the provided addresses, grouped by region for syscall efficiency.
@@ -1110,7 +1158,7 @@ def search_values_by_addresses(
     # the caller pre-filtered to zero regions.
     if memory_regions is None:
         memory_regions = [
-            region for region in get_memory_regions(task) if default_address_filter(region)
+            region for region in get_memory_regions(task, pid) if default_address_filter(region)
         ]
     else:
         memory_regions = list(memory_regions)

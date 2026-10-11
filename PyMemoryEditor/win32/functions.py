@@ -12,6 +12,7 @@ import logging
 from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..process.errors import ProcessIDNotExistsError
 from ..process.module_info import ModuleInfo
 from ..process.region import (
     MemoryRegion,
@@ -73,6 +74,18 @@ kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
 
 kernel32.CloseHandle.argtypes = (ctypes.wintypes.HANDLE,)
 kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+# BOOL GetExitCodeProcess(HANDLE hProcess, LPDWORD lpExitCode);
+# Needs PROCESS_QUERY_INFORMATION or PROCESS_QUERY_LIMITED_INFORMATION on the
+# handle. Used to tell "the target exited" apart from "the handle lacks a
+# right" when a memory call fails — a terminated process keeps its pid and
+# its handle valid for as long as we hold the handle, so a pid probe alone
+# cannot answer that question.
+kernel32.GetExitCodeProcess.argtypes = (
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+)
+kernel32.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
 
 kernel32.ReadProcessMemory.argtypes = (
     ctypes.wintypes.HANDLE,
@@ -324,6 +337,26 @@ def IsProcess64Bit(process_handle: int) -> bool:
 T = TypeVar("T")
 
 
+# Win32 error codes this module reasons about.
+_ERROR_ACCESS_DENIED = 5
+_ERROR_INVALID_HANDLE = 6
+_ERROR_INVALID_PARAMETER = 87
+# GetExitCodeProcess reports this while the process is still running.
+_STILL_ACTIVE = 259
+
+# VirtualQueryEx / ReadProcessMemory failures that describe the *handle*, not
+# the address: no amount of stepping to the next page or the next chunk will
+# change the answer, so they end the operation instead of being skipped.
+_HANDLE_LEVEL_ERRORS = frozenset((_ERROR_ACCESS_DENIED, _ERROR_INVALID_HANDLE))
+
+# How many consecutive failed VirtualQueryEx calls a region walk tolerates
+# before concluding the handle or the target is the problem. A transient skip
+# is one page, maybe a handful; a dead target or an unusable handle fails on
+# every address, and without this ceiling the walk would step one page at a
+# time across the whole user address space (~2^47 / 4 KiB calls).
+_REGION_MAX_CONSECUTIVE_FAILURES = 64
+
+
 def _raise_last_error(api_name: str) -> None:
     """Raise an OSError populated with the current GetLastError() value."""
     code = ctypes.get_last_error()
@@ -338,6 +371,46 @@ def CloseProcessHandle(process_handle: int) -> int:
     Close the process handle.
     """
     return kernel32.CloseHandle(process_handle)
+
+
+def _process_has_exited(process_handle: int) -> Optional[bool]:
+    """
+    Return ``True`` if the process behind ``process_handle`` has terminated,
+    ``False`` if it is still running, or ``None`` when the handle lacks the
+    query right needed to tell.
+    """
+    exit_code = ctypes.wintypes.DWORD(0)
+    ctypes.set_last_error(0)
+    if not kernel32.GetExitCodeProcess(process_handle, ctypes.byref(exit_code)):
+        return None
+    return exit_code.value != _STILL_ACTIVE
+
+
+def _raise_region_walk_failure(
+    process_handle: int, pid: int, err: int, address: int
+) -> None:
+    """
+    Turn a region walk that cannot make progress into the right exception.
+
+    A target that exited mid-walk is reported as
+    :class:`~PyMemoryEditor.ProcessIDNotExistsError` (the contract every
+    backend's ``get_memory_regions`` documents). ``ERROR_ACCESS_DENIED`` on a
+    live target is the handle missing ``PROCESS_QUERY_INFORMATION`` — the
+    right ``VirtualQueryEx`` needs — and is raised as ``PermissionError`` with
+    that hint. Anything else surfaces as an ``OSError`` carrying the Win32 code.
+    """
+    if pid and _process_has_exited(process_handle):
+        raise ProcessIDNotExistsError(pid)
+    if err == _ERROR_ACCESS_DENIED:
+        raise PermissionError(
+            "VirtualQueryEx failed at 0x%X with ERROR_ACCESS_DENIED. The handle "
+            "cannot enumerate memory regions: open the process with "
+            "PROCESS_QUERY_INFORMATION (or PROCESS_ALL_ACCESS), or the target "
+            "has exited." % address
+        )
+    raise ctypes.WinError(
+        err, "VirtualQueryEx failed at 0x%X; the region walk could not make progress." % address
+    )
 
 
 def _get_mapped_filename(process_handle: int, address: int) -> str:
@@ -358,7 +431,7 @@ def _get_mapped_filename(process_handle: int, address: int) -> str:
     return buf.value
 
 
-def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]:
+def GetMemoryRegions(process_handle: int, pid: int = 0) -> Generator[MemoryRegion, None, None]:
     """
     Yield a :class:`MemoryRegion` for every region in the target's address space.
 
@@ -372,6 +445,14 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
     consult ``GetLastError``: only fall through for the natural end-of-space
     case; for any other failure log it and bump the cursor by one page so the
     walk keeps making progress.
+
+    That skip is bounded: a handle-level error (``ERROR_ACCESS_DENIED``,
+    ``ERROR_INVALID_HANDLE``) or more than ``_REGION_MAX_CONSECUTIVE_FAILURES``
+    failures in a row end the walk with
+    :class:`~PyMemoryEditor.ProcessIDNotExistsError` when ``pid`` is given and
+    the target has exited, ``PermissionError`` when the handle lacks
+    ``PROCESS_QUERY_INFORMATION``, or ``OSError`` otherwise — never an endless
+    crawl across the address space.
 
     The walk bounds come from ``GetNativeSystemInfo`` rather than
     ``GetSystemInfo`` so that, from a 64-bit Python attached to a 32-bit target,
@@ -395,6 +476,7 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
     page_size = _native_system_information.dwPageSize or 0x1000
 
     current_address = mem_region_begin
+    consecutive_failures = 0
 
     while current_address < mem_region_end:
         region = mbi_class()
@@ -412,8 +494,14 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
             # we walk past lpMaximumApplicationAddress on some Windows builds —
             # the natural end. Anything else is a transient skip, not a
             # terminator: log and step one page forward.
-            if err in (0, 87):
+            if err in (0, _ERROR_INVALID_PARAMETER):
                 return
+            consecutive_failures += 1
+            if (
+                err in _HANDLE_LEVEL_ERRORS
+                or consecutive_failures > _REGION_MAX_CONSECUTIVE_FAILURES
+            ):
+                _raise_region_walk_failure(process_handle, pid, err, current_address)
             _logger.debug(
                 "GetMemoryRegions: VirtualQueryEx skipped 0x%X (err=%d); "
                 "advancing one page",
@@ -421,6 +509,8 @@ def GetMemoryRegions(process_handle: int) -> Generator[MemoryRegion, None, None]
             )
             current_address += page_size
             continue
+
+        consecutive_failures = 0
 
         yield make_region(
             address=current_address, size=region.RegionSize, struct=region,
@@ -540,11 +630,44 @@ def ReadProcessMemoryInto(process_handle: int, address: int, buffer) -> int:
     return bytes_read.value
 
 
+class _Win32FatalReadError(OSError):
+    """
+    ``ReadProcessMemory`` failed for a reason no scan may skip past: the
+    handle lacks ``PROCESS_VM_READ`` / is invalid, or the target has exited.
+
+    Distinct from :class:`_Win32ChunkReadError` (a page that vanished
+    mid-scan, which the scan loops are allowed to walk past): the value and
+    pattern scans re-raise it instead of skipping the chunk, and
+    ``search_by_addresses`` treats it like every other non-transient error --
+    raised with ``raise_error=True``, logged and reported as ``None`` values
+    otherwise, exactly as on Linux and macOS.
+    """
+
+    def __init__(self, address: int, size: int, code: int, reason: str):
+        super().__init__(
+            "ReadProcessMemory failed at 0x%X (%d bytes): %s (error %d)."
+            % (address, size, reason, code)
+        )
+        self.code = code
+
+
 def _read_region(process_handle: int, address: int, size: int):
-    """Read a memory region; returns the byte buffer or None on failure."""
+    """
+    Read a memory region for the chunked scan loops.
+
+    Returns the byte buffer, or ``None`` when the failure is one the scan may
+    skip (``ERROR_PARTIAL_COPY`` / ``ERROR_NOACCESS`` for a page unmapped or
+    re-protected mid-scan, a zero-byte read). Raises
+    :class:`_Win32FatalReadError` when the failure describes the handle or the
+    target instead of the page — ``ERROR_ACCESS_DENIED``,
+    ``ERROR_INVALID_HANDLE``, or a target that has exited — because skipping
+    every chunk there would turn a real error into a scan that silently finds
+    nothing (the Linux and macOS backends propagate those too).
+    """
     region_data = (ctypes.c_byte * size)()
     bytes_read = ctypes.c_size_t(0)
 
+    ctypes.set_last_error(0)
     success = kernel32.ReadProcessMemory(
         process_handle,
         ctypes.c_void_p(address),
@@ -552,7 +675,20 @@ def _read_region(process_handle: int, address: int, size: int):
         size,
         ctypes.byref(bytes_read),
     )
-    if not success or bytes_read.value == 0:
+    if not success:
+        err = ctypes.get_last_error()
+        if err in _HANDLE_LEVEL_ERRORS:
+            raise _Win32FatalReadError(
+                address, size, err,
+                "the handle cannot read the process memory (open it with "
+                "PROCESS_VM_READ or PROCESS_ALL_ACCESS)"
+                if err == _ERROR_ACCESS_DENIED
+                else "the process handle is invalid",
+            )
+        if _process_has_exited(process_handle):
+            raise _Win32FatalReadError(address, size, err, "the target process has exited")
+        return None
+    if bytes_read.value == 0:
         return None
     return region_data
 
@@ -567,13 +703,16 @@ def SearchAddressesByValue(
     writeable_only: bool = False,
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    pid: int = 0,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
     for the provided value, returning the found addresses.
 
     Passing a `memory_regions` snapshot (see `snapshot_memory_regions()`) skips
-    the per-call region enumeration — useful in refine-scan workflows.
+    the per-call region enumeration — useful in refine-scan workflows. ``pid``
+    only feeds the error reported when that enumeration finds the target gone.
     """
     _validate_pytype(pytype)
 
@@ -582,7 +721,7 @@ def SearchAddressesByValue(
     source_regions = (
         memory_regions
         if memory_regions is not None
-        else GetMemoryRegions(process_handle)
+        else GetMemoryRegions(process_handle, pid)
     )
     filtered_regions = [
         region
@@ -593,8 +732,9 @@ def SearchAddressesByValue(
 
     def read_chunk(address: int, size: int):
         # `_read_region` returns None on transient failures (page unmapped /
-        # made inaccessible mid-scan). The helper accepts None directly and
-        # skips the chunk — no exception classification needed here.
+        # made inaccessible mid-scan) and raises `_Win32FatalReadError` for
+        # handle-level ones. The helper accepts None directly and skips the
+        # chunk; with no transient classifier the exception propagates.
         return _read_region(process_handle, address, size)
 
     yield from iter_search_results(
@@ -605,6 +745,7 @@ def SearchAddressesByValue(
         scan_type,
         read_chunk,
         progress_information=progress_information,
+        aligned=aligned,
     )
 
 
@@ -615,6 +756,7 @@ def SearchAddressesByPattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target process.
@@ -625,7 +767,7 @@ def SearchAddressesByPattern(
     source_regions = (
         memory_regions
         if memory_regions is not None
-        else GetMemoryRegions(process_handle)
+        else GetMemoryRegions(process_handle, pid)
     )
     filtered_regions = [
         region for region in source_regions if default_scan_filter(region)
@@ -634,8 +776,9 @@ def SearchAddressesByPattern(
 
     def read_chunk(address: int, size: int):
         # ``_read_region`` returns None on transient failures (page unmapped /
-        # made inaccessible mid-scan); the helper accepts None directly and
-        # skips the chunk — no exception classification needed here.
+        # made inaccessible mid-scan) and raises ``_Win32FatalReadError`` for
+        # handle-level ones; the helper accepts None directly and skips the
+        # chunk, and with no transient classifier the exception propagates.
         return _read_region(process_handle, address, size)
 
     yield from iter_pattern_results(
@@ -659,6 +802,7 @@ def SearchValuesByAddresses(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
+    pid: int = 0,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -678,7 +822,7 @@ def SearchValuesByAddresses(
     if memory_regions is None:
         memory_regions = [
             region
-            for region in GetMemoryRegions(process_handle)
+            for region in GetMemoryRegions(process_handle, pid)
             # An address-list read has the caller already deciding *where* —
             # the library has no business filtering by region "interestingness"
             # (which used to exclude MEM_MAPPED here and diverge from
@@ -698,7 +842,10 @@ def SearchValuesByAddresses(
 
     # ReadProcessMemory returning 0 during scanning typically means the page
     # was unmapped / made inaccessible mid-scan — transient. The user can still
-    # force propagation via raise_error=True.
+    # force propagation via raise_error=True. `_Win32FatalReadError` (handle
+    # lacks PROCESS_VM_READ, target exited) is deliberately *not* transient,
+    # so `raise_error=True` surfaces it; with the default `raise_error=False`
+    # it is logged and the chunk's addresses read as None, as on Linux/macOS.
     def is_transient(exc: BaseException) -> bool:
         return isinstance(exc, _Win32ChunkReadError)
 
@@ -845,7 +992,6 @@ def GetProcesses() -> Generator[Tuple[int, str], None, None]:
 # Minimal right that lets OpenProcess succeed for a probe; available on every
 # supported Windows version.
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_ERROR_ACCESS_DENIED = 5
 
 
 def ProcessExists(pid: int) -> bool:

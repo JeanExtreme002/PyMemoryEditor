@@ -495,6 +495,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ),
     )
 
+    if transport != "stdio":
+        _logger.warning(
+            "Serving over %s: anyone who can reach the port gets %s access to "
+            "this machine's process memory. There is no authentication.",
+            transport,
+            "read AND WRITE" if config.allow_write else "read",
+        )
+
     try:
         server.run(transport=transport)
     except KeyboardInterrupt:

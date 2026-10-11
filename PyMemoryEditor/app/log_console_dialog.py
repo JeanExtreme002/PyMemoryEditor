@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ._widgets import TearsDownOnClose
+from ._widgets import MONOSPACE_FAMILY, TearsDownOnClose
 
 
 _LOGGER_NAME = "PyMemoryEditor"
@@ -146,7 +146,7 @@ class LogConsoleDialog(TearsDownOnClose, QDialog):
 
         self._console = QPlainTextEdit()
         self._console.setReadOnly(True)
-        self._console.setFont(QFont("Menlo, Consolas, Courier New", 10))
+        self._console.setFont(QFont(MONOSPACE_FAMILY, 10))
         self._console.setLineWrapMode(QPlainTextEdit.NoWrap)
         # Cap the buffer so a long-running auto-scan doesn't grow the dialog
         # memory unboundedly. ~5000 lines is plenty for live debugging.

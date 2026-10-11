@@ -52,6 +52,7 @@ from typing import (
 )
 
 from ..util import iter_region_chunks
+from .errors import PyMemoryEditorError
 
 if TYPE_CHECKING:
     from .abstract import AbstractProcess
@@ -165,22 +166,47 @@ class PointerPath:
     def from_dict(cls, data: dict) -> "PointerPath":
         """Rebuild a :class:`PointerPath` from :meth:`to_dict` output.
 
-        Numeric fields accept either hex strings (``"0x158"``) or plain ints, so
-        hand-edited export files keep working.
+        Numeric fields accept either plain ints or strings with an explicit
+        base prefix (``"0x158"`` as written by :meth:`to_dict`; ``"0o"`` /
+        ``"0b"`` work too) or plain decimal digits (``"344"``), so hand-edited
+        export files keep working. A bare hex string without the ``0x`` prefix
+        (``"1F"``) is rejected rather than guessed at.
+
+        :raises ValueError: if a required field is missing or a numeric field
+            cannot be parsed.
         """
 
-        def as_int(value: Union[str, int]) -> int:
+        def as_int(value: Union[str, int], name: str) -> int:
+            if isinstance(value, bool):
+                raise ValueError("pointer path field %r must be an integer, got %r." % (name, value))
+            if isinstance(value, int):
+                return value
             if isinstance(value, str):
-                return int(value, 16)
-            return int(value)
+                try:
+                    return int(value.strip(), 0)
+                except ValueError:
+                    raise ValueError(
+                        "pointer path field %r is not a valid number: %r "
+                        "(use a 0x-prefixed hex string or a decimal)." % (name, value)
+                    ) from None
+            raise ValueError(
+                "pointer path field %r must be an int or a numeric string, got %s."
+                % (name, type(value).__name__)
+            )
+
+        if not isinstance(data, dict) or "base_address" not in data:
+            raise ValueError(
+                "a pointer path entry must be a mapping with at least a "
+                "'base_address' field, got %r." % (data,)
+            )
 
         module_offset = data.get("module_offset")
         return cls(
-            base_address=as_int(data["base_address"]),
-            offsets=tuple(as_int(offset) for offset in data.get("offsets", ())),
+            base_address=as_int(data["base_address"], "base_address"),
+            offsets=tuple(as_int(offset, "offsets") for offset in data.get("offsets", ())),
             module=data.get("module"),
-            module_offset=None if module_offset is None else as_int(module_offset),
-            ptr_size=int(data.get("ptr_size", 8)),
+            module_offset=None if module_offset is None else as_int(module_offset, "module_offset"),
+            ptr_size=as_int(data.get("ptr_size", 8), "ptr_size"),
         )
 
     def recipe(self) -> Tuple[Optional[str], Optional[int], Tuple[int, ...]]:
@@ -211,8 +237,10 @@ class PointerPath:
 class AddressRanges:
     """Fast ``addr in ranges`` membership over a set of merged address ranges.
 
-    Built from ``(start, size)`` pairs; overlapping/adjacent ranges are merged
-    so a single :func:`bisect` answers membership. A cheap min/max bounds check
+    Built from half-open ``(start, end)`` pairs (``end`` exclusive — note the
+    public ``static_ranges`` argument of ``scan_pointer_paths`` uses
+    ``(start, size)`` and is converted before it gets here); overlapping or
+    adjacent ranges are merged so a single :func:`bisect` answers membership. A cheap min/max bounds check
     rejects the common cases (NULL, small integers, kernel addresses) before the
     bisect, which matters when the test runs once per pointer-sized slot.
     """
@@ -295,6 +323,10 @@ def build_pointer_map(
 
             try:
                 data = read_chunk(chunk_address, chunk_size)
+            except PyMemoryEditorError:
+                # The process is closed or gone: not a skippable page, and an
+                # empty map would be indistinguishable from "no pointers".
+                raise
             except Exception:  # noqa: BLE001 — backend read errors vary; skip the chunk
                 data = None
             if not data:

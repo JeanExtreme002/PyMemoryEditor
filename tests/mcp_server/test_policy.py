@@ -226,3 +226,111 @@ class TestFilterAndDescribe:
         assert described["preapproved"] == ["game"]
         assert described["system_processes_allowed"] is False
         assert described["denied_system_process_count"] > 0
+
+
+class TestSelfProtection:
+    """The server never opens itself or the client that launched it."""
+
+    @pytest.fixture(params=["self", "parent"])
+    def protected_pid(self, request):
+        import os
+
+        return os.getpid() if request.param == "self" else os.getppid()
+
+    def test_refused_by_default(self, protected_pid):
+        decision = ProcessPolicy(platform="linux").check(protected_pid, "python")
+        assert decision.allowed is False
+        assert decision.needs_approval is False
+        assert "No flag lifts this" in decision.reason
+
+    def test_no_flag_lifts_it(self, protected_pid):
+        # allow_any and allow_system each lift one of the two ordinary gates;
+        # neither reaches this one, and nor does a remembered approval.
+        policy = ProcessPolicy(platform="linux", allow_any=True, allow_system=True)
+        policy.grant("python")
+        assert policy.check(protected_pid, "python").allowed is False
+
+    def test_the_allowlist_does_not_lift_it(self, protected_pid):
+        policy = ProcessPolicy(allowed_names=["python"], platform="linux")
+        assert policy.check(protected_pid, "python3").allowed is False
+
+    def test_the_reason_says_which_one_it_is(self):
+        import os
+
+        policy = ProcessPolicy(platform="linux")
+        assert "server's own process" in policy.check(os.getpid(), "x").reason
+        assert "client that launched" in policy.check(os.getppid(), "x").reason
+
+    def test_opting_out_is_explicit(self, protected_pid):
+        # Only for a caller that *is* the target — the test suite attaching to
+        # itself. There is no CLI flag for it.
+        policy = ProcessPolicy(platform="linux", allow_any=True, protect_self=False)
+        assert policy.check(protected_pid, "python").allowed is True
+        assert policy.protected_pids == frozenset()
+
+    def test_filter_hides_them(self):
+        import os
+
+        policy = ProcessPolicy(platform="linux", allow_any=True)
+        kept = policy.filter([(os.getpid(), "python"), (5000, "game.exe")])
+        assert kept == [(5000, "game.exe")]
+
+    def test_describe_reports_it(self):
+        assert ProcessPolicy(platform="linux").describe()["self_protected"] is True
+        assert (
+            ProcessPolicy(platform="linux", protect_self=False).describe()["self_protected"]
+            is False
+        )
+
+
+class TestCredentialAgentsAreDenied:
+    @pytest.mark.parametrize(
+        "platform, name",
+        [
+            ("linux", "ssh-agent"),
+            ("linux", "gpg-agent"),
+            ("linux", "kwalletd6"),
+            ("linux", "keepassxc"),
+            ("darwin", "ssh-agent"),
+            ("darwin", "secd"),
+            ("darwin", "1Password"),
+            ("win32", "ssh-agent.exe"),
+            ("win32", "KeePassXC.exe"),
+            ("win32", "Bitwarden.exe"),
+        ],
+    )
+    def test_denied(self, platform, name):
+        decision = ProcessPolicy(platform=platform).check(5000, name)
+        assert decision.allowed is False
+        assert decision.needs_approval is False
+
+
+class TestTruncatedNamesMatchTheAllowlist:
+    """The mirror of the denylist's truncation rule.
+
+    Linux reports ``gnome-keyring-daemon`` as ``gnome-keyring-d``; an operator
+    types the full name. Substring matching alone could never pre-approve it.
+    """
+
+    def test_a_full_name_pre_approves_its_truncated_form(self):
+        policy = ProcessPolicy(
+            allowed_names=["my-very-long-game-name"], platform="linux"
+        )
+        assert policy.check(5000, "my-very-long-ga").allowed is True
+
+    def test_a_remembered_full_name_covers_its_truncated_form(self):
+        policy = ProcessPolicy(platform="linux")
+        policy.grant("my-very-long-game-name")
+        assert policy.check(5000, "my-very-long-ga").allowed is True
+
+    def test_only_a_name_of_exactly_the_truncation_width_qualifies(self):
+        # A shorter name was not truncated, so prefixing an allowed name means
+        # nothing — "game" must not match "game-launcher-helper" by prefix.
+        policy = ProcessPolicy(allowed_names=["game-launcher-helper"], platform="linux")
+        assert policy.check(5000, "game-launcher").needs_approval is True
+
+    def test_other_platforms_do_not_truncate(self):
+        # macOS and Windows report full names, so a 15-character name that
+        # happens to prefix an allowed one is a different process.
+        policy = ProcessPolicy(allowed_names=["my-very-long-game-name"], platform="darwin")
+        assert policy.check(5000, "my-very-long-ga").needs_approval is True

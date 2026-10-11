@@ -17,11 +17,30 @@ The most common first hurdle — the OS is denying access.
 
 See [Platform Notes](platform-notes.md) for the full story.
 
+On Linux the message tells you which of the two gates refused you:
+
+- *"Cannot read /proc/&lt;pid&gt;/maps … belongs to another user or is not
+  dumpable"* — raised while opening. `ptrace_scope` is not involved; run as
+  root or as the target's owner.
+- *"process_vm_readv failed … (Yama ptrace_scope)"* — raised by the first
+  read, write or scan. This is the `ptrace_scope` case above.
+
+### `OSError: [Errno 14] … the page is not writable` (Linux)
+
+`write_process_memory` hit a page the target maps **read-only**. Linux
+cannot elevate another process's page protection, so the write fails with
+`EFAULT` instead of being forced through the way Windows and macOS do it.
+Write to a writable copy of the data, or use one of the other platforms for
+that workflow — see [Platform Notes → Linux](platform-notes.md#writes-to-read-only-pages).
+
 ### `PermissionError` from a specific operation (Windows)
 
 You opened the process with a narrower permission mask than the operation
-needs. The most common culprit is allocating memory without
-`PROCESS_VM_OPERATION`:
+needs. Region enumeration — and therefore every scan — needs
+`PROCESS_QUERY_INFORMATION`, and reads need `PROCESS_VM_READ`; the default
+mask includes both. A narrowed mask now fails fast with a `PermissionError`
+naming the missing right instead of an empty scan. The other common culprit
+is allocating memory without `PROCESS_VM_OPERATION`:
 
 ```python
 from PyMemoryEditor import OpenProcess, ProcessOperationsEnum

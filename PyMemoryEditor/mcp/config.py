@@ -47,26 +47,13 @@ Transport = Literal["stdio", "sse", "streamable-http"]
 #: keeping them all would blow out the server's memory for a result set no
 #: refine loop can use anyway. At the cap the scan stops early and says so.
 #:
-#: 100 000 costs 4.2 MB per result set against 2.1 MB, and 21 ms to sort
-#: against 10 ms. The figure that matters is not per set, though: a session
-#: keeps ``MAX_SCANS_PER_SESSION`` (20) of them and a server keeps
-#: ``MAX_OPEN_SESSIONS`` (8) sessions, so the ceiling on retained addresses
-#: goes from ~336 MB to ~672 MB. Reaching it needs 160 capped result sets,
-#: which a long refine chain across several targets can do.
-#:
-#: What it buys: a scan whose true hit count falls between the two ceilings
-#: stops being flagged ``partial``, and refining a truncated set can converge
-#: on an address that was never in it. That case is real but narrow — above
-#: the new ceiling nothing changes, and a common value like ``int 0`` matches
-#: millions and is out of reach at any sane cap.
-#:
-#: What it costs in time depends on the value's density, and an earlier
-#: version of this comment got that wrong. Measured on ``int 0``, reaching
-#: either ceiling took 0.02s against 0.03s — but that is the dense case, where
-#: hits arrive faster than the clock can spend. For a sparser value the scan
-#: has to walk further to collect twice as many hits, so the time roughly
-#: doubles up to the 30-second budget. "Wall clock is unchanged" was true of
-#: one measurement, not of the change.
+#: Sizing: 100 000 addresses cost ~4.2 MB per result set. A session keeps
+#: ``MAX_SCANS_PER_SESSION`` (20) of them and a server keeps
+#: ``MAX_OPEN_SESSIONS`` (8) sessions, so the ceiling on retained addresses is
+#: ~672 MB — reachable only by a long refine chain across several targets.
+#: The time a scan spends reaching the cap depends on how dense the value is:
+#: for a sparse value it walks further to collect more hits, bounded by the
+#: wall-clock budget below.
 DEFAULT_MAX_SCAN_RESULTS = 100_000
 
 #: Wall-clock budget for one scan, in seconds. A full address-space scan of a
@@ -99,6 +86,10 @@ class ServerConfig:
     :param allow_any_process: never prompt — open any target the denylist
         permits. For scripted use, where there is nobody to ask.
     :param allow_system_processes: lift the system-process denylist.
+    :param protect_self: refuse to open this process (the server) and its
+        parent (the MCP client). On by default, lifted by no flag; see
+        :class:`~PyMemoryEditor.mcp.policy.ProcessPolicy`. Exists so a test
+        that attaches to itself can turn it off.
     :param max_scan_results: per-scan cap on stored addresses.
     :param max_scan_seconds: per-scan wall-clock budget.
     :param scan_batch_bytes: memory covered per deadline check.
@@ -123,6 +114,7 @@ class ServerConfig:
     allowed_processes: Tuple[str, ...] = field(default=())
     allow_any_process: bool = False
     allow_system_processes: bool = False
+    protect_self: bool = True
     max_scan_results: int = DEFAULT_MAX_SCAN_RESULTS
     max_scan_seconds: float = DEFAULT_MAX_SCAN_SECONDS
     scan_batch_bytes: int = DEFAULT_SCAN_BATCH_BYTES
@@ -150,6 +142,7 @@ class ServerConfig:
             allowed_names=self.allowed_processes,
             allow_system=self.allow_system_processes,
             allow_any=self.allow_any_process,
+            protect_self=self.protect_self,
         )
 
 
@@ -218,9 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "target memory covered between deadline checks during a scan "
             "(default: %(default)s). Smaller means a scan gives up closer to "
-            "its time budget, at the cost of more per-batch overhead. The "
-            "field existed and was honoured, but had no flag — so it could "
-            "only be set from Python."
+            "its time budget, at the cost of more per-batch overhead."
         ),
     )
     parser.add_argument(
@@ -244,7 +235,21 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "MCP transport (default: %(default)s). stdio is what desktop "
             "clients launch; the HTTP transports are for remote hosting and "
-            "expose this machine's memory to whoever can reach the port."
+            "expose this machine's memory to whoever can reach the port. They "
+            "carry no authentication, so writes over them are refused unless "
+            "--allow-remote-write is also passed."
+        ),
+    )
+    parser.add_argument(
+        "--allow-remote-write",
+        action="store_true",
+        dest="allow_remote_write",
+        help=(
+            "keep the write tool registered on an HTTP transport (sse / "
+            "streamable-http). Those transports have no authentication, so "
+            "without this flag a writable server refuses to start on them: "
+            "anyone who can reach the port could change memory on this "
+            "machine. Only for a port you control end to end."
         ),
     )
     return parser
@@ -265,6 +270,18 @@ def parse_args(
         # with thousands of regions pays thousands of generator setups per
         # scan — and the operator would get no error at launch.
         build_parser().error("--scan-batch-bytes must be at least 1.")
+
+    if args.transport != "stdio" and not args.read_only and not args.allow_remote_write:
+        # An HTTP transport is reachable by whoever can reach the port, with
+        # nothing in the protocol to say who that is. Reading is already a
+        # strong capability to publish; writing is one the operator has to
+        # ask for by name.
+        build_parser().error(
+            "--transport %s serves this machine's memory without "
+            "authentication, so writes over it are refused. Pass --read-only, "
+            "or --allow-remote-write if the port is one you control end to "
+            "end." % args.transport
+        )
 
     # Stripped, not merely tested for blankness: a JSON args array carrying
     # "notepad.exe " (trailing space) used to be stored verbatim, so the

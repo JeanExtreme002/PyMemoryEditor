@@ -153,6 +153,7 @@ class LinuxProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
@@ -170,6 +171,7 @@ class LinuxProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
         )
 
     def search_by_pattern(
@@ -200,6 +202,7 @@ class LinuxProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
@@ -217,6 +220,7 @@ class LinuxProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
         )
 
     def write_process_memory(

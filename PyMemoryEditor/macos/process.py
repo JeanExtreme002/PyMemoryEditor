@@ -204,6 +204,7 @@ class MacProcess(AbstractProcess):
             addresses,
             memory_regions=memory_regions,
             raise_error=raise_error,
+            pid=self.pid,
         )
 
     def search_by_value(
@@ -216,6 +217,7 @@ class MacProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
@@ -233,6 +235,8 @@ class MacProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
+            pid=self.pid,
         )
 
     def search_by_pattern(
@@ -250,6 +254,7 @@ class MacProcess(AbstractProcess):
             byte_length=byte_length,
             progress_information=progress_information,
             memory_regions=memory_regions,
+            pid=self.pid,
         )
 
     def search_by_value_between(
@@ -263,6 +268,7 @@ class MacProcess(AbstractProcess):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
 
@@ -280,6 +286,8 @@ class MacProcess(AbstractProcess):
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
+            aligned=aligned,
+            pid=self.pid,
         )
 
     def read_process_memory(

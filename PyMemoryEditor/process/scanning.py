@@ -56,10 +56,9 @@ _logger = logging.getLogger("PyMemoryEditor")
 # tuple target (for VALUE_BETWEEN) while ``scan_memory_for_exact_value`` does
 # not — at runtime we only ever route VALUE_BETWEEN through ``scan_memory``,
 # but mypy needs the widened signature on the local binding.
-_SearchingMethod = Callable[
-    [Sequence, int, Any, int, ScanTypesEnum, Optional[Type]],
-    Iterable[int],
-]
+# (data, size, target, width, scan_type, pytype, *, aligned) -> offsets; both
+# kernels share this shape, so the dispatch below is a plain assignment.
+_SearchingMethod = Callable[..., Iterable[int]]
 
 
 T = TypeVar("T")
@@ -117,20 +116,11 @@ def iter_values_for_addresses(
     if transient_error_check is None:
         transient_error_check = _always_false
 
-    # Validate the width once, here, instead of discovering it per address.
-    #
-    # `convert_from_byte_array` raises ValueError for a width the type cannot
-    # represent, and the per-address handler below catches ValueError and
-    # yields `(address, None)` — which is also how this function reports an
-    # address with no backing region. So a bad width did not look like a bad
-    # width: `search_by_addresses(float, 3, addresses)` reported every address
-    # as unreadable, indistinguishable from a dead target, and with
-    # `raise_error=True` it surfaced a ValueError where the documented contract
-    # promises OSError.
-    #
-    # A width the type cannot represent is a caller error, not an I/O failure,
-    # so it propagates regardless of `raise_error` — that flag is about reads
-    # that fail, not about arguments that cannot work.
+    # Validate the width once, up front. A width the type cannot represent is
+    # a caller error, not an I/O failure, so it propagates regardless of
+    # `raise_error` (that flag is about reads that fail). Leaving it to the
+    # per-address decode would turn it into `(address, None)` for every
+    # address — indistinguishable from a dead target.
     get_c_type_of(pytype, bufflength)
 
     sorted_addresses = sorted(addresses)
@@ -186,6 +176,11 @@ def iter_values_for_addresses(
 
             try:
                 chunk_data = read_chunk(chunk_address, read_size)
+                # One contiguous byte view per chunk: slicing it below gives a
+                # buffer `from_buffer_copy` accepts (a single memcpy) instead
+                # of a list of ints that would have to be re-packed element by
+                # element. Works for ctypes arrays, bytes and bytearray alike.
+                chunk_view = memoryview(chunk_data).cast("B")
             except Exception as exc:  # noqa: BLE001 — backend errors vary
                 transient = transient_error_check(exc)
                 if not transient and raise_error:
@@ -221,14 +216,14 @@ def iter_values_for_addresses(
                     continue
 
                 try:
-                    raw = chunk_data[offset_in_chunk : offset_in_chunk + bufflength]
+                    raw = chunk_view[offset_in_chunk : offset_in_chunk + bufflength]
                     if len(raw) < bufflength:
                         # Defensive: the backend returned fewer bytes than
                         # requested. Don't silently zero-pad.
                         yield target_address, None
                         address_index += 1
                         continue
-                    data = (ctypes.c_byte * bufflength)(*raw)
+                    data = (ctypes.c_byte * bufflength).from_buffer_copy(raw)
                     yield target_address, convert_from_byte_array(
                         data, pytype, bufflength
                     )
@@ -250,11 +245,13 @@ def iter_search_results(
     *,
     progress_information: bool = False,
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every chunk of every region and yield the addresses where
     ``scan_memory`` (or ``scan_memory_for_exact_value`` for EXACT/NOT_EXACT)
-    finds a match against ``target_value_bytes``.
+    finds a match against ``target_value_bytes``. ``aligned=False`` lets a
+    numeric value match at any byte offset (see the kernels).
 
     The three platform backends used to duplicate this loop verbatim — same
     chunking, same progress-info computation, same try/except classification.
@@ -293,17 +290,24 @@ def iter_search_results(
 
     checked_memory_size = 0
 
-    # Strings can begin at any byte (step=1 in the scanner). For a region
-    # broken across multiple chunks, a string match that straddles a
-    # boundary would otherwise be lost because the first chunk ends with
-    # only part of the string and the next chunk starts past where the
-    # match begins. Read ``bufflength - 1`` extra bytes from the next
-    # chunk so the scan can complete a straddling decode without ever
-    # re-emitting an offset (the scanner only yields offsets in
-    # ``range(0, read_size - bufflength + 1, step)`` over the *augmented*
-    # read_size, and the clamp below keeps every emitted offset inside the
-    # original chunk).
-    str_overlap = bufflength - 1 if pytype is str else 0
+    # ``str`` and ``bytes`` matches can begin at any byte. For a region broken
+    # across multiple chunks, a match that straddles a boundary would
+    # otherwise be lost because the first chunk ends with only part of the
+    # value and the next chunk starts past where the match begins. Read
+    # ``bufflength - 1`` extra bytes from the next chunk so the scan can
+    # complete a straddling decode without ever re-emitting an offset (the
+    # scanner only yields offsets in ``range(0, read_size - bufflength + 1)``
+    # over the *augmented* read_size, and the clamp below keeps every emitted
+    # offset inside the original chunk). The same goes for an ``int`` at an
+    # unusual width (3, 5, 6, 7 bytes), which has no natural alignment.
+    # Numeric values at a natural width are stepped by that width and
+    # ``iter_region_chunks`` aligns every chunk to it, so they can never
+    # straddle a boundary and need no overlap -- unless ``aligned=False``
+    # lets them start at any byte, in which case they need it like text.
+    byte_granular = (
+        pytype in (str, bytes) or bufflength not in (1, 2, 4, 8) or not aligned
+    )
+    byte_granular_overlap = bufflength - 1 if byte_granular else 0
 
     for region in memory_regions:
         address, size = region.address, region.size
@@ -312,7 +316,7 @@ def iter_search_results(
             chunk_address = address + chunk_offset
 
             is_last_chunk = chunk_offset + chunk_size >= size
-            read_size = chunk_size + (0 if is_last_chunk else str_overlap)
+            read_size = chunk_size + (0 if is_last_chunk else byte_granular_overlap)
 
             try:
                 chunk_data = read_chunk(chunk_address, read_size)
@@ -337,6 +341,7 @@ def iter_search_results(
                 bufflength,
                 scan_type,
                 pytype,
+                aligned=aligned,
             ):
                 # ``scan_memory_for_exact_value`` uses ``bytes.find`` over the
                 # full augmented buffer and can therefore return offsets that

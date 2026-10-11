@@ -123,3 +123,56 @@ def test_mbi_class_for_handle_wow64(monkeypatch):
 
     monkeypatch.setattr(wf.kernel32, "IsWow64Process", fake_is_native)
     assert wf.mbi_class_for_handle(0xBEEF) is MEMORY_BASIC_INFORMATION_64
+
+
+# --------------------------------------------------------------------------- #
+# Chunk-boundary overlap in the shared scan driver
+# --------------------------------------------------------------------------- #
+
+from PyMemoryEditor.process import scanning as scanning_module  # noqa: E402
+from PyMemoryEditor.process.region import MemoryRegion  # noqa: E402
+
+
+def _region(address: int, size: int) -> MemoryRegion:
+    return MemoryRegion(
+        address=address, size=size, is_readable=True, is_writable=True,
+        is_executable=False, is_shared=False, path="",
+    )
+
+
+@pytest.mark.parametrize(
+    "pytype, width",
+    [(bytes, 4), (str, 4), (int, 3), (int, 5)],
+)
+def test_search_driver_finds_a_match_straddling_a_chunk_boundary(monkeypatch, pytype, width):
+    """A ``bytes`` target (and an ``int`` at an unusual width) can start at any
+    byte, so a match that begins in one chunk and ends in the next must still
+    be found. Only ``str`` used to get the overlap read."""
+    base = 0x10000
+    chunk = 64  # force many small chunks instead of 256 MB ones
+    monkeypatch.setattr(
+        scanning_module,
+        "iter_region_chunks",
+        lambda size, value_size: iter_region_chunks(size, value_size, max_chunk=chunk),
+    )
+
+    target = (b"\x7f" * width) if pytype is not str else b"ABCD"
+    buf = bytearray(4 * chunk)
+    straddle = chunk - 2  # the first chunk holds 2 bytes of the match
+    buf[straddle : straddle + width] = target
+    aligned_slot = 2 * chunk + 8  # a second, fully-contained occurrence
+    buf[aligned_slot : aligned_slot + width] = target
+
+    def read_chunk(address, size):
+        offset = address - base
+        return bytes(buf[offset : offset + size])
+
+    found = list(
+        scanning_module.iter_search_results(
+            [_region(base, len(buf))], pytype, width, target,
+            ScanTypesEnum.EXACT_VALUE, read_chunk,
+        )
+    )
+    assert found == [base + straddle, base + aligned_slot]
+    # And nothing is reported twice (the overlap region is clamped).
+    assert len(found) == len(set(found))

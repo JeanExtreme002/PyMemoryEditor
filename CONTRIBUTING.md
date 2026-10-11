@@ -22,8 +22,14 @@ The tests read and write the memory of the test process itself; they should run
 on any supported platform without elevated privileges.
 
 ```bash
-make test                   # pytest tests -v
+make test-fast              # pytest tests -m "not slow"  (~20 s: unit, property and GUI tests)
+make test                   # pytest tests -v             (everything, incl. live whole-process scans)
+make test-mcp               # pytest tests/mcp_server     (the MCP server suite, ~10 s)
 ```
+
+`test-fast` is the loop to iterate on; the `slow` and `scan_heavy` markers
+(defined in `pyproject.toml`) hold the tests that scan the test process's whole
+address space, which takes minutes on CI runners.
 
 ## Linting
 
@@ -46,11 +52,13 @@ make pre-commit             # lint + type-check + test
 ```
 
 The CI pipeline runs the same lint, mypy and tests, and blocks merges on failure.
-The test matrix runs on Ubuntu, Windows and macOS across multiple Python versions, so
-all three platform backends are exercised on every push. A dedicated job also
-runs the suite with the `speed` extra (NumPy) to keep the vectorized scan path
-covered. Even so, contributors touching a specific backend are encouraged to
-run `pytest tests` locally on that platform before submitting.
+The library matrix runs Python 3.10–3.13 on Ubuntu and Windows plus a single
+Python 3.12 cell on macOS, so all three platform backends are exercised on every
+push. Dedicated jobs also run the suite with the `speed` extra (NumPy) to keep
+the vectorized scan path covered, and the MCP server suite once per OS. Even so,
+contributors touching a specific backend are encouraged to run `pytest tests`
+locally on that platform before submitting. `make ci` runs the same lint,
+type-check and coverage-gated test invocations the workflow does.
 
 ## Project layout
 
@@ -63,6 +71,7 @@ PyMemoryEditor/
 ├── win32/               # Windows implementation (kernel32, user32)
 ├── linux/               # Linux implementation (process_vm_readv/writev, /proc/<pid>/maps)
 ├── macos/               # macOS implementation (task_for_pid, mach_vm_*)
+├── mcp/                 # Model Context Protocol server exposed as `pymemoryeditor-mcp`
 └── app/                 # PySide6 (Qt) demo app exposed as `pymemoryeditor` CLI
 ```
 
@@ -84,6 +93,12 @@ The public alias `OpenProcess` is chosen at import time in `__init__.py` based o
 2. Branch from `main`. Keep commits focused.
 3. Run `make pre-commit` (lint + type-check + tests) locally before pushing.
 4. Open a PR describing the change and how it was tested.
+5. Give the PR a [Conventional Commits](https://www.conventionalcommits.org/) title,
+   e.g. `fix: reject empty search targets` or `docs(mcp): document --allow-write`.
+   A required check lints it: the type must be one of `feat`, `fix`, `perf`,
+   `refactor`, `revert`, `docs`, `ci`, `build`, `chore`, `test`, `style`, and
+   the subject must start lowercase and not end with a period. PRs are
+   squash-merged, so the title becomes the commit message on `main`.
 
 ## Reporting bugs
 

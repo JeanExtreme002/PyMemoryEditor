@@ -188,13 +188,13 @@ def _float_payload(draw):
     return size, b"".join(struct.pack(fmt, v) for v in values), struct.pack(fmt, target)
 
 
-def _scan_via_slow_path(data, size, target, scan_type, pytype):
+def _scan_via_slow_path(data, size, target, scan_type, pytype, aligned=True):
     """Reference implementation: pure-Python loop using struct.unpack."""
     fmt = _INT_FORMATS[size] if pytype is int else _FLOAT_FORMATS[size]
     target_value = struct.unpack(fmt, target)[0]
     end = len(data) - size + 1
     results = []
-    for offset in range(0, end, size):
+    for offset in range(0, end, size if aligned else 1):
         value = struct.unpack(fmt, data[offset : offset + size])[0]
         if scan_type is ScanTypesEnum.EXACT_VALUE and value == target_value:
             results.append(offset)
@@ -222,9 +222,14 @@ def _scan_via_slow_path(data, size, target, scan_type, pytype):
     deadline=None,
     max_examples=200,
 )
-@given(payload=_int_payload(), scan_type=st.sampled_from(_ORDERED_SCAN_TYPES))
-def test_signed_int_scan_matches_reference(payload, scan_type):
-    """Fast struct.iter_unpack path must agree with the slow reference impl."""
+@given(
+    payload=_int_payload(),
+    scan_type=st.sampled_from(_ORDERED_SCAN_TYPES),
+    aligned=st.booleans(),
+)
+def test_signed_int_scan_matches_reference(payload, scan_type, aligned):
+    """Fast struct.iter_unpack path must agree with the slow reference impl,
+    aligned or (per byte phase, merged) not."""
     size, data, target = payload
 
     # NOT_EXACT_VALUE goes through scan_memory_for_exact_value, which has a
@@ -233,8 +238,8 @@ def test_signed_int_scan_matches_reference(payload, scan_type):
     if scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
         return
 
-    fast = list(scan_memory(data, len(data), target, size, scan_type, int))
-    slow = _scan_via_slow_path(data, size, target, scan_type, int)
+    fast = list(scan_memory(data, len(data), target, size, scan_type, int, aligned=aligned))
+    slow = _scan_via_slow_path(data, size, target, scan_type, int, aligned)
     assert fast == slow
 
 
@@ -243,16 +248,58 @@ def test_signed_int_scan_matches_reference(payload, scan_type):
     deadline=None,
     max_examples=200,
 )
-@given(payload=_float_payload(), scan_type=st.sampled_from(_ORDERED_SCAN_TYPES))
-def test_float_scan_matches_reference(payload, scan_type):
+@given(
+    payload=_float_payload(),
+    scan_type=st.sampled_from(_ORDERED_SCAN_TYPES),
+    aligned=st.booleans(),
+)
+def test_float_scan_matches_reference(payload, scan_type, aligned):
     """Same property for IEEE-754 floats (regression for the bit-pattern bug)."""
     if scan_type is ScanTypesEnum.NOT_EXACT_VALUE:
         return
 
     size, data, target = payload
-    fast = list(scan_memory(data, len(data), target, size, scan_type, float))
-    slow = _scan_via_slow_path(data, size, target, scan_type, float)
+    fast = list(scan_memory(data, len(data), target, size, scan_type, float, aligned=aligned))
+    slow = _scan_via_slow_path(data, size, target, scan_type, float, aligned)
     assert fast == slow
+
+
+@settings(
+    suppress_health_check=[HealthCheck.too_slow],
+    deadline=None,
+    max_examples=200,
+)
+@given(payload=st.one_of(_int_payload(), _float_payload()), pytype_is_int=st.booleans())
+def test_unaligned_exact_is_a_superset_of_aligned(payload, pytype_is_int):
+    """``aligned=False`` only ever adds hits: every aligned slot it reports
+    is one the aligned scan reports, and NOT_EXACT is the complement over all
+    byte offsets."""
+    size, data, target = payload
+    pytype = int if (size in (1, 2) or pytype_is_int) else float
+    if pytype is float and size not in _FLOAT_SIZES:
+        pytype = int
+
+    aligned = list(
+        scan_memory_for_exact_value(data, len(data), target, size, ScanTypesEnum.EXACT_VALUE, pytype)
+    )
+    loose = list(
+        scan_memory_for_exact_value(
+            data, len(data), target, size, ScanTypesEnum.EXACT_VALUE, pytype, aligned=False
+        )
+    )
+    loose_not = list(
+        scan_memory_for_exact_value(
+            data, len(data), target, size, ScanTypesEnum.NOT_EXACT_VALUE, pytype, aligned=False
+        )
+    )
+    via_ordered = list(
+        scan_memory(data, len(data), target, size, ScanTypesEnum.EXACT_VALUE, pytype, aligned=False)
+    )
+
+    assert set(aligned) <= set(loose)
+    assert [o for o in loose if o % size == 0] == aligned
+    assert loose == via_ordered
+    assert sorted(loose + loose_not) == list(range(0, len(data) - size + 1))
 
 
 @settings(
@@ -288,3 +335,44 @@ def test_value_between_signed_int_matches_reference(payload):
             slow.append(offset)
 
     assert fast == slow
+
+
+# --------------------------------------------------------------------------- #
+# EXACT / NOT_EXACT (scan_memory_for_exact_value) vs the ordered kernel
+# --------------------------------------------------------------------------- #
+
+from PyMemoryEditor.util.scan import scan_memory_for_exact_value  # noqa: E402
+
+
+@settings(
+    suppress_health_check=[HealthCheck.too_slow],
+    deadline=None,
+    max_examples=200,
+)
+@given(payload=st.one_of(_int_payload(), _float_payload()), pytype_is_int=st.booleans())
+def test_exact_kernel_agrees_with_ordered_kernel(payload, pytype_is_int):
+    """The EXACT fast path (``bytes.find``) must report exactly the slots the
+    ordered kernel reports for ``value == target``, and NOT_EXACT must be its
+    complement over the same aligned slots — so a refine never drops an
+    address the first scan found."""
+    size, data, target = payload
+    # _int_payload and _float_payload are distinguishable by target width only
+    # for size 4/8; pick the interpretation from the strategy that produced it.
+    pytype = int if (size in (1, 2) or pytype_is_int) else float
+    if pytype is float and size not in _FLOAT_SIZES:
+        pytype = int
+
+    exact = list(scan_memory_for_exact_value(data, len(data), target, size, ScanTypesEnum.EXACT_VALUE, pytype))
+    not_exact = list(
+        scan_memory_for_exact_value(data, len(data), target, size, ScanTypesEnum.NOT_EXACT_VALUE, pytype)
+    )
+    via_ordered = list(scan_memory(data, len(data), target, size, ScanTypesEnum.EXACT_VALUE, pytype))
+    at_least = list(
+        scan_memory(data, len(data), target, size, ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE, pytype)
+    )
+
+    assert exact == via_ordered
+    assert set(exact) <= set(at_least)
+    slots = list(range(0, len(data) - size + 1, size))
+    assert sorted(exact + not_exact) == slots
+    assert not set(exact) & set(not_exact)

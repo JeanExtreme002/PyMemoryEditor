@@ -127,14 +127,26 @@ def resolve_bufflength_for_value(pytype: Type, bufflength: Optional[int], *value
 
     A read can't infer this (it has no value to measure), which is why
     :func:`resolve_bufflength` still requires an explicit size there.
+
+    :raises TypeError: if a value is missing. Because ``bufflength`` comes
+        first in the search signatures, ``search_by_value(int, 100)`` binds
+        ``100`` to ``bufflength`` and leaves ``value`` unset — the message
+        points that out.
+    An empty ``str`` / ``bytes`` value infers a width of 0; the scan itself
+    then rejects it with ``ValueError`` (a zero-width target would match at
+    every address).
     """
     if any(isinstance(v, _Unset) for v in values):
-        raise TypeError("a search value is required (none was provided).")
+        hint = ""
+        if bufflength is not None:
+            hint = (
+                " Note that bufflength=%r was received: bufflength comes before "
+                "the value in the signature, so pass the value by keyword "
+                "(e.g. value=%r) when omitting bufflength." % (bufflength, bufflength)
+            )
+        raise TypeError("a search value is required (none was provided).%s" % hint)
 
-    if bufflength is not None:
-        return bufflength
-
-    if pytype is str or pytype is bytes:
+    if bufflength is None and (pytype is str or pytype is bytes):
         lengths = []
         for v in values:
             raw = v.encode("utf-8") if isinstance(v, str) else v
@@ -144,7 +156,10 @@ def resolve_bufflength_for_value(pytype: Type, bufflength: Optional[int], *value
                     % type(v).__name__
                 )
             lengths.append(len(raw))
-        return max(lengths) if lengths else 0
+        bufflength = max(lengths) if lengths else 0
+
+    if bufflength is not None:
+        return bufflength
 
     return resolve_bufflength(pytype, bufflength)
 
@@ -279,21 +294,12 @@ def convert_from_byte_array(
     width = ctypes.sizeof(c_value)
 
     if width > length:
-        # An unusual width rounds up to a wider C type -- `int` at 3 bytes gets
-        # a `c_int32` -- so `byte_array` is narrower than `from_buffer` needs
-        # and it raised `ValueError: Buffer size too small (3 instead of at
-        # least 4 bytes)`. Nothing surfaced that: `iter_values_for_addresses`
-        # catches ValueError and yields `(address, None)`, so
-        # `search_by_addresses(int, 3, addresses)` reported every address as
-        # unreadable while `read_process_memory(pid, address, int, 3)` returned
-        # the value fine. A silent disagreement between two ways of reading the
-        # same bytes is worse than either behaviour on its own.
-        #
-        # Copying into the front of the zero-initialised value is exactly what
-        # the three backends' read path does (see `read_process_memory`: it
-        # reads `bufflength` bytes into a buffer that `get_c_type_of` may have
-        # sized wider), so the two agree by construction rather than by
-        # coincidence.
+        # An unusual width rounds up to a wider C type (`int` at 3 bytes gets
+        # a `c_int32`), so `byte_array` is narrower than `from_buffer` needs.
+        # Copy the bytes into the front of the zero-initialised value instead
+        # — exactly what the backends' `read_process_memory` does when it
+        # reads `bufflength` bytes into a buffer `get_c_type_of` sized wider —
+        # so both ways of reading the same bytes agree by construction.
         raw = bytes(byte_array)[:length]
         ctypes.memmove(ctypes.byref(c_value), raw, len(raw))
         sign_extend_narrow_int(c_value, pytype, length)
@@ -361,8 +367,21 @@ def value_to_bytes(pytype: Type, bufflength: int, value) -> bytes:
     if pytype is int:
         _check_int_fits(value, bufflength)
 
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    elif isinstance(value, bytearray):
+        value = bytes(value)
+    if isinstance(value, bytes) and len(value) > bufflength:
+        # ctypes' own message is a bare "byte string too long"; say which
+        # width it does not fit so the caller knows which argument to change.
+        raise ValueError(
+            "value is too long for bufflength %d: %s encodes to %d bytes. Raise "
+            "bufflength (or omit it to infer the width from the value)."
+            % (bufflength, pytype.__name__, len(value))
+        )
+
     target_value = get_c_type_of(pytype, bufflength)
-    target_value.value = value.encode() if isinstance(value, str) else value
+    target_value.value = value
 
     target_value_bytes = ctypes.cast(
         ctypes.byref(target_value),
@@ -419,12 +438,9 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
 
     if pytype is str or pytype is bytes:
         # Zero is allowed here and only here: ``prepare_write(str, None, "")``
-        # yields a length of 0, and writing an empty value has always been a
-        # successful no-op on the public API. Rejecting it outright was a
-        # silent behaviour change on a documented contract.
-        # `create_string_buffer(0)` already returns a zero-length
-        # `c_char_Array_0`, identical to `(c_char * 0)()`, so the conditional
-        # that used to be here had two arms that did the same thing.
+        # yields a length of 0, and writing an empty value is a successful
+        # no-op on the public API. (Searches reject a zero-width target one
+        # layer up, in ``resolve_bufflength_for_value``.)
         value: Any = ctypes.create_string_buffer(length)
 
     elif pytype is int:
@@ -451,18 +467,9 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
     else:
         raise ValueError("The type must be bool, int, float, str or bytes.")
 
-    # After the dispatch, not inside it. Sitting in the elif chain, this test
-    # ran before the unsupported-type branch could: `get_c_type_of(Foo, 0)`
-    # complained about the width instead of the type, and for a `pytype` with
-    # no `__name__` -- a string, say -- formatting the message raised
-    # AttributeError, which is neither documented nor caught by the
-    # `except ValueError` in the MCP toolset or in any of the three backends.
+    # After the dispatch, so an unsupported type is reported as such before
+    # its width is judged (and `__name__` is only formatted for a real type).
     if length < 1 and pytype is not str and pytype is not bytes:
-        # str/bytes are exempt: `prepare_write(str, None, "")` yields a length
-        # of 0 and writing an empty value has always been a successful no-op on
-        # the public API. Moving this check out of the elif chain above (so the
-        # unsupported-type branch is reachable at length 0) briefly took that
-        # exemption with it.
         raise ValueError(
             "bufflength must be at least 1 byte for %s (got %d)."
             % (getattr(pytype, "__name__", pytype), length)
@@ -479,17 +486,11 @@ def get_c_type_of(pytype: Type, length: int) -> Any:
         )
 
     # After the too-wide check, so `float` at 9 still gets that more precise
-    # message.
-    #
-    # An `int` narrower than its C type is meaningful -- 3 bytes is a real
-    # 24-bit field, and the read sign-extends it. A `float` is not: IEEE-754
-    # has a 4-byte and an 8-byte form and nothing in between, so 3 bytes
-    # padded into a `c_double` is not a narrow float, it is three real bytes
-    # and five zeroes reinterpreted as a mantissa. That yields a plausible
-    # number from bytes nobody read: `convert_from_byte_array(b"\x11" * 3,
-    # float, 3)` came back as 5.52603e-318, and `read_process_memory(.., float,
-    # 3)` did the same. A number that looks like a measurement is worse than
-    # an error, which is the whole reason the MCP layer advertises (4, 8) only.
+    # message. An `int` narrower than its C type is a real 24/48-bit field
+    # (sign-extended on read); a `float` is not: IEEE-754 has a 4-byte and an
+    # 8-byte form and nothing in between, so a narrower width would
+    # reinterpret unread padding as mantissa and return a plausible-looking
+    # number. An error beats a number that looks like a measurement.
     if pytype is float and length not in (4, 8):
         raise ValueError(
             "bufflength %d is not a valid width for float: IEEE-754 has a "

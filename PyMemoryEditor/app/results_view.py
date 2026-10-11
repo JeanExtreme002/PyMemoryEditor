@@ -25,6 +25,31 @@ COL_ADDRESS = 0
 COL_VALUE = 1
 COL_PREVIOUS = 2
 
+# Above this many contiguous runs of dropped rows, `_drop_rows` resets the
+# model instead of announcing each run (see its docstring).
+_RESET_RUN_THRESHOLD = 256
+
+
+def _contiguous_runs(rows: List[int]) -> List[Tuple[int, int]]:
+    """Collapse ascending, unique row numbers into ``(first, last)`` runs.
+
+    ``[1, 2, 3, 7, 9, 10]`` → ``[(1, 3), (7, 7), (9, 10)]``. Qt's row-change
+    signals take a range, so announcing a run at a time instead of a row at a
+    time is what keeps a large refine from flooding the view.
+    """
+    runs: List[Tuple[int, int]] = []
+    if not rows:
+        return runs
+    start = prev = rows[0]
+    for row in rows[1:]:
+        if row == prev + 1:
+            prev = row
+            continue
+        runs.append((start, prev))
+        start = prev = row
+    runs.append((start, prev))
+    return runs
+
 
 class ResultsModel(QAbstractTableModel):
     """Table of {address: (current_value, previous_value)} entries."""
@@ -131,6 +156,7 @@ class ResultsModel(QAbstractTableModel):
             return
 
         rows_to_drop: List[int] = []
+        rows_changed: List[int] = []
         for address, current, keep in chunk:
             row = self._index.get(address)
             if row is None:
@@ -140,24 +166,61 @@ class ResultsModel(QAbstractTableModel):
                 continue
             self._previous[row] = self._values[row]
             self._values[row] = current
-            top_left = self.index(row, COL_VALUE)
-            bottom_right = self.index(row, COL_PREVIOUS)
-            self.dataChanged.emit(top_left, bottom_right)
+            rows_changed.append(row)
+
+        # One dataChanged per contiguous run of patched rows rather than one
+        # per row: the view repaints on every emit, and a refine chunk is a
+        # few thousand rows, so per-row emits turned each chunk into a redraw
+        # storm.
+        for first, last in _contiguous_runs(sorted(set(rows_changed))):
+            self.dataChanged.emit(
+                self.index(first, COL_VALUE), self.index(last, COL_PREVIOUS)
+            )
 
         if rows_to_drop:
-            self._drop_rows(sorted(set(rows_to_drop), reverse=True))
+            self._drop_rows(sorted(set(rows_to_drop)))
 
     def _drop_rows(self, rows: List[int]) -> None:
-        for row in rows:
-            if row < 0 or row >= len(self._addresses):
-                continue
-            self.beginRemoveRows(QModelIndex(), row, row)
-            address = self._addresses.pop(row)
-            self._values.pop(row)
-            self._previous.pop(row)
-            self._index.pop(address, None)
+        """Remove ``rows`` (ascending, unique) from the model.
+
+        Removals are announced per contiguous run — one ``beginRemoveRows``/
+        ``endRemoveRows`` pair for ``[first, last]`` — so a refine that drops
+        a block of neighbours costs one signal, not one per row. Past
+        ``_RESET_RUN_THRESHOLD`` runs (a refine that keeps a sparse scatter of
+        a huge result set) the model is reset instead: one O(n) rebuild and
+        one repaint, at the price of the view's selection. The previous shape
+        (one pair plus a mid-list ``list.pop`` per row) was quadratic: a
+        refine dropping 900k of 1M rows did 900k pops and fired 900k signals.
+        """
+        count = len(self._addresses)
+        rows = [row for row in rows if 0 <= row < count]
+        if not rows:
+            return
+
+        runs = _contiguous_runs(rows)
+        if len(runs) > _RESET_RUN_THRESHOLD:
+            dropped = set(rows)
+            keep = [i for i in range(count) if i not in dropped]
+            self.beginResetModel()
+            self._addresses = [self._addresses[i] for i in keep]
+            self._values = [self._values[i] for i in keep]
+            self._previous = [self._previous[i] for i in keep]
+            self._index = {addr: idx for idx, addr in enumerate(self._addresses)}
+            self.endResetModel()
+            return
+
+        # Highest run first so the row numbers announced for later runs are
+        # still valid when the view receives them — removing [100, 110] does
+        # not shift the rows of [10, 20], but the reverse would.
+        for first, last in reversed(runs):
+            self.beginRemoveRows(QModelIndex(), first, last)
+            # Lists are trimmed per run so that, between endRemoveRows calls,
+            # rowCount()/data() agree with what the view was told.
+            del self._addresses[first:last + 1]
+            del self._values[first:last + 1]
+            del self._previous[first:last + 1]
             self.endRemoveRows()
-        # Rebuild the index after a batch of removals to keep it consistent.
+
         self._index = {addr: idx for idx, addr in enumerate(self._addresses)}
 
     def address_at(self, row: int) -> Optional[int]:
@@ -284,9 +347,13 @@ class ResultsView(QTableView):
         menu.addAction(promote)
 
         if len(rows) == 1:
+            # Looked up when the action fires, not when the menu opens: a
+            # refine running in the background can drop the row while the
+            # menu's nested event loop is up, and emitting None on a
+            # qulonglong signal is a TypeError inside a Qt slot.
             hex_action = QAction("Open in hex viewer…", self)
             hex_action.triggered.connect(
-                lambda: self.open_in_hex_viewer.emit(model.address_at(rows[0]))
+                lambda: self._emit_for_row(self.open_in_hex_viewer, rows[0])
             )
             menu.addAction(hex_action)
 
@@ -297,11 +364,18 @@ class ResultsView(QTableView):
             menu.addSeparator()
             pointer_scan = QAction("Pointer scan for this address…", self)
             pointer_scan.triggered.connect(
-                lambda: self.pointer_scan_for_address.emit(model.address_at(rows[0]))
+                lambda: self._emit_for_row(self.pointer_scan_for_address, rows[0])
             )
             menu.addAction(pointer_scan)
 
         menu.exec(self.viewport().mapToGlobal(pos))
+
+    def _emit_for_row(self, signal, row: int) -> None:
+        """Emit ``signal`` with the address at ``row``, or nothing if it is gone."""
+        model: ResultsModel = self.model()
+        address = model.address_at(row) if model is not None else None
+        if address is not None:
+            signal.emit(address)
 
     def _copy_address(self, row: int) -> None:
         from PySide6.QtGui import QGuiApplication

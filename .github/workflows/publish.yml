@@ -11,21 +11,39 @@ jobs:
     permissions:
       id-token: write  # Required for trusted publishing (OIDC)
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
         python-version: '3.12'
 
     - name: Install build tools
-      run: python -m pip install --upgrade pip build
+      run: python -m pip install --upgrade pip build twine
+
+    - name: Check the release tag matches the package version
+      # The tag is the one thing a human typed by hand. server.json is checked
+      # against the package by tests/mcp_server/test_registry.py and against
+      # the tag by the mcp-registry job below; this closes the last side of
+      # the triangle before anything is uploaded (PyPI uploads are
+      # irrevocable).
+      run: |
+        version=$(python -c "import PyMemoryEditor; print(PyMemoryEditor.__version__)")
+        if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          echo "::error::release $GITHUB_REF_NAME but PyMemoryEditor.__version__ is $version"
+          exit 1
+        fi
 
     - name: Build package
       run: python -m build
 
+    - name: Check the distributions
+      run: python -m twine check --strict dist/*
+
     - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      # Pinned to a release tag's commit rather than the moving `release/v1`
+      # ref; Dependabot bumps the SHA and the tag comment together.
+      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
   # The MCP Registry checks the package on PyPI (the README's mcp-name marker,
   # the pinned version), so this runs only once the upload above succeeded.
@@ -36,7 +54,7 @@ jobs:
       id-token: write  # mcp-publisher logs in with the workflow's OIDC token
       contents: read
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
     - name: Check the release matches server.json
       run: |
@@ -62,9 +80,14 @@ jobs:
         exit 1
 
     - name: Install mcp-publisher
+      # Checksum from registry_1.8.1_checksums.txt on the same release page.
+      # To bump: change the version in the URL and paste the matching line
+      # from the new release's checksums file.
       run: |
-        curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" \
-          | tar xz mcp-publisher
+        curl -fsSLo mcp-publisher.tar.gz \
+          "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz"
+        echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
+        tar xzf mcp-publisher.tar.gz mcp-publisher
 
     - name: Publish to the MCP Registry
       run: |

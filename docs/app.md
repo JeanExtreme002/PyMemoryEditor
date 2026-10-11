@@ -89,8 +89,9 @@ from the **Theme** button on the toolbar; your choice is remembered between runs
 
 ## Importing & exporting
 
-The Cheat Table and Pointer Scan results are stored as plain **JSON**, so you
-can:
+The Cheat Table is not saved between runs — quitting with entries still in it
+asks for confirmation, and **Export…** is how you keep them. The Cheat Table
+and Pointer Scan results are stored as plain **JSON**, so you can:
 
 - Share a cheat table with a friend.
 - Version-control your saved pointer scans.

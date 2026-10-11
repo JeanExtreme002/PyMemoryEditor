@@ -87,6 +87,14 @@ def _decode(raw: bytes, pytype: Type, length: int) -> Any:
     return data.value
 
 
+def _scan_step(pytype: Type, width: int, aligned: bool) -> int:
+    """The real scans step a numeric value at a natural width by that width
+    unless ``aligned=False``; text and unusual widths step by byte."""
+    if aligned and pytype in (int, float, bool) and width in (1, 2, 4, 8):
+        return width
+    return 1
+
+
 def _scan_byte_order(pytype: Type) -> str:
     """The byte order a real scan compares in.
 
@@ -258,6 +266,7 @@ class FakeProcess:
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[int, None, None]:
         self.scan_calls += 1
         width = resolve_bufflength(pytype, bufflength)
@@ -265,7 +274,7 @@ class FakeProcess:
         predicate = make_predicate(scan_type, target, target, target)
 
         for base, block, size in self._slots(memory_regions, writeable_only):
-            for offset in range(0, size - width + 1):
+            for offset in range(0, size - width + 1, _scan_step(pytype, width, aligned)):
                 raw = bytes(block[offset : offset + width])
                 current = decode_scan_target(raw, _scan_byte_order(pytype), pytype)
                 try:
@@ -285,6 +294,7 @@ class FakeProcess:
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[int, None, None]:
         scan_type = (
             ScanTypesEnum.NOT_VALUE_BETWEEN if not_between else ScanTypesEnum.VALUE_BETWEEN
@@ -295,7 +305,7 @@ class FakeProcess:
         predicate = make_predicate(scan_type, low, low, high)
 
         for base, block, size in self._slots(memory_regions, writeable_only):
-            for offset in range(0, size - width + 1):
+            for offset in range(0, size - width + 1, _scan_step(pytype, width, aligned)):
                 raw = bytes(block[offset : offset + width])
                 current = decode_scan_target(raw, _scan_byte_order(pytype), pytype)
                 if predicate(current):

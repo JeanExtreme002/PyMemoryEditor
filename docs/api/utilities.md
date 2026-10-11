@@ -130,17 +130,21 @@ print(byte_length)     # 5
    larger ones return a lazy generator that yields **contiguous,
    non-overlapping** chunks whose size is a
    multiple of ``target_value_size`` so a typed numeric scan never splits a value
-   across a boundary. Boundary handling for *patterns* is done one level up by
-   the scanner (it overlaps consecutive chunks by ``pattern_length - 1`` bytes);
-   arbitrary ``str`` matches in a region larger than ``max_chunk`` may still be
-   missed at a chunk boundary — a documented limitation.
+   across a boundary. Values that can start at any byte — ``str`` / ``bytes``
+   targets, an ``int`` at an unusual width, and patterns — are handled one
+   level up by the scan drivers in ``PyMemoryEditor.process.scanning``, which
+   read ``value_size - 1`` extra bytes from the next chunk so a match
+   straddling a boundary is still found (and reported once).
 
 .. py:function:: scan_memory(...)
 .. py:function:: scan_memory_for_exact_value(...)
 
    Low-level scan kernels used by the backends. Public for advanced use only —
    the high-level :py:meth:`search_by_value` / :py:meth:`search_by_pattern`
-   methods are the recommended API.
+   methods are the recommended API. Both step numeric values at a natural
+   width (1, 2, 4, 8) by that width and everything else byte by byte, both
+   accept ``aligned=False`` to step numeric values by byte as well, and both
+   raise ``ValueError`` for an empty target.
 
 .. py:function:: make_predicate(scan_type, target, start, end)
 

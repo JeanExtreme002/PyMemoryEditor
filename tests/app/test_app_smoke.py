@@ -5,7 +5,7 @@ Smoke tests for the PySide6 ("Qt") app shipped under PyMemoryEditor/app/.
 
 The app is currently excluded from coverage and mypy because it's a UI demo
 that the maintainer drives manually. That left ~1.6k LOC with no automated
-safety net — a typo in `apply_dark_theme` or a missing import would only be
+safety net — a typo in `apply_theme` or a missing import would only be
 caught the next time someone ran `pymemoryeditor`.
 
 These tests don't try to exercise scanning end-to-end. They just verify:
@@ -652,3 +652,80 @@ def test_pointer_scan_dialog_constructs_and_prefills(qtbot):
         dialog.close()
     finally:
         process.close()
+
+
+# --- excepthook ------------------------------------------------------------- #
+
+
+def test_qt_excepthook_logs_and_reports_but_passes_keyboard_interrupt(monkeypatch, caplog):
+    """
+    PySide6 hands a slot's exception to ``sys.excepthook`` and carries on, so
+    the default hook meant a silent click. The app's hook logs it (for the Log
+    Console) and shows it; KeyboardInterrupt stays the interpreter's business.
+    """
+    import logging
+    import sys
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from PyMemoryEditor.app.application import _qt_excepthook, _scoped_excepthook
+
+    QApplication.instance() or QApplication([])
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: shown.append(args[2]))
+    passed_through = []
+    monkeypatch.setattr(sys, "__excepthook__", lambda *args: passed_through.append(args[0]))
+
+    with caplog.at_level(logging.ERROR, logger="PyMemoryEditor.app.application"):
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            _qt_excepthook(*sys.exc_info())
+
+    assert shown and "ValueError: boom" in shown[0]
+    assert any("Unhandled exception in the UI" in r.message for r in caplog.records)
+    assert passed_through == []
+
+    _qt_excepthook(KeyboardInterrupt, KeyboardInterrupt(), None)
+    assert passed_through == [KeyboardInterrupt]
+    assert len(shown) == 1
+
+    # Scoped: installed for the block, the previous hook restored after it.
+    previous = sys.excepthook
+    with _scoped_excepthook(_qt_excepthook):
+        assert sys.excepthook is _qt_excepthook
+    assert sys.excepthook is previous
+
+
+def test_qt_excepthook_only_logs_when_called_off_the_gui_thread(monkeypatch, caplog):
+    """
+    PySide6 routes an exception escaping ``QThread.run()`` through the same
+    hook, from the worker thread. Widgets may only be created on the GUI
+    thread, so there the hook must log and stop — no dialog.
+    """
+    import logging
+    import sys
+    import threading
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from PyMemoryEditor.app.application import _qt_excepthook
+
+    QApplication.instance() or QApplication([])
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: shown.append(args[2]))
+
+    def raise_in_thread():
+        try:
+            raise RuntimeError("worker boom")
+        except RuntimeError:
+            _qt_excepthook(*sys.exc_info())
+
+    with caplog.at_level(logging.ERROR, logger="PyMemoryEditor.app.application"):
+        worker = threading.Thread(target=raise_in_thread)
+        worker.start()
+        worker.join(5)
+
+    assert not worker.is_alive()
+    assert shown == []
+    assert any("worker boom" in (r.exc_text or "") for r in caplog.records)

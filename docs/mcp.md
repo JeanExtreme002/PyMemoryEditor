@@ -106,7 +106,7 @@ that install from the MCP Registry start the server.
 </tr>
 <tr>
   <td><code>--allow-system-processes</code></td>
-  <td>Lifts the built-in denylist of OS and credential processes (<code>lsass.exe</code>, <code>launchd</code>, <code>systemd</code>, …). Rarely what you want.</td>
+  <td>Lifts the built-in denylist of OS and credential processes (<code>lsass.exe</code>, <code>launchd</code>, <code>systemd</code>, <code>ssh-agent</code>, …). Rarely what you want. It does <i>not</i> lift the refusal to open the server's own process or the client that launched it — nothing does.</td>
 </tr>
 <tr>
   <td><code>--scan-batch-bytes BYTES</code></td>
@@ -122,7 +122,11 @@ that install from the MCP Registry start the server.
 </tr>
 <tr>
   <td><code>--transport</code></td>
-  <td><code>stdio</code> (default), <code>sse</code> or <code>streamable-http</code>. The HTTP transports expose this machine's memory to whoever can reach the port — see <a href="#safety">Safety</a>.</td>
+  <td><code>stdio</code> (default), <code>sse</code> or <code>streamable-http</code>. The HTTP transports expose this machine's memory to whoever can reach the port, with no authentication — see <a href="#safety">Safety</a>. A writable server refuses to start on them unless <code>--allow-remote-write</code> is also passed.</td>
+</tr>
+<tr>
+  <td><code>--allow-remote-write</code></td>
+  <td>Keeps the write tool on an HTTP transport. Without it, <code>--transport sse</code> / <code>streamable-http</code> needs <code>--read-only</code> to start at all, because anyone who can reach the port could otherwise change memory on this machine. Only for a port you control end to end.</td>
 </tr>
 </table>
 
@@ -244,10 +248,17 @@ way.
 - **A real read-only mode when you want one.** `--read-only` does not register
   the write tool at all, so the model cannot see it, let alone be talked into
   calling it; on Windows the handle itself carries no write rights.
+- **Never its own process, never its client.** The server refuses to open
+  itself and the process that launched it (your MCP client), whatever the
+  flags say. A model editing the process that enforces its policy, or the
+  client it is talking through, has no legitimate use, so no flag lifts this.
 - **A system-process denylist.** `lsass.exe`, `csrss.exe`, `launchd`,
-  `kernel_task`, `systemd`, `sshd` and friends are refused. These hold
+  `kernel_task`, `systemd`, `sshd`, `ssh-agent`, `gpg-agent`, the desktop
+  keyrings and the common password managers are refused. These hold
   credentials or keep the machine running; attaching to them is not what a
-  memory editor is for.
+  memory editor is for. It is a guard against the *accidental* target, not an
+  inventory of everything that holds a secret — a renamed binary is not on
+  it.
 - **Bounded scans.** Every scan stops at a result cap and a wall-clock budget,
   and a result set that stopped early is flagged `partial` so the assistant
   reports it rather than confidently refining a prefix.
@@ -267,9 +278,15 @@ recycled and executables can be renamed.
 Two specific things to avoid:
 
 - **Do not expose the HTTP transports** (`--transport sse` /
-  `streamable-http`) to a network you do not control. That publishes read —
-  and write — access to this machine's process memory to anyone who can reach
-  the port.
+  `streamable-http`) to a network you do not control. They carry no
+  authentication, so that publishes read access to this machine's process
+  memory to anyone who can reach the port. Write access over them is refused
+  unless you pass `--allow-remote-write` as well — keep it that way unless the
+  port is yours end to end.
+- **Approval is by name, and a pid can be reused.** The server re-reads the
+  target's name once it holds the handle and drops it if the pid now belongs
+  to something else, but a target whose name it cannot read cannot be checked
+  that way.
 - **Be deliberate about prompt injection.** The assistant reads bytes out of a
   process it does not control. Text in a game's memory that looks like
   instructions is still just data — but a model that has been convinced

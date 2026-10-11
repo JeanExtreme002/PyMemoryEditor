@@ -20,11 +20,13 @@ from typing import (
 
 from ..enums import ScanTypesEnum
 from ..util import UNSET, _check_int_fits
-from .errors import BitnessDetectionError
+from ..util.pattern import PatternLike
+from .errors import BitnessDetectionError, ProcessIDNotExistsError, PyMemoryEditorError
 from .info import ProcessInfo
 from .module_info import ModuleInfo
 from .region import MemoryRegion, MemoryRegionSnapshot
 from .thread_info import ThreadInfo
+from .util import pid_exists
 
 if TYPE_CHECKING:
     from .pointer_scan import PointerPath
@@ -34,6 +36,11 @@ if TYPE_CHECKING:
 _logger = logging.getLogger("PyMemoryEditor")
 
 T = TypeVar("T")
+
+# Identity of the JSON written by ``save_pointer_paths`` and checked by
+# ``load_pointer_paths``.
+_POINTER_SCAN_FORMAT = "pymemoryeditor-pointerscan"
+_POINTER_SCAN_VERSION = 1
 
 
 class AbstractProcess(ABC):
@@ -101,6 +108,28 @@ class AbstractProcess(ABC):
     @property
     def pid(self) -> int:
         return self._process_info.pid
+
+    def _target_alive(self) -> bool:
+        """
+        Whether the target process still exists. The default asks the OS by
+        pid; a backend whose handle keeps the pid reserved after the process
+        exits (Windows) overrides it with a handle-level check. A zombie (a
+        process that exited but whose parent has not reaped it yet) still
+        counts as existing on Linux and macOS, so its reads are treated as
+        vanished pages until it is reaped.
+        """
+        return pid_exists(self.pid)
+
+    def _raise_if_target_exited(self) -> None:
+        """
+        Turn a read failure on a target that has exited into
+        :class:`~PyMemoryEditor.ProcessIDNotExistsError`. Backends report that
+        read as a plain ``OSError``, the same type a page that vanished
+        mid-scan produces; the scan helpers call this before deciding a
+        failure is skippable so a dead target is never mistaken for one.
+        """
+        if not self._target_alive():
+            raise ProcessIDNotExistsError(self.pid)
 
     @abstractmethod
     def _detect_is_64bit(self) -> Optional[bool]:
@@ -237,6 +266,12 @@ class AbstractProcess(ABC):
         raise :class:`~PyMemoryEditor.ProcessIDNotExistsError` on every
         platform.
 
+        A listing that is *denied* is different from one that is empty: on
+        Linux and macOS a target owned by another user raises
+        ``PermissionError`` (Linux cannot list ``/proc/<pid>/task``, macOS
+        cannot ``task_threads`` a task it has no port for) rather than
+        silently yielding nothing.
+
         Use :attr:`main_thread` for the conventional "main thread" shortcut.
         """
         raise NotImplementedError()
@@ -339,6 +374,7 @@ class AbstractProcess(ABC):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
@@ -368,6 +404,18 @@ class AbstractProcess(ABC):
         :param writeable_only: if True, search only at writeable memory regions.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
+        :param aligned: numeric values (``int``, ``float``, ``bool``) at a
+            natural width (1, 2, 4 or 8 bytes) are compared at every slot
+            aligned to that width, counted from the start of each region --
+            the same slots every comparison mode uses, so a refine never drops
+            an address the first scan reported, and the way compilers lay
+            fields out. Pass ``False`` to compare at every byte instead, for a
+            value that may sit at a non-aligned address: a packed struct, a
+            number embedded in a byte buffer or string, memory from a custom
+            allocator. It costs the typed scan ``bufflength`` passes and
+            reports each match once. ``str``, ``bytes`` and an ``int`` at an
+            unusual width (3, 5, 6, 7) already match at any byte; the flag
+            does not affect them.
         :raises ValueError: if ``scan_type`` is ``VALUE_BETWEEN`` or
             ``NOT_VALUE_BETWEEN``, or if an ``int`` ``value`` does not fit in
             ``bufflength`` bytes.
@@ -387,7 +435,7 @@ class AbstractProcess(ABC):
     @abstractmethod
     def search_by_pattern(
         self,
-        pattern: Union[str, bytes, "object"],
+        pattern: PatternLike,
         *,
         byte_length: int = 0,
         progress_information: bool = False,
@@ -427,16 +475,18 @@ class AbstractProcess(ABC):
         progress_information: bool = False,
         writeable_only: bool = False,
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        aligned: bool = True,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """
         Search the whole memory space, accessible to the process,
         for a value within the provided range, returning the found addresses.
 
-        See `search_by_value` for parameter semantics. ``bufflength`` is
-        likewise optional (defaults to ``None``): for ``str`` / ``bytes`` it is
-        inferred from the longest of ``start`` / ``end`` (the shorter endpoint
-        is NUL-padded to that width). Pass ``start`` / ``end`` by keyword when
-        omitting ``bufflength``: ``search_by_value_between(int, start=10, end=20)``.
+        See `search_by_value` for parameter semantics, including ``aligned``.
+        ``bufflength`` is likewise optional (defaults to ``None``): for ``str``
+        / ``bytes`` it is inferred from the longest of ``start`` / ``end`` (the
+        shorter endpoint is NUL-padded to that width). Pass ``start`` / ``end``
+        by keyword when omitting ``bufflength``:
+        ``search_by_value_between(int, start=10, end=20)``.
         """
         raise NotImplementedError()
 
@@ -766,7 +816,7 @@ class AbstractProcess(ABC):
         return data
 
     @abstractmethod
-    def allocate_memory(self, size: int, *, permission=None) -> int:
+    def allocate_memory(self, size: int, *, permission: Optional[int] = None) -> int:
         """
         Reserve and commit ``size`` bytes inside the target process's address
         space and return the base address of the new region.
@@ -1070,7 +1120,13 @@ class AbstractProcess(ABC):
         def read_chunk(address: int, size: int) -> Optional[bytes]:
             try:
                 return self.read_process_memory(address, bytes, size)
-            except Exception:  # noqa: BLE001 — unreadable page mid-scan; skip it
+            except PyMemoryEditorError:
+                raise  # closed process: not a skippable page
+            except Exception:  # noqa: BLE001 — backend read errors vary
+                # A page that vanished mid-scan is skippable; a target that
+                # exited is not (every backend reports that read as a plain
+                # OSError, indistinguishable from a bad page without this).
+                self._raise_if_target_exited()
                 return None
 
         values, addresses = build_pointer_map(
@@ -1117,8 +1173,8 @@ class AbstractProcess(ABC):
         import json
 
         payload = {
-            "format": "pymemoryeditor-pointerscan",
-            "version": 1,
+            "format": _POINTER_SCAN_FORMAT,
+            "version": _POINTER_SCAN_VERSION,
             "pid": self.pid,
             "paths": [path.to_dict() for path in paths],
         }
@@ -1132,6 +1188,11 @@ class AbstractProcess(ABC):
         Returns a list of :class:`~PyMemoryEditor.PointerPath`. Resolve one with
         ``path.rebase(process).resolve(process)`` (or hand it to
         :meth:`rescan_pointer_paths`).
+
+        :raises ValueError: if the file is not a pointer-scan export written by
+            :meth:`save_pointer_paths` (wrong ``format``, an unsupported
+            ``version``, or a missing / malformed ``paths`` list). The message
+            names the file and the field.
         """
         import json
 
@@ -1139,7 +1200,35 @@ class AbstractProcess(ABC):
 
         with open(file, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        return [PointerPath.from_dict(entry) for entry in payload["paths"]]
+
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "%s is not a pointer-scan export: expected a JSON object, got %s."
+                % (file, type(payload).__name__)
+            )
+        fmt = payload.get("format")
+        if fmt != _POINTER_SCAN_FORMAT:
+            raise ValueError(
+                "%s is not a pointer-scan export: 'format' is %r, expected %r "
+                "(files are written by save_pointer_paths)."
+                % (file, fmt, _POINTER_SCAN_FORMAT)
+            )
+        version = payload.get("version")
+        if version != _POINTER_SCAN_VERSION:
+            raise ValueError(
+                "%s uses pointer-scan format version %r; this version of "
+                "PyMemoryEditor reads version %r." % (file, version, _POINTER_SCAN_VERSION)
+            )
+        entries = payload.get("paths")
+        if not isinstance(entries, list):
+            raise ValueError(
+                "%s is missing its 'paths' list (got %s)."
+                % (file, "nothing" if entries is None else type(entries).__name__)
+            )
+        try:
+            return [PointerPath.from_dict(entry) for entry in entries]
+        except ValueError as error:
+            raise ValueError("%s: %s" % (file, error)) from None
 
     def rescan_pointer_paths(
         self,
@@ -1200,7 +1289,10 @@ class AbstractProcess(ABC):
 
                 if live.resolve(self) == target_address:
                     survivors.append(live)
+            except PyMemoryEditorError:
+                raise  # closed process: every path would "fail"
             except Exception:  # noqa: BLE001 — broken chain / unreadable page: drop it
+                self._raise_if_target_exited()
                 continue
 
         return survivors
@@ -1217,8 +1309,12 @@ class AbstractProcess(ABC):
         pass the files here — only the paths that showed up in all of them (the
         reliable static pointers) are returned.
 
-        :param sources: two or more file names (from :meth:`save_pointer_paths`)
-            and/or lists of :class:`~PyMemoryEditor.PointerPath`.
+        :param sources: one or more file names (from :meth:`save_pointer_paths`)
+            and/or lists of :class:`~PyMemoryEditor.PointerPath`. A single
+            source returns its module-backed paths unchanged (the intersection
+            of one set is itself); it takes at least two for the comparison to
+            narrow anything.
+        :raises ValueError: if no source is given.
 
         Example
         -------
@@ -1227,6 +1323,9 @@ class AbstractProcess(ABC):
             stable = process.compare_pointer_scans("scan1.json", "scan2.json", "scan3.json")
         """
         from .pointer_scan import intersect_pointer_paths
+
+        if not sources:
+            raise ValueError("compare_pointer_scans() needs at least one source.")
 
         path_lists = [
             self.load_pointer_paths(source) if isinstance(source, str) else list(source)

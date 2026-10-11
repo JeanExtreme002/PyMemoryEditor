@@ -25,7 +25,12 @@ from PySide6.QtWidgets import (
 from PyMemoryEditor import AbstractProcess
 
 from ._auto_refresh_dialog import _FAILURE_GRACE_MS, _DataWorker
-from ._widgets import TearsDownOnClose, parse_hex_address, shutdown_worker_thread
+from ._widgets import (
+    MONOSPACE_FAMILY,
+    TearsDownOnClose,
+    parse_hex_address,
+    shutdown_worker_thread,
+)
 
 
 # Child of the "PyMemoryEditor" logger, so the Log Console (which attaches a
@@ -125,7 +130,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
 
         self._dump = QPlainTextEdit()
         self._dump.setReadOnly(True)
-        self._dump.setFont(QFont("Menlo, Consolas, Courier New", 11))
+        self._dump.setFont(QFont(MONOSPACE_FAMILY, 11))
         self._dump.setLineWrapMode(QPlainTextEdit.NoWrap)
         layout.addWidget(self._dump, 1)
 
@@ -135,7 +140,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         )
         self._write_edit = QLineEdit()
         self._write_edit.setPlaceholderText("e.g. DE AD BE EF")
-        self._write_edit.setFont(QFont("Menlo, Consolas, Courier New", 11))
+        self._write_edit.setFont(QFont(MONOSPACE_FAMILY, 11))
         edit_row.addWidget(self._write_edit, 1)
         layout.addLayout(edit_row)
 
@@ -157,15 +162,10 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         text = self._addr_edit.text().strip()
         if not text:
             return None
-        # Try hex first (with or without `0x`); fall back to decimal so callers
-        # that paste a plain integer still work.
-        addr = parse_hex_address(text)
-        if addr is not None:
-            return addr
-        try:
-            return int(text)
-        except (TypeError, ValueError):
-            return None
+        # Hex, with or without `0x` — the field is hex throughout, like every
+        # other address field in the app. (A decimal fallback here could never
+        # run: every decimal string is also a valid hex string.)
+        return parse_hex_address(text)
 
     def refresh(self) -> None:
         # Skip if a read is still running. The auto-refresh timer fires this
@@ -273,9 +273,8 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
 
     def _sync_timer(self) -> None:
         self._timer.setInterval(int(self._interval_spin.value()))
-        if self._auto_btn.isChecked() and not self._timer.isActive():
-            self._timer.start()
-        elif self._auto_btn.isChecked():
+        # start() on a running QTimer restarts it at the new interval.
+        if self._auto_btn.isChecked():
             self._timer.start()
 
     def _write_bytes(self) -> None:

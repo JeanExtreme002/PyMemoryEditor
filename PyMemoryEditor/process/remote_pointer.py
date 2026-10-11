@@ -22,7 +22,7 @@ Because it is built purely on the abstract ``read_process_memory`` /
 on Windows, Linux and macOS.
 """
 
-from typing import Optional, Sequence, Tuple, Type, TypeVar, TYPE_CHECKING, Union
+from typing import Any, Optional, Sequence, Tuple, Type, TypeVar, TYPE_CHECKING, Union, overload
 
 if TYPE_CHECKING:
     from .abstract import AbstractProcess
@@ -125,7 +125,7 @@ class RemotePointer:
         )
 
     @property
-    def value(self):
+    def value(self) -> Any:
         """Read and return the value at :attr:`address` using the bound type."""
         return self._process.read_process_memory(
             self.address, self._pytype, self._bufflength
@@ -138,11 +138,19 @@ class RemotePointer:
             self.address, self._pytype, self._bufflength, new_value
         )
 
+    @overload
+    def read(self, pytype: None = None, bufflength: Optional[int] = None) -> Any:
+        ...
+
+    @overload
+    def read(self, pytype: Type[T], bufflength: Optional[int] = None) -> T:
+        ...
+
     def read(
         self,
         pytype: Optional[Type[T]] = None,
         bufflength: Optional[int] = None,
-    ) -> T:
+    ) -> Any:
         """
         Read the value at :attr:`address`, optionally overriding the bound type.
 

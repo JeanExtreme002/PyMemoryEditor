@@ -122,7 +122,7 @@ def target(request):
         return
 
     toolset = MemoryToolset(
-        ServerConfig(allow_any_process=True, max_scan_seconds=180)
+        ServerConfig(allow_any_process=True, max_scan_seconds=180, protect_self=False)
     )
     session_id = toolset.open_process(pid=os.getpid())["session_id"]
     yield RealTarget("real", toolset, session_id)
@@ -737,3 +737,31 @@ def test_the_fake_orders_text_the_same_way():
     assert _scan_byte_order(int) == sys.byteorder
     assert _scan_byte_order(float) == sys.byteorder
     assert _scan_byte_order(bytes) == sys.byteorder
+
+
+# --------------------------------------------------------------------------- #
+# aligned=False: the fake's stepping must mirror the real kernels
+# --------------------------------------------------------------------------- #
+
+def test_an_unaligned_int_is_found_only_with_aligned_false(target):
+    """``scan_value(aligned=False)`` steps byte by byte; the default steps by
+    the value's width. The fake re-implements that stepping, so this is the
+    case that would catch it drifting from the real kernels."""
+    base = target.scratch(32)
+    # An address that is not a multiple of 4 whatever the buffer's alignment.
+    offset = 3 if base % 4 == 0 else (4 - base % 4) + 3
+    planted = base + offset
+    assert planted % 4 != 0
+    value = "1588207940"  # 0x5EAB0D44, distinctive enough not to hit the cap
+    target.toolset.write_value(target.session_id, hex(planted), "int", value, 4)
+
+    def addresses(**kwargs):
+        scan = target.toolset.scan_value(
+            target.session_id, "int", value, bufflength=4, writable_only=True, **kwargs
+        )
+        assert not scan["partial"], "scan hit its cap before the scratch buffer"
+        found = target.toolset.store.find_scan(scan["scan_id"])[1].addresses
+        return [a for a in found if base <= a < base + 32]
+
+    assert addresses() == []
+    assert addresses(aligned=False) == [planted]

@@ -28,7 +28,6 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from itertools import count
-from time import time
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..process.abstract import AbstractProcess
@@ -85,7 +84,6 @@ class ScanResult:
     description: str
     truncated: bool = False
     timed_out: bool = False
-    created_at: float = field(default_factory=time)
 
     @property
     def count(self) -> int:
@@ -123,7 +121,6 @@ class Session:
     process: AbstractProcess
     pid: int
     name: str
-    opened_at: float = field(default_factory=time)
     regions: Optional[MemoryRegionSnapshot] = None
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _scans: "Dict[str, ScanResult]" = field(default_factory=dict, repr=False)
@@ -338,10 +335,6 @@ class SessionStore:
             )
         )
 
-    def at_capacity(self) -> bool:
-        """Whether :meth:`open` would refuse right now."""
-        return self.capacity_refusal() is not None
-
     def get(self, session_id: str) -> Session:
         """Look up a session, or explain how to obtain a valid id."""
         known = "none"
@@ -466,16 +459,10 @@ def batch_regions(
     against a 100-byte budget produced one batch of four — so the deadline was
     checked once for the whole thing, which is the one job this function has.
 
-    Batches come back as plain lists even when ``regions`` is a
-    :class:`MemoryRegionSnapshot`, and re-tagging them would buy nothing. The
-    tag has exactly one reader, ``_ensure_sorted_by_address``, reached only from
-    ``iter_values_for_addresses`` — the ``search_by_addresses`` path, which
-    never receives a batch from here. What batches *are* handed to,
-    ``search_by_value`` / ``search_by_value_between`` / ``search_by_pattern``,
-    rebuilds the regions through a filtering comprehension and then sorts
-    unconditionally, in all three backends. So the sort happens either way and
-    the tag is never consulted. (Tried and reverted; the constraint it imposed
-    on future edits here was the only thing it added.)
+    Batches are plain lists even when ``regions`` is a
+    :class:`MemoryRegionSnapshot`: the snapshot tag is only consulted by
+    ``search_by_addresses``, which never receives a batch from here, and the
+    scan entry points re-filter and re-sort whatever they are given anyway.
     """
     batches: List[List[MemoryRegion]] = []
     current: List[MemoryRegion] = []

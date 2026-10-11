@@ -17,11 +17,23 @@ answer can be remembered for the rest of the server's life.
 Two gates, both applied on every ``open_process``:
 
 1. **The system denylist.** A per-platform set of processes that keep the
-   machine and the user's credentials running: ``launchd`` / ``kernel_task`` on
-   macOS, ``systemd`` on Linux, ``lsass.exe`` / ``csrss.exe`` on Windows.
-   Attaching to these is variously impossible (SIP, Windows PPL), a way to hang
-   the box, or a credential-theft primitive — none of it is what a
-   memory-editing agent is for. Lifted only by ``--allow-system-processes``.
+   machine running or hold the user's secrets: ``launchd`` / ``kernel_task``
+   on macOS, ``systemd`` on Linux, ``lsass.exe`` / ``csrss.exe`` on Windows,
+   plus the usual credential agents (``ssh-agent``, ``gpg-agent``, keyrings
+   and password managers). Attaching to these is variously impossible (SIP,
+   Windows PPL), a way to hang the box, or a way to read secrets — none of it
+   is what a memory-editing agent is for. Lifted only by
+   ``--allow-system-processes``.
+
+   This list is a convenience guard against the *accidental* target, not an
+   inventory of every process that matters: it cannot know which binary holds
+   your secrets, and a renamed executable is not on it. It exists so a mistyped
+   name or a confused model does not land on ``lsass.exe``.
+
+   Independently of the denylist, the server refuses its **own** process and
+   its **parent** — the MCP client that launched it. No flag lifts that: a
+   model writing into the process that enforces its policy, or into the client
+   it is talking through, has no legitimate use.
 
 2. **Consent for the target.** A process is opened without asking only if the
    operator pre-approved it (``--allow-process NAME``), it was approved earlier
@@ -42,6 +54,7 @@ who started it, which is why the denylist exists at all: to make the
 *accidental* catastrophe hard, not the deliberate one impossible.
 """
 
+import os
 import sys
 import threading
 from dataclasses import dataclass
@@ -60,6 +73,9 @@ _SYSTEM_PROCESSES: Dict[str, FrozenSet[str]] = {
             "services.exe", "lsass.exe", "lsaiso.exe", "svchost.exe",
             "msmpeng.exe", "securityhealthservice.exe", "fontdrvhost.exe",
             "dwm.exe",
+            # Credential agents and password managers.
+            "ssh-agent.exe", "gpg-agent.exe", "keepassxc.exe", "1password.exe",
+            "bitwarden.exe",
         }
     ),
     "linux": frozenset(
@@ -68,25 +84,33 @@ _SYSTEM_PROCESSES: Dict[str, FrozenSet[str]] = {
             "systemd-logind", "systemd-resolved", "dbus-daemon", "dbus-broker",
             "polkitd", "sshd", "gdm", "gdm3", "gnome-keyring-daemon", "agetty",
             "sudo", "su",
+            # Credential agents and password managers.
+            "ssh-agent", "gpg-agent", "kwalletd5", "kwalletd6", "keepassxc",
+            "1password", "bitwarden",
         }
     ),
     "darwin": frozenset(
         {
             "kernel_task", "launchd", "windowserver", "loginwindow",
-            "securityd", "opendirectoryd", "syspolicyd", "trustd", "amfid",
-            "coreaudiod", "mds", "mds_stores", "mdworker", "keybagd",
+            "securityd", "secd", "opendirectoryd", "syspolicyd", "trustd",
+            "amfid", "coreaudiod", "mds", "mds_stores", "mdworker", "keybagd",
             "sandboxd", "sudo", "su",
+            # Credential agents and password managers.
+            "ssh-agent", "gpg-agent", "keepassxc", "1password", "bitwarden",
         }
     ),
 }
 
-# Linux reports process names from ``/proc/<pid>/comm``, which the kernel
-# truncates to 15 characters. Three entries above are longer than that, so
-# exact matching could never deny them — including ``gnome-keyring-daemon``,
-# the credential process this module's docstring cites as the reason the
-# denylist exists. Adding the truncated forms makes the gate actually hold.
+#: Linux reports process names from ``/proc/<pid>/comm``, which the kernel
+#: truncates to this many characters. The denylist carries the truncated form
+#: of every longer entry (``gnome-keyring-daemon`` is seen as
+#: ``gnome-keyring-d``), and the allowlist / grant matching in
+#: :class:`ProcessPolicy` applies the same rule the other way round.
+COMM_MAX_LENGTH = 15
+
 _SYSTEM_PROCESSES["linux"] = frozenset(
-    _SYSTEM_PROCESSES["linux"] | {name[:15] for name in _SYSTEM_PROCESSES["linux"]}
+    _SYSTEM_PROCESSES["linux"]
+    | {name[:COMM_MAX_LENGTH] for name in _SYSTEM_PROCESSES["linux"]}
 )
 
 
@@ -142,6 +166,11 @@ class ProcessPolicy:
     :param allow_system: lift the system denylist.
     :param allow_any: never ask — approve any target the denylist permits. For
         scripted and non-interactive use, where there is nobody to prompt.
+    :param protect_self: refuse this process (the server) and its parent (the
+        MCP client that launched it) whatever the other flags say. On by
+        default and not exposed as a CLI flag: nothing a model does to the
+        process enforcing its own policy, or to the client it speaks through,
+        is a legitimate request. Tests that attach to themselves turn it off.
     :param platform: overridable for tests; defaults to the host platform.
 
     Instances are consulted from the server's tool threads, so the runtime
@@ -154,6 +183,7 @@ class ProcessPolicy:
         allowed_names: Sequence[str] = (),
         allow_system: bool = False,
         allow_any: bool = False,
+        protect_self: bool = True,
         platform: str = sys.platform,
     ) -> None:
         if isinstance(allowed_names, str):
@@ -177,6 +207,12 @@ class ProcessPolicy:
         self._allow_system = allow_system
         self._allow_any = allow_any
         self._denied = system_process_names(platform)
+        self._protected: FrozenSet[int] = (
+            frozenset({os.getpid(), os.getppid()}) if protect_self else frozenset()
+        )
+        # Only Linux truncates names; applying the rule elsewhere would let a
+        # 15-character name stand in for any longer one it happens to prefix.
+        self._truncates_names = _platform_key(platform) == "linux"
         self._granted: Set[str] = set()
         self._lock = threading.Lock()
 
@@ -191,6 +227,11 @@ class ProcessPolicy:
     @property
     def allow_any(self) -> bool:
         return self._allow_any
+
+    @property
+    def protected_pids(self) -> FrozenSet[int]:
+        """The pids refused unconditionally: this process and its parent."""
+        return self._protected
 
     @property
     def granted_names(self) -> Tuple[str, ...]:
@@ -228,9 +269,59 @@ class ProcessPolicy:
             return "allowlist"
         return "ask"
 
+    def _matches(self, folded: str, candidate: str) -> bool:
+        """Whether a running process's name ``folded`` satisfies ``candidate``.
+
+        ``candidate`` is an operator allowlist fragment (matched as a
+        substring). On Linux a running process's name can be the kernel's
+        15-character truncation of its real name, so a candidate that the
+        truncated name *prefixes* matches too — otherwise
+        ``--allow-process gnome-keyring-daemon`` could never match the
+        ``gnome-keyring-d`` the kernel reports, and the pre-approval would
+        silently never apply.
+        """
+        if candidate in folded:
+            return True
+        return (
+            self._truncates_names
+            and len(folded) == COMM_MAX_LENGTH
+            and candidate.startswith(folded)
+        )
+
+    def _granted_matches(self, folded: str) -> bool:
+        """Whether a remembered approval covers ``folded``. Caller holds the lock.
+
+        Exact, like :meth:`grant` promises — with the same truncation
+        allowance as :meth:`_matches`: a name remembered in full still covers
+        the truncated form Linux reports for it.
+        """
+        if folded in self._granted:
+            return True
+        return (
+            self._truncates_names
+            and len(folded) == COMM_MAX_LENGTH
+            and any(granted.startswith(folded) for granted in self._granted)
+        )
+
     def check(self, pid: int, name: str) -> AccessDecision:
         """Apply both gates to one process."""
         folded = (name or "").casefold()
+
+        if pid in self._protected:
+            # Before every other gate, and lifted by none of them: this is the
+            # server itself or the client it is talking through.
+            return AccessDecision(
+                False,
+                'Process "%s" (pid %d) is %s and cannot be opened by it. No '
+                "flag lifts this — pick a different target."
+                % (
+                    name or "unknown",
+                    pid,
+                    "this MCP server's own process"
+                    if pid == os.getpid()
+                    else "the MCP client that launched this server",
+                ),
+            )
 
         if not self._allow_system:
             if pid in _SYSTEM_PIDS or folded in self._denied:
@@ -244,10 +335,10 @@ class ProcessPolicy:
                 )
 
         if folded:
-            if any(allowed in folded for allowed in self._allowed_names):
+            if any(self._matches(folded, allowed) for allowed in self._allowed_names):
                 return AccessDecision(True)
             with self._lock:
-                if folded in self._granted:  # exact: see grant()
+                if self._granted_matches(folded):  # exact: see grant()
                     return AccessDecision(True)
 
         if self._allow_any:
@@ -288,6 +379,7 @@ class ProcessPolicy:
             "approved_this_session": list(self.granted_names) or None,
             "system_processes_allowed": self._allow_system,
             "denied_system_process_count": len(self._denied),
+            "self_protected": bool(self._protected),
         }
 
 
@@ -308,4 +400,4 @@ _MODE_NOTES = {
 }
 
 
-__all__ = ("AccessDecision", "ProcessPolicy", "system_process_names")
+__all__ = ("AccessDecision", "COMM_MAX_LENGTH", "ProcessPolicy", "system_process_names")

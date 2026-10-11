@@ -11,7 +11,8 @@ Two workers live here:
   addresses whose current value no longer matches the user's filter (this is
   Cheat Engine's "Next Scan").
 
-Both expose ``progress`` / ``found`` / ``finished`` signals so the UI never
+Both expose ``progress`` / ``status`` / ``chunk_ready`` / ``error`` /
+``finished_ok`` signals (plus QThread's own ``finished``) so the UI never
 blocks on a long scan.
 """
 import logging

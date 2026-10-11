@@ -177,10 +177,7 @@ def region_path(struct: Any) -> str:
         end = raw.find(b"\x00")
         if end != -1:
             raw = raw[:end]
-        try:
-            return raw.decode("utf-8", errors="replace")
-        except AttributeError:
-            return ""
+        return raw.decode("utf-8", errors="replace")
 
     return ""
 

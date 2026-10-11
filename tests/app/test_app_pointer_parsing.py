@@ -78,3 +78,13 @@ def test_resolve_garbage_base_reports_error():
     addr, err = resolve_base_address("not-an-address", _no_modules)
     assert addr is None
     assert "Base must be hex" in err
+
+
+def test_parse_offsets_accepts_negative_hops():
+    """Cheat Engine chains can step backwards; ``-0x10`` is a valid offset."""
+    assert parse_offsets(["0x10", "-0x8", "-4"]) == [0x10, -0x8, -4]
+
+
+def test_parse_offsets_rejects_underscores_and_double_signs():
+    assert parse_offsets(["1_0"]) is None
+    assert parse_offsets(["--10"]) is None

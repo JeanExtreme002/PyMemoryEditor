@@ -40,7 +40,7 @@ from PyMemoryEditor import (
 )
 
 from ._icon import app_icon
-from ._widgets import NumericItem, TearsDownOnClose, shutdown_worker_thread
+from ._widgets import NumericItem, TearsDownOnClose, format_size, shutdown_worker_thread
 
 
 if sys.platform == "win32":
@@ -86,18 +86,6 @@ _macos_phys_footprint: Optional[Callable[[int], int]] = _build_macos_phys_footpr
 
 def _open_kwargs():
     return {"permission": _APP_PERMISSION} if _APP_PERMISSION is not None else {}
-
-
-def _human_kb(size_bytes: int) -> str:
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    units = ["KB", "MB", "GB", "TB"]
-    n = float(size_bytes)
-    for unit in units:
-        n /= 1024
-        if n < 1024:
-            return f"{n:,.1f} {unit}"
-    return f"{n:,.1f} PB"
 
 
 # How long the auto-refresh waits between process-list re-enumerations.
@@ -314,7 +302,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
             name_item = QStandardItem(name)
             name_item.setData(pid, Qt.UserRole)
 
-            mem_item = NumericItem(_human_kb(mem) if mem else "—")
+            mem_item = NumericItem(format_size(mem) if mem else "—")
             mem_item.setData(mem, Qt.UserRole)
             mem_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 

@@ -75,6 +75,46 @@ class _LinuxPartialIOError(OSError):
         self.length = length
 
 
+_PTRACE_SCOPE_HINT = (
+    "The kernel refused ptrace-level access to the target: either Yama "
+    "ptrace_scope restricts it (the usual cause for a process you own; relax "
+    "it with `sudo sysctl kernel.yama.ptrace_scope=0` or make the target a "
+    "child of this process), or the target belongs to another user / is not "
+    "dumpable (setuid), which only root can read. Running as root covers both."
+)
+
+
+def _syscall_error(op: str, errno: int, remote_address: int, length: int) -> OSError:
+    """
+    Build the ``OSError`` for a failed ``process_vm_readv`` / ``process_vm_writev``.
+
+    ``errno`` is preserved on every path (``_is_transient`` keys on it), but the
+    two codes users actually hit get a message that points at the right knob:
+
+    - ``EPERM`` is Yama ``ptrace_scope`` denying ``PTRACE_MODE_ATTACH`` — the
+      policy that gates these two syscalls (not ``/proc/<pid>/maps``, which
+      only needs ``PTRACE_MODE_READ`` and therefore opens fine).
+    - ``EFAULT`` is an address the target does not map *or*, for a write, a
+      page mapped without write permission. Unlike Windows and macOS, Linux
+      has no protection flip here: ``process_vm_writev`` honours page
+      protection and cannot write to a read-only page.
+    """
+    base = "%s failed at 0x%X (%d bytes): %s" % (
+        op, remote_address, length, os.strerror(errno),
+    )
+    if errno == errno_mod.EPERM:
+        return PermissionError(errno, "%s. %s" % (base, _PTRACE_SCOPE_HINT))
+    if errno == errno_mod.EFAULT and op == "process_vm_writev":
+        return OSError(
+            errno,
+            "%s. The address is not mapped in the target, or the page is not "
+            "writable: Linux does not elevate page protection for writes (the "
+            "Windows and macOS backends do), so read-only pages cannot be "
+            "written through process_vm_writev." % base,
+        )
+    return OSError(errno, base)
+
+
 def _process_vm_readv(
     pid: int, local_address: int, remote_address: int, length: int
 ) -> int:
@@ -93,7 +133,7 @@ def _process_vm_readv(
 
     if result == -1:
         errno = ctypes.get_errno()
-        raise OSError(errno, os.strerror(errno))
+        raise _syscall_error("process_vm_readv", errno, remote_address, length)
 
     if result != length:
         raise _LinuxPartialIOError(
@@ -120,7 +160,7 @@ def _process_vm_writev(
 
     if result == -1:
         errno = ctypes.get_errno()
-        raise OSError(errno, os.strerror(errno))
+        raise _syscall_error("process_vm_writev", errno, remote_address, length)
 
     if result != length:
         raise _LinuxPartialIOError(
@@ -179,12 +219,15 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
         # so funnel into it instead of leaking a kernel pseudo-fs error.
         raise ProcessIDNotExistsError(pid)
     except PermissionError as exc:
-        # ptrace_scope (or being a non-root user inspecting a different uid)
-        # is the typical reason — re-raise with a hint pointing at the fix.
+        # /proc/<pid>/maps is gated by PTRACE_MODE_READ, which Yama's
+        # ptrace_scope does *not* restrict — so failing here means the target
+        # belongs to another uid (or is not dumpable: setuid, or
+        # prctl(PR_SET_DUMPABLE, 0)). The ptrace_scope hint belongs to the
+        # EPERM from process_vm_readv/writev, not to this path.
         raise PermissionError(
-            "Cannot read %s: %s. On Linux this usually means ptrace_scope "
-            "is restricting access; try `sudo sysctl kernel.yama.ptrace_scope=0` "
-            "or run as root." % (mapping_filename, exc)
+            "Cannot read %s: %s. The target process belongs to another user "
+            "or is not dumpable; run as root or as the owner of the target."
+            % (mapping_filename, exc)
         )
 
     with mapping_file:
@@ -412,6 +455,7 @@ def search_addresses_by_value(
     writeable_only: bool = False,
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    aligned: bool = True,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -442,6 +486,7 @@ def search_addresses_by_value(
         scan_type,
         _make_read_chunk(pid),
         progress_information=progress_information,
+        aligned=aligned,
         transient_error_check=_is_transient,
     )
 
@@ -551,14 +596,29 @@ def get_threads(pid: int) -> Generator[ThreadInfo, None, None]:
     listing ``/proc/<pid>/task/`` — each subdirectory there is a TID.
 
     State and priority come from ``/proc/<pid>/task/<tid>/stat`` when readable;
-    silent on permission/race errors (a thread may exit between listing the
+    silent on per-thread race errors (a thread may exit between listing the
     directory and reading its stat file) but logged at DEBUG so observers can
     see it.
+
+    A process that has exited yields nothing (its ``task`` directory is gone),
+    matching the Windows backend. Being denied the directory listing itself,
+    however, is a configuration problem and raises ``PermissionError`` — the
+    same way macOS surfaces a ``task_threads`` failure — rather than
+    masquerading as "no threads".
     """
     task_dir = "/proc/{}/task".format(pid)
 
     try:
         entries = os.listdir(task_dir)
+    except FileNotFoundError as exc:
+        _logger.debug("get_threads: %s is gone (target exited?): %s", task_dir, exc)
+        return
+    except PermissionError as exc:
+        raise PermissionError(
+            "Cannot list %s: %s. The target process belongs to another user "
+            "or is not dumpable; run as root or as the owner of the target."
+            % (task_dir, exc)
+        )
     except OSError as exc:
         _logger.debug("get_threads: could not list %s: %s", task_dir, exc)
         return

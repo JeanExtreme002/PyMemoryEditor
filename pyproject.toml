@@ -129,11 +129,23 @@ Funding = "https://github.com/sponsors/JeanExtreme002"
 # toolkit, so it isn't worth annotating strictly. Library code under
 # PyMemoryEditor/ (excluding app/) is the surface that ships with
 # `py.typed` and should aim for clean mypy output over time.
+#
+# `exclude` only stops mypy from *discovering* app/ when it walks the
+# package; `PyMemoryEditor/__main__.py` imports the app, and followed imports
+# are still checked. The override below is what actually keeps app/ out of
+# the verdict -- without it the result depended on which PySide6 stubs and
+# mypy version pip happened to resolve (0 errors with one pair, 200+ with
+# another), on identical code.
 exclude = ["PyMemoryEditor/app/"]
 ignore_missing_imports = true
 # Initial pass: surface issues without immediately blocking CI. Tighten this
 # over time as the pre-existing type debt gets paid down.
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["PyMemoryEditor.app", "PyMemoryEditor.app.*"]
+follow_imports = "skip"
+ignore_errors = true
 
 # Platform-specific backends use symbols that only exist on their target OS
 # (`ctypes.windll`, `WINFUNCTYPE`, `WinError`, `set_last_error`, etc. on

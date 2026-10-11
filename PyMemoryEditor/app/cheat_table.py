@@ -56,11 +56,6 @@ from .value_types import (
 )
 
 
-# Re-exported for backward compatibility with callers that imported the
-# poll-interval constant from this module before the split.
-_TICK_INTERVAL_MS = TICK_INTERVAL_MS
-
-
 class CheatTable(QWidget):
     """Bottom pane: saved addresses, freezing, manual edits."""
 
@@ -80,6 +75,14 @@ class CheatTable(QWidget):
         self._suspend_signals = False
         # Before _build_ui(), which connects cellChanged — a path that reads it.
         self._poller_stopped = False
+        # Set while the owner knows the target is gone (see set_polling_paused):
+        # the poller idles on an empty snapshot and edits are refused instead
+        # of being queued against a dead handle.
+        self._paused = False
+        # Write failures reported by the poller since the last flush. They are
+        # shown in one dialog per event-loop burst, so a bulk edit whose every
+        # row fails (target exited) produces one message, not one per row.
+        self._pending_write_failures: List[Tuple[int, str]] = []
 
         self._build_ui()
 
@@ -129,6 +132,31 @@ class CheatTable(QWidget):
     def closeEvent(self, event):  # noqa: N802 — Qt naming
         self.shutdown()
         super().closeEvent(event)
+
+    def set_polling_paused(self, paused: bool) -> None:
+        """Idle the poll loop while the target is known to be gone.
+
+        The owning window's heartbeat calls this when the process exits. The
+        publish timer stops and the worker is handed an empty snapshot, so it
+        sleeps through its ticks instead of hitting a dead handle ten times a
+        second (and, on a recycled PID, a stranger's memory). Entries are kept:
+        the table still shows the last values read. Resuming re-publishes.
+        """
+        if self._poller_stopped or paused == self._paused:
+            return
+        self._paused = paused
+        if paused:
+            self._publish_timer.stop()
+            self._poller.update_snapshot([])
+        else:
+            self._publish_snapshot_to_worker()
+            self._publish_timer.start()
+
+    def is_polling_paused(self) -> bool:
+        return self._paused
+
+    def entry_count(self) -> int:
+        return len(self._entries)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -208,8 +236,17 @@ class CheatTable(QWidget):
         # spotted from the table, so the floor is enforced once, at the door,
         # rather than at each of those call sites. (The AOB pattern spec is the
         # one whose declared length is 0 — the scanner derives its real width
-        # from the pattern.)
-        entry.length = max(1, int(entry.length))
+        # from the pattern.) The ceiling is the same one every other width
+        # field enforces (MAX_ENTRY_LENGTH); only a JSON import can carry more,
+        # and silently resizing its entry would alter what the user exports
+        # next, so that is refused -- the import loop reports and skips it.
+        length = int(entry.length)
+        if length > MAX_ENTRY_LENGTH:
+            raise ValueError(
+                "entry at 0x%X has length %d, over the %d-byte maximum"
+                % (entry.address, length, MAX_ENTRY_LENGTH)
+            )
+        entry.length = max(1, length)
 
         # If the address already exists, just refresh its description/type.
         for existing in self._entries:
@@ -236,7 +273,16 @@ class CheatTable(QWidget):
         length: int,
         description: str = "",
     ) -> None:
-        """Convenience used by the scanner panel to bulk-promote rows."""
+        """Convenience used by the scanner panel to bulk-promote rows.
+
+        :raises ValueError: if ``length`` is over ``MAX_ENTRY_LENGTH`` -- checked
+            once up front so a refusal adds none of the rows rather than some.
+        """
+        if int(length) > MAX_ENTRY_LENGTH:
+            raise ValueError(
+                "length %d is over the %d-byte maximum for a cheat-table entry"
+                % (int(length), MAX_ENTRY_LENGTH)
+            )
         for addr in addresses:
             self.add_entry(
                 CheatEntry(
@@ -356,8 +402,9 @@ class CheatTable(QWidget):
             # next poll tick reads the value back and corrects the cell if the
             # write didn't take, and an outright failure returns via
             # write_failed → _on_write_failed.
-            # Nothing to route it to once shutdown() handed the worker over.
-            if self._poller_stopped:
+            # Nothing to route it to once shutdown() handed the worker over,
+            # and nothing to write to while the target is known to be gone.
+            if self._poller_stopped or self._paused:
                 return
             self._poller.request_write(
                 entry.address, entry.spec.pytype, entry.length, value
@@ -469,13 +516,33 @@ class CheatTable(QWidget):
     def _on_write_failed(self, failure) -> None:
         """Surface a manual value write that failed on the worker thread.
 
-        The write is now async (queued onto the poll worker), so its failure
-        arrives here via the ``write_failed`` signal rather than inline. The
-        optimistic cell update made when the edit was queued is corrected by the
-        next poll tick, which reads back the unchanged value.
+        Writes are async (queued onto the poll worker), so a failure arrives
+        here via the ``write_failed`` signal rather than inline. The optimistic
+        cell update made when the edit was queued is corrected by the next poll
+        tick, which reads back the unchanged value.
+
+        Failures are collected and shown by ``_flush_write_failures`` on the
+        next event-loop pass: the worker drains a bulk edit's queue in one
+        tick, so its failures land here back to back and read as one report.
         """
-        _address, _pytype, _length, message = failure
-        QMessageBox.critical(self, "Write Failed", message)
+        address, _pytype, _length, message = failure
+        if not self._pending_write_failures:
+            QTimer.singleShot(0, self._flush_write_failures)
+        self._pending_write_failures.append((address, message))
+
+    def _flush_write_failures(self) -> None:
+        failures = self._pending_write_failures
+        self._pending_write_failures = []
+        if not failures:
+            return
+        if len(failures) == 1:
+            QMessageBox.critical(self, "Write Failed", failures[0][1])
+            return
+        preview = "\n".join(f"0x{addr:X}: {msg}" for addr, msg in failures[:10])
+        extra = "" if len(failures) <= 10 else f"\n…and {len(failures) - 10} more."
+        QMessageBox.critical(
+            self, "Write Failed", f"{len(failures)} write(s) failed:\n\n{preview}{extra}"
+        )
 
     def _editing_row(self) -> int:
         """Return the row currently being edited, or -1 if none."""
@@ -603,15 +670,20 @@ class CheatTable(QWidget):
                     if spec.accepts_length_override:
                         entry.length = effective_length
 
-                    try:
-                        self._process.write_process_memory(
-                            entry.address, spec.pytype, entry.length, value
-                        )
-                    except Exception as exc:  # noqa: BLE001
+                    # Same path as an inline edit: the syscall runs on the poll
+                    # worker, never on the UI thread (a slow target or a page
+                    # fault would freeze the interface for every row). A write
+                    # that fails comes back via write_failed → one coalesced
+                    # dialog; the optimistic update below is corrected by the
+                    # next tick's read-back.
+                    if self._poller_stopped or self._paused:
                         failures.append(
-                            (entry.address, f"{type(exc).__name__}: {exc}")
+                            (entry.address, "the target process is no longer available")
                         )
                         continue
+                    self._poller.request_write(
+                        entry.address, spec.pytype, entry.length, value
+                    )
 
                     entry.last_value = value
                     if entry.frozen:
@@ -873,7 +945,7 @@ def prompt_for_manual_entry(parent) -> Optional[CheatEntry]:
             "Buffer length (bytes):",
             value=spec.length or 4,
             minValue=1,
-            maxValue=1024,
+            maxValue=MAX_ENTRY_LENGTH,
         )
         if not ok:
             return None
