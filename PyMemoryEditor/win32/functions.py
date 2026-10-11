@@ -986,7 +986,10 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
 
         while True:
             # szModule / szExePath are c_wchar arrays — accessing them returns
-            # the NUL-terminated str directly, no code-page decoding involved.
+            # the NUL-terminated str directly. Toolhelp itself fills module
+            # entries from the loader's ANSI module list, though, so characters
+            # outside the system code page arrive here as "?" (process names,
+            # from the kernel's Unicode list, are exact).
             name = entry.szModule
             path = entry.szExePath
             yield ModuleInfo(

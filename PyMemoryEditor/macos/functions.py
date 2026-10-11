@@ -438,6 +438,37 @@ def _mach_read(task: int, address: int, local_buffer_address: int, size: int) ->
     return out_size.value
 
 
+def _basic_region_at(
+    task: int, address: int
+) -> Optional[Tuple[int, int, vm_region_basic_info_64]]:
+    """``(start, size, info)`` of the first region at or after ``address``, or
+    ``None`` when ``mach_vm_region`` fails (past the last region, dead task).
+
+    The backing object's port name the call hands back is released here, so
+    callers never leak it.
+    """
+    addr = mach_vm_address_t(address)
+    size = mach_vm_size_t(0)
+    info = vm_region_basic_info_64()
+    info_count = mach_msg_type_number_t(VM_REGION_BASIC_INFO_COUNT_64)
+    object_name = mach_port_t(0)
+
+    kr = libsystem.mach_vm_region(
+        task,
+        ctypes.byref(addr),
+        ctypes.byref(size),
+        VM_REGION_BASIC_INFO_64,
+        ctypes.cast(ctypes.byref(info), ctypes.c_void_p),
+        ctypes.byref(info_count),
+        ctypes.byref(object_name),
+    )
+    if kr != KERN_SUCCESS:
+        return None
+    if object_name.value:
+        libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
+    return addr.value, size.value, info
+
+
 def _protections_in_span(task: int, start: int, end: int) -> List[Tuple[int, int, int]]:
     """
     Return ``(address, size, protection)`` for every mapped slice of
@@ -454,29 +485,12 @@ def _protections_in_span(task: int, start: int, end: int) -> List[Tuple[int, int
     cursor = start
 
     while cursor < end:
-        addr = mach_vm_address_t(cursor)
-        size = mach_vm_size_t(0)
-        info = vm_region_basic_info_64()
-        info_count = mach_msg_type_number_t(VM_REGION_BASIC_INFO_COUNT_64)
-        object_name = mach_port_t(0)
-
-        kr = libsystem.mach_vm_region(
-            task,
-            ctypes.byref(addr),
-            ctypes.byref(size),
-            VM_REGION_BASIC_INFO_64,
-            ctypes.cast(ctypes.byref(info), ctypes.c_void_p),
-            ctypes.byref(info_count),
-            ctypes.byref(object_name),
-        )
-        if kr != KERN_SUCCESS:
+        found = _basic_region_at(task, cursor)
+        if found is None:
             break
-        if object_name.value:
-            libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
-
-        region_start = addr.value
-        region_end = region_start + size.value
-        if size.value == 0 or region_start >= end:
+        region_start, region_size, info = found
+        region_end = region_start + region_size
+        if region_size == 0 or region_start >= end:
             break
 
         low = max(region_start, cursor)
@@ -673,49 +687,6 @@ def _is_skippable_by_sweep(exc: BaseException) -> bool:
     sweep may skip. See :data:`_SWEEP_SKIPPABLE_KRS`.
     """
     return isinstance(exc, MachReadError) and exc.kr in _SWEEP_SKIPPABLE_KRS
-
-
-def _query_region(task: int, address: int):
-    """Return the region containing `address`, or None when the query fails."""
-    addr = mach_vm_address_t(address)
-    size = mach_vm_size_t(0)
-    info = vm_region_basic_info_64()
-    info_count = mach_msg_type_number_t(VM_REGION_BASIC_INFO_COUNT_64)
-    object_name = mach_port_t(0)
-
-    kr = libsystem.mach_vm_region(
-        task,
-        ctypes.byref(addr),
-        ctypes.byref(size),
-        VM_REGION_BASIC_INFO_64,
-        ctypes.cast(ctypes.byref(info), ctypes.c_void_p),
-        ctypes.byref(info_count),
-        ctypes.byref(object_name),
-    )
-
-    if kr != KERN_SUCCESS:
-        return None
-
-    if object_name.value:
-        libsystem.mach_port_deallocate(mach_task_self_.value, object_name.value)
-
-    # mach_vm_region advances `addr` to the start of the containing region;
-    # only return it when the caller's address actually lies inside.
-    if not (addr.value <= address < addr.value + size.value):
-        return None
-
-    return make_region(
-        address=addr.value,
-        size=size.value,
-        struct=MEMORY_BASIC_INFORMATION(
-            addr.value,
-            size.value,
-            info.protection,
-            info.max_protection,
-            _region_is_shared(task, addr.value, info.shared),
-            info.reserved,
-        ),
-    )
 
 
 def read_process_memory(

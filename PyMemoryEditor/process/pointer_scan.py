@@ -41,7 +41,9 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from typing import (
     Callable,
+    Dict,
     Generator,
+    Iterable,
     List,
     Optional,
     Sequence,
@@ -53,6 +55,7 @@ from typing import (
 
 from ..util import iter_region_chunks
 from .errors import PyMemoryEditorError
+from .module_info import ModuleInfo
 
 if TYPE_CHECKING:
     from .abstract import AbstractProcess
@@ -63,6 +66,21 @@ if TYPE_CHECKING:
 # fine: we read the memory of a process on the same machine, so its endianness
 # matches the host's.
 _ARRAY_TYPECODE = {4: "I", 8: "Q"}
+
+
+def first_module_bases(modules: Iterable[ModuleInfo]) -> Dict[str, int]:
+    """
+    Module name -> base address, where the **first** module of a name wins.
+
+    The one rule every rebase uses (:meth:`PointerPath.rebase`,
+    ``rescan_pointer_paths``, the app's pointer-scan dialog), so a path lands
+    on the same module whichever way it is replayed when a name is loaded
+    twice.
+    """
+    bases: Dict[str, int] = {}
+    for module in modules:
+        bases.setdefault(module.name, module.base_address)
+    return bases
 
 
 @dataclass(frozen=True)
@@ -136,15 +154,15 @@ class PointerPath:
                 "custom static range); its base_address is only valid for the "
                 "run it was found in."
             )
-        for module in process.get_modules():
-            if module.name == self.module:
-                return PointerPath(
-                    base_address=module.base_address + self.module_offset,
-                    offsets=self.offsets,
-                    module=self.module,
-                    module_offset=self.module_offset,
-                    ptr_size=self.ptr_size,
-                )
+        base = first_module_bases(process.get_modules()).get(self.module)
+        if base is not None:
+            return PointerPath(
+                base_address=base + self.module_offset,
+                offsets=self.offsets,
+                module=self.module,
+                module_offset=self.module_offset,
+                ptr_size=self.ptr_size,
+            )
         raise LookupError("Module %r is not loaded in the target process." % self.module)
 
     def to_dict(self) -> dict:
@@ -542,5 +560,6 @@ __all__ = (
     "PointerPath",
     "build_pointer_map",
     "find_pointer_paths",
+    "first_module_bases",
     "intersect_pointer_paths",
 )

@@ -1392,6 +1392,12 @@ class MemoryToolset:
                 if predicate(decode_scan_target(raw, byte_order, pytype)):
                     kept.append(address)
 
+            # A refine reads every address once, with no batch boundary to
+            # check at; a close that arrived meanwhile must not end in a new
+            # scan id on a session the model can no longer use.
+            if session.closing.is_set():
+                raise _closed_mid_operation(session, "refine_scan")
+
             scan = self.store.new_scan(
                 session,
                 value_type=previous.value_type,
@@ -1737,10 +1743,9 @@ class MemoryToolset:
 
         This is the most expensive tool here, and it runs in two phases: it
         maps every pointer in the target's writable memory, then walks that map
-        backwards. Only the first phase reports progress, so the server's time
-        budget bounds it precisely and the second phase only between paths —
-        a deep walk that finds nothing can still run long. Expect seconds to
-        minutes on a large process, and start shallow.
+        backwards. The server's time budget bounds both phases, so a walk that
+        runs out of time returns the paths found so far with ``timed_out``.
+        Expect seconds to minutes on a large process, and start shallow.
 
         """
         session = self.store.get(session_id)
@@ -1759,19 +1764,34 @@ class MemoryToolset:
         # done no work at all.
         deadline = 0.0
         timed_out_phase: Optional[str] = None
+        walk_stopped_by_deadline = False
 
         def progress(_fraction: float) -> None:
             # `scan_pointer_paths` runs in two phases and only the first one
             # reports progress: `build_pointer_map` reads the target's writable
             # memory and finishes *entirely* before the first path is yielded.
-            # So this callback bounds the map, and the reverse walk below needs
-            # its own check — which is also why a timeout here always means
-            # zero paths, and why max_depth / max_offset (consumed only by the
+            # So this callback bounds the map, and `should_stop` below bounds
+            # the walk — which is also why a timeout here always means zero
+            # paths, and why max_depth / max_offset (consumed only by the
             # walk) cannot be the remedy for it.
             nonlocal timed_out_phase
+            if session.closing.is_set():
+                raise _closed_mid_operation(session, "find_pointer_paths")
             if monotonic() >= deadline:
                 timed_out_phase = "pointer_map"
                 raise _ScanDeadline()
+
+        def should_stop() -> bool:
+            # Polled inside the reverse walk, which can run a long time between
+            # two paths. Records *why* it stopped: a walk that simply finished
+            # just past the deadline is complete, not timed out.
+            nonlocal walk_stopped_by_deadline
+            if session.closing.is_set():
+                return True
+            if monotonic() >= deadline:
+                walk_stopped_by_deadline = True
+                return True
+            return False
 
         paths: List[Dict[str, Any]] = []
 
@@ -1790,9 +1810,7 @@ class MemoryToolset:
                     max_results=max_results,
                     memory_regions=regions,
                     progress_callback=progress,
-                    should_stop=lambda: (
-                        session.closing.is_set() or monotonic() >= deadline
-                    ),
+                    should_stop=should_stop,
                 ):
                     paths.append(
                         {
@@ -1806,13 +1824,16 @@ class MemoryToolset:
                     # too stops a productive walk without waiting for the next
                     # poll. Either way the session lock is released promptly
                     # (SessionStore.close leaves the handle to be closed then).
-                    if session.closing.is_set() or monotonic() >= deadline:
+                    if session.closing.is_set():
+                        break
+                    if monotonic() >= deadline and len(paths) < max_results:
+                        walk_stopped_by_deadline = True
                         break
                 # The walk ends the same way whether it ran out of graph or was
                 # stopped, so tell the two apart from the cause.
                 if session.closing.is_set():
                     raise _closed_mid_operation(session, "find_pointer_paths")
-                if monotonic() >= deadline:
+                if walk_stopped_by_deadline:
                     timed_out_phase = "path_search"
             except _ScanDeadline:
                 pass

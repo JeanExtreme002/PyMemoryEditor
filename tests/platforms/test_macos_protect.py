@@ -217,9 +217,11 @@ def _two_page_regions(first_protection, second_protection):
 def _protection_at(task, address):
     from PyMemoryEditor.macos import functions as mac
 
-    region = mac._query_region(task, address)
-    assert region is not None
-    return region.struct.Protection
+    found = mac._basic_region_at(task, address)
+    assert found is not None
+    start, size, info = found
+    assert start <= address < start + size
+    return info.protection
 
 
 _R = 0x1

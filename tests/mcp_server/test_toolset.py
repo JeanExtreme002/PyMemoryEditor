@@ -2085,6 +2085,142 @@ class TestClosingABusySession:
         assert result["timed_out_phase"] == "path_search"
         assert result["count"] == 0
 
+    def test_a_session_still_closing_counts_against_the_handle_cap(self):
+        """A close that had to leave its handle to a running operation drops
+        the session id, but the handle is still open: it must keep its slot
+        until the operation releases it."""
+        import os
+        import threading
+
+        from PyMemoryEditor.mcp.session import MAX_OPEN_SESSIONS, SessionStore
+
+        # Every session on a live pid (ours), or the reaper frees the slots.
+        live = os.getpid()
+        store = SessionStore()
+        busy = store.open(FakeProcess(), live, "busy")
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with busy.lock:
+                held.set()
+                release.wait(5)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        assert held.wait(5)
+        try:
+            store.close(busy.session_id, wait=0.05)
+            assert busy.handle_closed is False
+
+            for _ in range(MAX_OPEN_SESSIONS - 1):
+                store.open(FakeProcess(pid=live), live, "other")
+            refusal = store.capacity_refusal(live)
+            assert refusal is not None
+            assert "still finishing an operation" in refusal
+            with pytest.raises(SessionError):
+                store.open(FakeProcess(pid=live), live, "one too many")
+        finally:
+            release.set()
+            holder.join(5)
+
+        assert busy.handle_closed is True
+        assert store.capacity_refusal(live) is None
+
+    def test_a_close_during_the_pointer_map_phase_stops_the_scan(
+        self, make_toolset, monkeypatch
+    ):
+        """The map build reports progress, and that is where a close is
+        noticed — not only once the (long) map is complete."""
+        import threading
+        import time
+
+        from PyMemoryEditor.mcp import session as session_module
+
+        monkeypatch.setattr(session_module, "CLOSE_WAIT_SECONDS", 0.05)
+        mapping = threading.Event()
+
+        class SlowMap(FakeProcess):
+            def scan_pointer_paths(self, target_address, **kwargs):
+                progress = kwargs["progress_callback"]
+                while True:
+                    mapping.set()
+                    time.sleep(0.01)
+                    progress(0.5)
+                yield  # a generator, like the real one
+
+        process = SlowMap()
+        toolset = make_toolset(config(max_scan_seconds=60.0))
+        toolset._open_process = lambda **_kwargs: process
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        outcome = {}
+
+        def scan():
+            try:
+                toolset.find_pointer_paths(session_id, hex(WRITABLE_BASE))
+            except SessionError as error:
+                outcome["error"] = error
+
+        worker = threading.Thread(target=scan, daemon=True)
+        worker.start()
+        assert mapping.wait(5)
+        toolset.close_process(session_id)
+
+        worker.join(5)
+        assert not worker.is_alive(), "the map build did not notice the close"
+        assert "was closed" in str(outcome.get("error"))
+        assert process.closed
+
+    def test_a_walk_that_finishes_past_the_deadline_is_not_reported_partial(
+        self, make_toolset
+    ):
+        import time
+
+        from PyMemoryEditor import PointerPath
+
+        class LateButComplete(FakeProcess):
+            def scan_pointer_paths(self, target_address, **kwargs):
+                kwargs["progress_callback"](1.0)
+                time.sleep(0.3)  # past the 0.2 s budget, with nothing left
+                yield PointerPath(
+                    base_address=WRITABLE_BASE, offsets=(8,),
+                    module="game", module_offset=0, ptr_size=8,
+                )
+
+        toolset = make_toolset(config(max_scan_seconds=0.2))
+        toolset._open_process = lambda **_kwargs: LateButComplete()
+        session_id = toolset.open_process(pid=4242)["session_id"]
+
+        result = toolset.find_pointer_paths(
+            session_id, hex(WRITABLE_BASE), max_results=1
+        )
+
+        assert result["count"] == 1
+        assert result["timed_out"] is False
+
+    def test_a_refine_on_a_session_closed_meanwhile_stores_nothing(self, make_toolset):
+        toolset = make_toolset(config())
+        process = FakeProcess()
+        toolset._open_process = lambda **_kwargs: process
+        session_id = toolset.open_process(pid=4242)["session_id"]
+        process.poke(WRITABLE_BASE + 0x40, int, 1234567, 4)
+        scan = toolset.scan_value(session_id, "int", "1234567", bufflength=4)
+        session = toolset.store.get(session_id)
+
+        # The close lands while the refine is reading the addresses.
+        real_read = toolset._read_addresses
+
+        def read_then_close(*args, **kwargs):
+            yield from real_read(*args, **kwargs)
+            session.closing.set()
+
+        toolset._read_addresses = read_then_close
+        scans_before = len(session.scan_ids)
+
+        with pytest.raises(SessionError, match="was closed"):
+            toolset.refine_scan(scan["scan_id"], "exact", "1234567")
+        assert len(session.scan_ids) == scans_before
+
     def test_a_busy_session_defers_closing_its_handle(self, monkeypatch):
         import threading
 

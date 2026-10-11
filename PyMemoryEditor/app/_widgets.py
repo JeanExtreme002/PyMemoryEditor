@@ -6,6 +6,7 @@ Centralises tiny helpers (numeric sort items, hex address parsing) that
 previously appeared duplicated across several dialog modules.
 """
 
+import threading
 from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Qt, QThread
@@ -100,13 +101,18 @@ def run_after_detached_workers(callback: Callable[[], None]) -> None:
 
     remaining = set(pending)
     done = False
+    # `finished` can be delivered from the worker's own thread while the
+    # isFinished() sweep below runs on this one: guard the bookkeeping so the
+    # callback (a handle close) runs exactly once.
+    guard = threading.Lock()
 
     def _on_finished(worker: QThread) -> None:
         nonlocal done
-        remaining.discard(worker)
-        if remaining or done:
-            return
-        done = True
+        with guard:
+            remaining.discard(worker)
+            if remaining or done:
+                return
+            done = True
         callback()
 
     for worker in pending:

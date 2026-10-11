@@ -210,3 +210,15 @@ def test_should_stop_never_true_leaves_the_results_unchanged():
 
     assert walk() == walk(should_stop=lambda: False)
     assert walk()  # the graph does have paths
+
+
+def test_first_module_bases_keeps_the_first_module_of_a_name():
+    """The single rule behind rebase, rescan_pointer_paths and the app."""
+    from PyMemoryEditor.process.pointer_scan import first_module_bases
+
+    modules = [
+        ModuleInfo(name="game.dll", path="/a/game.dll", base_address=0x1000, size=0x100),
+        ModuleInfo(name="other.dll", path="/a/other.dll", base_address=0x2000, size=0x100),
+        ModuleInfo(name="game.dll", path="/b/game.dll", base_address=0x9000, size=0x100),
+    ]
+    assert first_module_bases(modules) == {"game.dll": 0x1000, "other.dll": 0x2000}

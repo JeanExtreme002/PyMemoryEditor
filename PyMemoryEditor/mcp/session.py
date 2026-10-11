@@ -288,6 +288,10 @@ class SessionStore:
 
     def __init__(self) -> None:
         self._sessions: Dict[str, Session] = {}
+        # Sessions already closed whose handle a still-running operation will
+        # release when it finishes (see :meth:`close`). They no longer have an
+        # id, but they still hold an OS handle, so they count against the cap.
+        self._draining: List[Session] = []
         self._session_ids = count(1)
         self._scan_ids = count(1)
         self._lock = threading.Lock()
@@ -372,7 +376,7 @@ class SessionStore:
         :meth:`open` would have made room.
         """
         with self._lock:
-            if len(self._sessions) < MAX_OPEN_SESSIONS:
+            if self._handles_held_locked() < MAX_OPEN_SESSIONS:
                 return None
 
         self._reap_dead()
@@ -395,8 +399,18 @@ class SessionStore:
         # every racing thread saw room, and the cap was exceeded.
         assert self._lock.locked(), "capacity must be judged under the lock"
 
-        if len(self._sessions) < MAX_OPEN_SESSIONS:
+        if self._handles_held_locked() < MAX_OPEN_SESSIONS:
             return None
+
+        draining = len(self._draining)
+        still_closing = (
+            " %d of them %s already closed but still finishing an operation; "
+            "%s handle is released as soon as it stops."
+            % (draining, "is" if draining == 1 else "are",
+               "its" if draining == 1 else "each")
+            if draining
+            else ""
+        )
 
         # No "close the oldest": the oldest is usually the target the whole
         # session has been refining, and close_process discards its scan
@@ -416,7 +430,7 @@ class SessionStore:
             "This server already has %d processes open, which is the "
             "limit, and all of them are live. Close whichever you are "
             "done with (close_process also discards that session's scan "
-            "results) and attach again. Open: %s.%s"
+            "results) and attach again. Open: %s.%s%s"
             % (
                 MAX_OPEN_SESSIONS,
                 ", ".join(
@@ -425,10 +439,18 @@ class SessionStore:
                        len(session.scan_ids),
                        "" if len(session.scan_ids) == 1 else "s")
                     for sid, session in self._sessions.items()
-                ),
+                ) or "none",
+                still_closing,
                 already,
             )
         )
+
+    def _handles_held_locked(self) -> int:
+        """OS handles this store still holds: open sessions plus closed ones
+        whose handle is waiting on a running operation. **Caller holds**
+        ``self._lock``."""
+        self._draining = [s for s in self._draining if not s.handle_closed]
+        return len(self._sessions) + len(self._draining)
 
     def get(self, session_id: str) -> Session:
         """Look up a session, or explain how to obtain a valid id."""
@@ -464,7 +486,17 @@ class SessionStore:
         steps: Sequence[str] = (),
         elided_steps: int = 0,
     ) -> ScanResult:
-        """Build and store a result set under a freshly minted scan id."""
+        """Build and store a result set under a freshly minted scan id.
+
+        :raises SessionError: if the session was closed while the scan ran —
+            its id would point at a session the model can no longer reach.
+        """
+        if session.closing.is_set():
+            raise SessionError(
+                'Session "%s" was closed while the scan was running, so its '
+                "results were discarded. Call open_process to attach again."
+                % session.session_id
+            )
         with self._lock:
             scan_id = "scan-%d" % next(self._scan_ids)
 
@@ -526,6 +558,8 @@ class SessionStore:
             # Released through SessionLock.release, which closes the handle.
             session.lock.release()
         else:
+            with self._lock:
+                self._draining.append(session)
             _logger.warning(
                 "Session %s is busy; its handle will close when the running "
                 "operation finishes.", session_id,

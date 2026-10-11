@@ -1269,7 +1269,7 @@ class AbstractProcess(ABC):
             survivors = process.rescan_pointer_paths("scan.json", new_address)
             process.save_pointer_paths(survivors, "scan.json")
         """
-        from .pointer_scan import PointerPath
+        from .pointer_scan import PointerPath, first_module_bases
 
         if isinstance(paths, str):
             paths = self.load_pointer_paths(paths)
@@ -1282,13 +1282,8 @@ class AbstractProcess(ABC):
                 if saved.module is not None and saved.module_offset is not None:
                     # Look modules up once, only if a module-backed path needs it.
                     if module_bases is None:
-                        # First module of a given name wins, exactly as in
-                        # PointerPath.rebase — a dict comprehension would keep
-                        # the last one, so the two would disagree whenever a
-                        # name is loaded twice.
-                        module_bases = {}
-                        for module in self.get_modules():
-                            module_bases.setdefault(module.name, module.base_address)
+                        # The same first-wins rule as PointerPath.rebase.
+                        module_bases = first_module_bases(self.get_modules())
                     base = module_bases.get(saved.module)
                     if base is None:
                         continue  # the path's module isn't loaded in this run

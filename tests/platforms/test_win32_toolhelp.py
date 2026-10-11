@@ -10,6 +10,13 @@ as UTF-8, so any non-ASCII process or module name came back garbled and name
 matching failed. The checks run against the test process itself only — a
 copy of a system DLL with a non-ASCII file name is loaded into it, looked up,
 and unloaded.
+
+Process names come from the kernel's Unicode process list, so they are exact.
+Module entries do not: Toolhelp32 builds them from the loader's module list
+in ANSI (``RTL_PROCESS_MODULE_INFORMATION.FullPathName``) even for the "W"
+calls, so a module name is exact only for characters in the system's ANSI
+code page — anything else comes back as ``?``. The module test therefore
+uses characters from that code page.
 """
 
 import ctypes
@@ -68,10 +75,26 @@ def test_module_walk_of_self_returns_str_names_and_full_paths():
     assert os.path.basename(exe.path).lower() == exe.name.lower()
 
 
+def _ansi_code_page_letters():
+    """Non-ASCII letters the system's ANSI code page can represent."""
+    code_page = "cp%d" % ctypes.windll.kernel32.GetACP()
+    letters = []
+    for char in "\u00e9\u00f1\u00fc\u00e7\u0436\u03b1\u65e5\u672c":
+        try:
+            char.encode(code_page)
+        except (LookupError, UnicodeEncodeError):
+            continue
+        letters.append(char)
+    return letters
+
+
 def test_module_walk_keeps_non_ascii_names_intact(tmp_path):
-    # Non-ASCII outside any single ANSI code page: the ANSI struct turned
-    # these into "?" on every runner.
-    name = "pme_t\u00e9st_\u65e5\u672c_\u0436.dll"
+    # The old code decoded the ANSI bytes as UTF-8, so even a code-page
+    # letter such as "é" (0xE9 in cp1252) came back as U+FFFD.
+    letters = _ansi_code_page_letters()
+    if not letters:
+        pytest.skip("the ANSI code page has none of the candidate letters")
+    name = "pme_t%sst_%s.dll" % (letters[0], "".join(letters[1:3]))
     source = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "version.dll")
     if not os.path.isfile(source):
         pytest.skip("System32\\version.dll not found")
@@ -88,8 +111,11 @@ def test_module_walk_keeps_non_ascii_names_intact(tmp_path):
     if not handle:
         pytest.skip("could not load the DLL copy (err=%d)" % ctypes.get_last_error())
     try:
-        matches = [m for m in win.GetModules(os.getpid()) if m.name.lower() == name.lower()]
-        assert len(matches) == 1
+        modules = list(win.GetModules(os.getpid()))
+        matches = [m for m in modules if m.name.lower() == name.lower()]
+        assert len(matches) == 1, "loaded as %r" % [
+            (m.name, m.path) for m in modules if m.base_address == handle
+        ]
         assert matches[0].base_address == handle
         # samefile, not string equality: %TEMP% on CI runners is an 8.3 short
         # path, and the loader may report either spelling.

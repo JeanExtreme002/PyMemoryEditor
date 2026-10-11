@@ -50,7 +50,10 @@ from PySide6.QtWidgets import (
 )
 
 from PyMemoryEditor import AbstractProcess, PointerPath
-from PyMemoryEditor.process.pointer_scan import intersect_pointer_paths
+from PyMemoryEditor.process.pointer_scan import (
+    first_module_bases,
+    intersect_pointer_paths,
+)
 
 from ._widgets import (
     MONOSPACE_FAMILY,
@@ -75,16 +78,6 @@ _MONO = MONOSPACE_FAMILY
 # Stream resolved paths to the table in batches this size, so a scan that finds
 # thousands of paths updates the UI smoothly instead of one row at a time.
 _UI_BATCH = 200
-
-
-def _module_bases(process) -> dict:
-    """Module name -> base address, the *first* module wins on a duplicate
-    name — the same pick as ``PointerPath.rebase``, so a path rebases onto one
-    module whichever way it is replayed."""
-    bases: dict = {}
-    for module in process.get_modules():
-        bases.setdefault(module.name, module.base_address)
-    return bases
 
 
 class _PointerScanCancelled(Exception):
@@ -259,7 +252,7 @@ class PointerRescanWorker(QThread):
     def run(self) -> None:
         try:
             # One name→base lookup so rebasing each saved path is O(1).
-            module_bases = _module_bases(self._process)
+            module_bases = first_module_bases(self._process.get_modules())
 
             batch: List[_ResultRow] = []
             total = len(self._paths) or 1
@@ -992,7 +985,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         # For display, rebase each survivor onto the current process and read its
         # value — best effort; a path that can't resolve now is still a valid
         # member of the intersection and is kept (shown dimmed / "—").
-        module_bases = _module_bases(self._process)
+        module_bases = first_module_bases(self._process.get_modules())
         spec, length = self._current_spec()
 
         rows: List[_ResultRow] = []
