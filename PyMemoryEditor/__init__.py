@@ -8,7 +8,7 @@ Supported platforms: Windows, Linux and macOS (32-bit and 64-bit).
 """
 
 __author__ = "Jean Loui Bernard Silva de Jesus"
-__version__ = "3.3.3"
+__version__ = "3.4.0"
 
 import logging
 import sys
