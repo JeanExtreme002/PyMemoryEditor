@@ -867,7 +867,7 @@ def search_addresses_by_value(
     task: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes, tuple],
+    value: Optional[Union[bool, int, float, str, bytes, tuple]],
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: bool = False,
     writeable_only: bool = False,
@@ -884,7 +884,8 @@ def search_addresses_by_value(
 
     Passing a `memory_regions` snapshot skips region enumeration.
     ``target_value_bytes`` is ``value`` already encoded (see
-    :func:`~PyMemoryEditor.util.prepare_search_target`).
+    :func:`~PyMemoryEditor.util.prepare_search_target`); when it is given,
+    ``value`` is not used and may be ``None``.
     """
     _validate_pytype(pytype)
 

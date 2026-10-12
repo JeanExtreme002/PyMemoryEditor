@@ -10,7 +10,6 @@ from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
 from ..util import UNSET, prepare_write, resolve_bufflength
-from ..util.pattern import PatternLike
 
 from .functions import (
     allocate_memory,
@@ -211,7 +210,6 @@ class MacProcess(AbstractProcess):
         self,
         pytype: Type,
         bufflength: int,
-        value: Union[bool, int, float, str, bytes, tuple],
         target_value_bytes: Union[bytes, Tuple[bytes, ...]],
         scan_type: ScanTypesEnum,
         *,
@@ -224,10 +222,10 @@ class MacProcess(AbstractProcess):
             self.__task,
             pytype,
             bufflength,
-            value,
-            scan_type,
-            progress_information,
-            writeable_only,
+            value=None,  # given already encoded, as target_value_bytes
+            scan_type=scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
             memory_regions=memory_regions,
             pid=self.pid,
             aligned=aligned,
@@ -236,7 +234,6 @@ class MacProcess(AbstractProcess):
 
     def _scan_pattern(
         self,
-        pattern: PatternLike,
         compiled_pattern: Tuple[Pattern[bytes], int],
         *,
         progress_information: bool,
@@ -244,7 +241,7 @@ class MacProcess(AbstractProcess):
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         return search_addresses_by_pattern(
             self.__task,
-            pattern,
+            compiled_pattern[0],
             progress_information=progress_information,
             memory_regions=memory_regions,
             pid=self.pid,

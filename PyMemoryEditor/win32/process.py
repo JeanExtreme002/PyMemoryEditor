@@ -5,7 +5,6 @@ import logging
 from typing import Dict, Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union
 
 from ..util import UNSET, prepare_write, resolve_bufflength
-from ..util.pattern import PatternLike
 
 from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
@@ -208,9 +207,8 @@ class WindowsProcess(AbstractProcess):
         # pid probe would say "alive" forever; GetExitCodeProcess asks the
         # handle itself. None means the handle lacks the query right (only a
         # custom narrowed `permission=` mask drops it). The pid probe is the
-        # only answer left then, and for an exited target it is the wrong one
-        # -- the scan treats that target's reads as vanished pages, as before
-        # this check existed.
+        # only answer left then, and for an exited target it is the wrong one:
+        # the scan treats that target's reads as vanished pages.
         exited = _process_has_exited(self.__process_handle)
         if exited is None:
             return super()._target_alive()
@@ -259,7 +257,6 @@ class WindowsProcess(AbstractProcess):
         self,
         pytype: Type,
         bufflength: int,
-        value: Union[bool, int, float, str, bytes, tuple],
         target_value_bytes: Union[bytes, Tuple[bytes, ...]],
         scan_type: ScanTypesEnum,
         *,
@@ -272,10 +269,10 @@ class WindowsProcess(AbstractProcess):
             self.__process_handle,
             pytype,
             bufflength,
-            value,
-            scan_type,
-            progress_information,
-            writeable_only,
+            value=None,  # given already encoded, as target_value_bytes
+            scan_type=scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
             memory_regions=memory_regions,
             aligned=aligned,
             pid=self.pid,
@@ -284,7 +281,6 @@ class WindowsProcess(AbstractProcess):
 
     def _scan_pattern(
         self,
-        pattern: PatternLike,
         compiled_pattern: Tuple[Pattern[bytes], int],
         *,
         progress_information: bool,
@@ -292,7 +288,7 @@ class WindowsProcess(AbstractProcess):
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         return SearchAddressesByPattern(
             self.__process_handle,
-            pattern,
+            compiled_pattern[0],
             progress_information=progress_information,
             memory_regions=memory_regions,
             pid=self.pid,

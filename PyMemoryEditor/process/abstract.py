@@ -67,6 +67,61 @@ class AbstractProcess(ABC):
     Abstract class to represent a process.
     """
 
+    # Each listing / search method and the backend hook its implementation
+    # here relies on. A subclass must override one or the other: the hooks
+    # are not abstract (see "Backend hooks" below), so this is what still
+    # makes an incomplete subclass fail when it is defined rather than with
+    # a NotImplementedError on first use.
+    _METHOD_HOOKS = (
+        ("get_memory_regions", "_iter_memory_regions"),
+        ("get_threads", "_iter_threads"),
+        ("get_modules", "_iter_modules"),
+        ("search_by_addresses", "_scan_addresses"),
+        ("search_by_value", "_scan_values"),
+        ("search_by_value_between", "_scan_values"),
+        ("search_by_pattern", "_scan_pattern"),
+    )
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        # An intermediate class that still leaves an abstract method open
+        # cannot be instantiated anyway; its concrete subclasses are checked.
+        # The open methods are found the way ABCMeta finds them (it has not
+        # run yet at this point): this class's own abstract attributes, plus
+        # the bases' abstract names this class did not implement.
+        open_methods = [
+            name for name, value in vars(cls).items()
+            if getattr(value, "__isabstractmethod__", False)
+        ] + [
+            name
+            for base in cls.__bases__
+            for name in getattr(base, "__abstractmethods__", ())
+            if getattr(getattr(cls, name, None), "__isabstractmethod__", False)
+        ]
+        if open_methods:
+            return
+
+        # Overriding a method with anything (a function, a property, a mixin's
+        # method) counts as implementing it; assigning AbstractProcess's own
+        # function again does not.
+        missing: Dict[str, List[str]] = {}
+        uses_base = False
+        for method, hook in cls._METHOD_HOOKS:
+            if getattr(cls, method) is not getattr(AbstractProcess, method):
+                continue  # implemented directly, as up to 3.3
+            uses_base = True
+            if getattr(cls, hook) is getattr(AbstractProcess, hook):
+                missing.setdefault(hook, []).append(method)
+        problems = [
+            "%s (or %s)" % (hook, ", ".join(methods)) for hook, methods in missing.items()
+        ]
+        if uses_base and cls._require_open is AbstractProcess._require_open:
+            problems.append("_require_open")
+        if problems:
+            raise TypeError(
+                "%s must implement %s." % (cls.__name__, "; ".join(problems))
+            )
+
     @abstractmethod
     def __init__(
         self,
@@ -470,7 +525,6 @@ class AbstractProcess(ABC):
         scan = self._scan_values(
             pytype,
             width,
-            value,
             prepare_search_target(pytype, width, value),
             scan_type,
             progress_information=progress_information,
@@ -510,7 +564,6 @@ class AbstractProcess(ABC):
         """
         self._require_scanning()
         scan = self._scan_pattern(
-            pattern,
             compile_pattern(pattern, byte_length=byte_length),
             progress_information=progress_information,
             memory_regions=memory_regions,
@@ -552,7 +605,6 @@ class AbstractProcess(ABC):
         scan = self._scan_values(
             pytype,
             width,
-            (start, end),
             prepare_search_target(pytype, width, (start, end)),
             scan_type,
             progress_information=progress_information,
@@ -627,7 +679,6 @@ class AbstractProcess(ABC):
         self,
         pytype: Type,
         bufflength: int,
-        value: Union[bool, int, float, str, bytes, tuple],
         target_value_bytes: Union[bytes, Tuple[bytes, ...]],
         scan_type: ScanTypesEnum,
         *,
@@ -637,14 +688,13 @@ class AbstractProcess(ABC):
         aligned: bool,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """The scan behind :meth:`search_by_value` and
-        :meth:`search_by_value_between`. ``value`` is the value, or the
-        ``(start, end)`` pair of a range scan; ``target_value_bytes`` is that
-        same target already validated and encoded."""
+        :meth:`search_by_value_between`. ``target_value_bytes`` is the value,
+        or the ``(start, end)`` pair of a range scan, already validated and
+        encoded."""
         raise NotImplementedError()
 
     def _scan_pattern(
         self,
-        pattern: PatternLike,
         compiled_pattern: Tuple["Pattern[bytes]", int],
         *,
         progress_information: bool,
@@ -652,7 +702,7 @@ class AbstractProcess(ABC):
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         """The scan behind :meth:`search_by_pattern`. ``compiled_pattern`` is
         what :func:`~PyMemoryEditor.util.pattern.compile_pattern` returned for
-        ``pattern``."""
+        the pattern."""
         raise NotImplementedError()
 
     @abstractmethod

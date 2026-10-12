@@ -9,7 +9,6 @@ from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess, ProcessIDNotExistsError
 from ..util import UNSET, prepare_write, resolve_bufflength
-from ..util.pattern import PatternLike
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
@@ -114,8 +113,8 @@ class LinuxProcess(AbstractProcess):
         ``hot_path`` marks single-value reads, which callers issue in tight
         loops: they are verified only when the cheap pidfd probe is
         available. Without a pidfd the start-time read would roughly
-        quadruple the cost of every read, so there they keep the pre-pidfd
-        behaviour. Writes are always verified, and so are scans and listings
+        quadruple the cost of every read, so there they are not verified.
+        Writes are always verified, and so are scans and listings
         when they are called; their generators are not re-verified between
         items, so one held while the target exits and its pid is reused would
         read the newcomer -- create the scan again after a long pause.
@@ -227,7 +226,6 @@ class LinuxProcess(AbstractProcess):
         self,
         pytype: Type,
         bufflength: int,
-        value: Union[bool, int, float, str, bytes, tuple],
         target_value_bytes: Union[bytes, Tuple[bytes, ...]],
         scan_type: ScanTypesEnum,
         *,
@@ -240,10 +238,10 @@ class LinuxProcess(AbstractProcess):
             self.pid,
             pytype,
             bufflength,
-            value,
-            scan_type,
-            progress_information,
-            writeable_only,
+            value=None,  # given already encoded, as target_value_bytes
+            scan_type=scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
             memory_regions=memory_regions,
             aligned=aligned,
             target_value_bytes=target_value_bytes,
@@ -251,7 +249,6 @@ class LinuxProcess(AbstractProcess):
 
     def _scan_pattern(
         self,
-        pattern: PatternLike,
         compiled_pattern: Tuple[Pattern[bytes], int],
         *,
         progress_information: bool,
@@ -259,7 +256,7 @@ class LinuxProcess(AbstractProcess):
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         return search_addresses_by_pattern(
             self.pid,
-            pattern,
+            compiled_pattern[0],
             progress_information=progress_information,
             memory_regions=memory_regions,
             compiled_pattern=compiled_pattern,

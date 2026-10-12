@@ -105,3 +105,104 @@ def test_every_backend_implements_every_raw_hook():
             node.name for node in backend_class.body if isinstance(node, ast.FunctionDef)
         }
         assert hooks <= defined, (class_name, sorted(hooks - defined))
+
+
+class _OtherMethods:
+    """Mixin: AbstractProcess's other abstract methods, implemented trivially."""
+
+    def __init__(self):
+        super().__init__(pid=os.getpid())
+
+    def _detect_is_64bit(self):
+        return True
+
+    def close(self):
+        return True
+
+    def read_process_memory(self, address, pytype, bufflength=None):
+        return 0
+
+    def read_process_memory_into(self, address, buffer):
+        return 0
+
+    def write_process_memory(self, address, pytype, bufflength=None, value=None):
+        return value
+
+    def allocate_memory(self, size, *, permission=None):
+        return 0
+
+    def free_memory(self, address, size=0):
+        return True
+
+
+def test_a_subclass_with_neither_the_method_nor_its_hook_fails_when_defined():
+    import pytest
+
+    with pytest.raises(TypeError, match="_scan_values .or search_by_value"):
+        type("Incomplete", (_OtherMethods, AbstractProcess), {"_require_open": lambda self: None})
+
+
+def test_a_subclass_using_the_hooks_must_implement_require_open():
+    import pytest
+
+    hooks = {
+        name: (lambda self, *args, **kwargs: (item for item in ()))
+        for name in (
+            "_iter_memory_regions", "_iter_threads", "_iter_modules",
+            "_scan_addresses", "_scan_values", "_scan_pattern",
+        )
+    }
+    with pytest.raises(TypeError, match="_require_open"):
+        type("NoOpenCheck", (_OtherMethods, AbstractProcess), hooks)
+
+    complete = type(
+        "Complete", (_OtherMethods, AbstractProcess), dict(hooks, _require_open=lambda self: None)
+    )
+    assert list(complete().search_by_value(int, value=1)) == []
+
+
+def test_an_intermediate_abstract_subclass_is_not_checked():
+    # Still abstract (close and friends left open), so it is never
+    # instantiated; only its concrete subclasses must be complete.
+    class Intermediate(AbstractProcess):
+        pass
+
+    assert Intermediate.__name__ == "Intermediate"
+
+
+def test_abstract_methods_are_counted_the_way_abcmeta_counts_them():
+    import abc
+
+    import pytest
+
+    # A plain (non-ABC) mixin's @abstractmethod does not make a class
+    # abstract for ABCMeta -- it instantiates -- so it must not exempt the
+    # class from the check either.
+    class PlainMixin:
+        @abc.abstractmethod
+        def extra(self):
+            ...
+
+    with pytest.raises(TypeError, match="must implement"):
+        type("Instantiable", (PlainMixin, _OtherMethods, AbstractProcess), {})
+
+    # A class-level descriptor is not evaluated while looking for open
+    # abstract methods.
+    class Loud:
+        def __get__(self, obj, owner):
+            raise RuntimeError("evaluated")
+
+    class StillAbstract(AbstractProcess):
+        loud = Loud()
+
+    assert StillAbstract.__name__ == "StillAbstract"
+
+
+def test_the_error_names_each_missing_hook_once():
+    import pytest
+
+    with pytest.raises(TypeError) as caught:
+        type("Bare", (_OtherMethods, AbstractProcess), {})
+    message = str(caught.value)
+    assert message.count("_scan_values") == 1
+    assert "search_by_value, search_by_value_between" in message
