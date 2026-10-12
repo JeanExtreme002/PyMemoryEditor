@@ -294,29 +294,6 @@ jobs:
         flags: speed-Linux-py3.12
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
-    # The Qt app is omitted from the library gate (.coveragerc-lib), so on its
-    # own it was never measured at all. This measures it -- informational, no
-    # floor -- under its own config and Codecov flag, so the number exists and
-    # its trend is visible before anyone picks a gate for it. Only tests/app
-    # runs here (~30s), and only in this one cell: the app is the same Python
-    # on every OS.
-    - name: Measure app coverage (informational)
-      # The same tests already gate in the step above; a failure here must
-      # not fail the job a second time.
-      if: always()
-      continue-on-error: true
-      env:
-        QT_QPA_PLATFORM: offscreen
-      run: |
-        pytest tests/app -q --cov=PyMemoryEditor/app --cov-config=.coveragerc-app --cov-report=term --cov-report=xml:coverage-app.xml
-    - name: Upload app coverage to Codecov
-      if: always()
-      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
-      with:
-        files: ./coverage-app.xml
-        flags: app-Linux-py3.12
-        token: ${{ secrets.CODECOV_TOKEN }}
-        fail_ci_if_error: false
 
   # The MCP server gets its own job rather than a row in the matrix above.
   #

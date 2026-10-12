@@ -21,3 +21,12 @@ coverage:
 comment:
   layout: "reach, diff, flags, files"
   require_changes: false
+
+# The Qt app (PyMemoryEditor/app) is left out of the reported number, as the
+# CI coverage gate (.coveragerc-lib) leaves it out: most of it is widget wiring
+# the offscreen suite does not drive, and counting its ~4.5k lines next to the
+# ~4.6k of library and MCP code would make the badge measure the UI rather
+# than the code people install the package for. Listed here as well so an
+# upload that does include the app cannot shift the badge.
+ignore:
+  - "PyMemoryEditor/app/**"
