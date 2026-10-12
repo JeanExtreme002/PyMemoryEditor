@@ -2,20 +2,12 @@
 
 import ctypes
 import logging
-from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Dict, Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union
 
-from ..util import (
-    UNSET,
-    prepare_write,
-    resolve_bufflength,
-    prepare_search_target,
-    resolve_bufflength_for_value,
-)
+from ..util import UNSET, prepare_write, resolve_bufflength
 
 from ..enums import ScanTypesEnum
-from ..util.pattern import compile_pattern
 from ..process import AbstractProcess
-from ..process._guard import guard_generator
 from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
@@ -136,7 +128,7 @@ class WindowsProcess(AbstractProcess):
             self.__permission_value, False, self.pid
         )
 
-    def __require_open(self) -> None:
+    def _require_open(self) -> None:
         if self.__closed:
             raise ClosedProcess()
 
@@ -215,161 +207,93 @@ class WindowsProcess(AbstractProcess):
         # pid probe would say "alive" forever; GetExitCodeProcess asks the
         # handle itself. None means the handle lacks the query right (only a
         # custom narrowed `permission=` mask drops it). The pid probe is the
-        # only answer left then, and for an exited target it is the wrong one
-        # -- the scan treats that target's reads as vanished pages, as before
-        # this check existed.
+        # only answer left then, and for an exited target it is the wrong one:
+        # the scan treats that target's reads as vanished pages.
         exited = _process_has_exited(self.__process_handle)
         if exited is None:
             return super()._target_alive()
         return not exited
 
     def _detect_is_64bit(self) -> Optional[bool]:
-        self.__require_open()
+        self._require_open()
         return _detect_process_64bit(self.__process_handle)
 
-    def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
-        self.__require_open()
-        return guard_generator(
-            GetMemoryRegions(self.__process_handle, self.pid), self.__require_open
-        )
+    def _require_scanning(self) -> None:
+        self._require_listing()
+        self.__require_read()
 
-    def get_threads(self) -> Generator[ThreadInfo, None, None]:
-        self.__require_open()
+    def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
+        return GetMemoryRegions(self.__process_handle, self.pid)
+
+    def _iter_threads(self) -> Generator[ThreadInfo, None, None]:
         # Toolhelp32 takes a PID, not a handle — no PROCESS_* right needed.
-        return guard_generator(GetThreads(self.pid), self.__require_open)
+        return GetThreads(self.pid)
 
-    def get_modules(self) -> Generator[ModuleInfo, None, None]:
-        self.__require_open()
+    def _iter_modules(self) -> Generator[ModuleInfo, None, None]:
         # The Toolhelp32 module snapshot takes a PID, not a handle; the handle
         # only tells a failed snapshot of an exited target apart.
-        return guard_generator(
-            GetModules(self.pid, process_handle=self.__process_handle),
-            self.__require_open,
-        )
+        return GetModules(self.pid, process_handle=self.__process_handle)
 
-    def search_by_addresses(
+    def _scan_addresses(
         self,
         pytype: Type[T],
-        bufflength: Optional[int] = None,
-        addresses: Sequence[int] = UNSET,
+        bufflength: int,
+        addresses: Sequence[int],
         *,
-        raise_error: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        raise_error: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
-        self.__require_open()
-        self.__require_read()
-        if addresses is UNSET:
-            raise TypeError("addresses is required.")
-        scan = SearchValuesByAddresses(
+        return SearchValuesByAddresses(
             self.__process_handle,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            bufflength,
             addresses,
             memory_regions=memory_regions,
             raise_error=raise_error,
             pid=self.pid,
         )
-        return guard_generator(scan, self.__require_open)
 
-    def search_by_value(
+    def _scan_values(
         self,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-        value: Union[bool, int, float, str, bytes] = UNSET,
-        scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
+        pytype: Type,
+        bufflength: int,
+        target_value_bytes: Union[bytes, Tuple[bytes, ...]],
+        scan_type: ScanTypesEnum,
         *,
-        progress_information: bool = False,
-        writeable_only: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-        aligned: bool = True,
+        progress_information: bool,
+        writeable_only: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+        aligned: bool,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_open()
-        self.__require_read()
-
-        if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
-            raise ValueError(
-                "Use the method search_by_value_between(...) to search within a range of values."
-            )
-
-        width = resolve_bufflength_for_value(pytype, bufflength, value)
-        # Validate now: the scan is a generator, so its own checks would
-        # only raise on the first next(), far from this call.
-        prepare_search_target(pytype, width, value)
-        scan = SearchAddressesByValue(
+        return SearchAddressesByValue(
             self.__process_handle,
             pytype,
-            width,
-            value,
-            scan_type,
-            progress_information,
-            writeable_only,
+            bufflength,
+            value=None,  # given already encoded, as target_value_bytes
+            scan_type=scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
             memory_regions=memory_regions,
             aligned=aligned,
             pid=self.pid,
+            target_value_bytes=target_value_bytes,
         )
-        return guard_generator(scan, self.__require_open)
 
-    def search_by_pattern(
+    def _scan_pattern(
         self,
-        pattern,
+        compiled_pattern: Tuple[Pattern[bytes], int],
         *,
-        byte_length: int = 0,
-        progress_information: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        progress_information: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_open()
-        self.__require_read()
-        # Compile now so a malformed pattern raises at the call, not on the
-        # first next() of the returned generator.
-        compile_pattern(pattern, byte_length=byte_length)
-        scan = SearchAddressesByPattern(
+        return SearchAddressesByPattern(
             self.__process_handle,
-            pattern,
-            byte_length=byte_length,
+            compiled_pattern[0],
             progress_information=progress_information,
             memory_regions=memory_regions,
             pid=self.pid,
+            compiled_pattern=compiled_pattern,
         )
-        return guard_generator(scan, self.__require_open)
-
-    def search_by_value_between(
-        self,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-        start: Union[bool, int, float, str, bytes] = UNSET,
-        end: Union[bool, int, float, str, bytes] = UNSET,
-        *,
-        not_between: bool = False,
-        progress_information: bool = False,
-        writeable_only: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-        aligned: bool = True,
-    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_open()
-        self.__require_read()
-
-        scan_type = (
-            ScanTypesEnum.NOT_VALUE_BETWEEN
-            if not_between
-            else ScanTypesEnum.VALUE_BETWEEN
-        )
-        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
-        # Validate now: the scan is a generator, so its own checks would
-        # only raise on the first next(), far from this call.
-        prepare_search_target(pytype, width, (start, end))
-        scan = SearchAddressesByValue(
-            self.__process_handle,
-            pytype,
-            width,
-            (start, end),
-            scan_type,
-            progress_information,
-            writeable_only,
-            memory_regions=memory_regions,
-            aligned=aligned,
-            pid=self.pid,
-        )
-        return guard_generator(scan, self.__require_open)
 
     def read_process_memory(
         self,
@@ -377,7 +301,7 @@ class WindowsProcess(AbstractProcess):
         pytype: Type[T],
         bufflength: Optional[int] = None,
     ) -> T:
-        self.__require_open()
+        self._require_open()
         self.__require_read()
         return ReadProcessMemory(
             self.__process_handle,
@@ -387,7 +311,7 @@ class WindowsProcess(AbstractProcess):
         )
 
     def read_process_memory_into(self, address: int, buffer: object) -> int:
-        self.__require_open()
+        self._require_open()
         self.__require_read()
         return ReadProcessMemoryInto(self.__process_handle, address, buffer)
 
@@ -398,7 +322,7 @@ class WindowsProcess(AbstractProcess):
         bufflength: Optional[int] = None,
         value: Union[bool, int, float, str, bytes] = UNSET,
     ) -> Union[bool, int, float, str, bytes]:
-        self.__require_open()
+        self._require_open()
         self.__require_write()
         w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
         WriteProcessMemory(
@@ -411,14 +335,14 @@ class WindowsProcess(AbstractProcess):
         return value
 
     def allocate_memory(self, size: int, *, permission=None) -> int:
-        self.__require_open()
+        self._require_open()
         self.__require_operation()
         address = AllocateMemory(self.__process_handle, size, permission)
         self.__allocations[address] = size
         return address
 
     def free_memory(self, address: int, size: int = 0) -> bool:
-        self.__require_open()
+        self._require_open()
         self.__require_operation()
         # MEM_RELEASE tears down whatever VirtualAlloc'd block starts at
         # `address` -- a heap segment or a thread stack just as readily as one

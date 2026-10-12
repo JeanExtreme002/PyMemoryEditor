@@ -151,9 +151,9 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
 
-        # Failure bookkeeping, same shape as the auto-refresh dialogs: a dead
-        # target used to log a warning every tick forever (~20/s at the 50 ms
-        # floor). Keyed by (address, size, message) so moving the viewer to
+        # Failure bookkeeping, same shape as the auto-refresh dialogs: without
+        # it a dead target would log a warning every tick forever (~20/s at the
+        # 50 ms floor). Keyed by (address, size, message) so moving the viewer to
         # another failing range still gets logged.
         self._last_failure: Optional[tuple] = None
         self._failing_since: Optional[QElapsedTimer] = None
@@ -171,7 +171,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
         # Skip if a read is still running. The auto-refresh timer fires this
         # repeatedly, and a large length (up to 65536) on a slow target
         # (notably macOS Mach-VM) takes long enough that running it on the UI
-        # thread froze input — so the read now runs on a worker, and this guard
+        # thread would freeze input — so the read runs on a worker, and this guard
         # self-throttles the cadence to the real read time instead of stacking
         # workers.
         if self._worker is not None and self._worker.isRunning():
@@ -188,7 +188,7 @@ class MemoryViewerDialog(TearsDownOnClose, QDialog):
             # travel back in the result so the rendered dump stays labelled with
             # the range actually read even if the user edits the fields mid-read.
             # Errors are returned (not raised) so the one result handler renders
-            # them with the same message/log the synchronous path produced.
+            # every outcome through a single message/log path.
             try:
                 data = process.read_process_memory(addr, bytes, size)
                 # A backend returning a non-buffer object would make bytes(data)

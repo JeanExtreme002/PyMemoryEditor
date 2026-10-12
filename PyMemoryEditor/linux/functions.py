@@ -12,7 +12,7 @@ import logging
 import os
 import signal
 from ctypes import addressof, sizeof
-from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Dict, Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
 
 from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
@@ -60,9 +60,9 @@ class _LinuxPartialIOError(OSError):
 
     In practice this happens when the target range straddles a freed or
     inaccessible page — the kernel transfers what it can and reports the
-    short count. The previous behavior was to silently accept the short
-    result, leaving the caller's buffer half-filled with real bytes and
-    half with zeros (which downstream decoding would treat as valid).
+    short count. Accepting the short result would leave the caller's buffer
+    half-filled with real bytes and half with zeros (which downstream
+    decoding would treat as valid), so it raises instead.
     Mirrors the partial-read/write check the Win32 backend already does
     against ``ReadProcessMemory`` / ``WriteProcessMemory``.
     """
@@ -181,10 +181,9 @@ def _make_read_chunk(pid: int):
     """
     Build a `read_chunk(address, size)` closure bound to ``pid``.
 
-    Each backend used to define this closure inline three times
+    One closure per backend, shared by its three scan entry points
     (``search_addresses_by_value``, ``search_addresses_by_pattern``,
-    ``search_values_by_addresses``) — drift between them was a recurring source
-    of subtle bugs. Owning it once per backend keeps the trio in lockstep.
+    ``search_values_by_addresses``) so they cannot drift.
     """
     def read_chunk(address: int, size: int):
         buffer = (ctypes.c_byte * size)()
@@ -249,7 +248,7 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
             region_information = line.split(maxsplit=5)
 
             try:
-                addressing_range, privileges, offset, device, inode = (
+                addressing_range, privileges, raw_offset, device, raw_inode = (
                     region_information[0:5]
                 )
                 path = region_information[5].strip() if len(region_information) >= 6 else b""
@@ -259,8 +258,8 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
                 ]
                 major_id, minor_id = [int(_id, 16) for _id in device.split(b":")]
 
-                offset = int(offset, 16)
-                inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
+                offset = int(raw_offset, 16)
+                inode = int(raw_inode)  # /proc/<pid>/maps formats the inode as decimal.
             except (ValueError, IndexError) as exc:
                 # A single malformed line (kernel quirk, racing teardown) must
                 # not abort the whole region walk — skip it and keep going, the
@@ -437,9 +436,9 @@ def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int
     _process_vm_readv(pid, addressof(data), address, bufflength)
 
     if pytype is str:
-        return bytes(data).decode("utf-8", errors="replace")
+        return cast(T, bytes(data).decode("utf-8", errors="replace"))
     elif pytype is bytes:
-        return bytes(data)
+        return cast(T, bytes(data))
     else:
         # Narrow widths pad with zeroes, which reads a signed value as
         # unsigned -- and a scan for the same bytes is signed.
@@ -463,23 +462,28 @@ def search_addresses_by_value(
     pid: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes, tuple],
+    value: Optional[Union[bool, int, float, str, bytes, tuple]],
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: bool = False,
     writeable_only: bool = False,
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     aligned: bool = True,
+    target_value_bytes: Optional[Union[bytes, Tuple[bytes, ...]]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
     for the provided value, returning the found addresses.
 
     Passing a `memory_regions` snapshot skips region enumeration.
+    ``target_value_bytes`` is ``value`` already encoded (see
+    :func:`~PyMemoryEditor.util.prepare_search_target`); when it is given,
+    ``value`` is not used and may be ``None``.
     """
     _validate_pytype(pytype)
 
-    target_value_bytes = values_to_bytes(pytype, bufflength, value)
+    if target_value_bytes is None:
+        target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(pid)
@@ -512,12 +516,19 @@ def search_addresses_by_pattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    compiled_pattern: Optional[Tuple[Pattern[bytes], int]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target. See
-    :meth:`AbstractProcess.search_by_pattern`.
+    :meth:`AbstractProcess.search_by_pattern`. ``compiled_pattern`` is what
+    :func:`~PyMemoryEditor.util.pattern.compile_pattern` returned for
+    ``pattern``, when the caller already compiled it.
     """
-    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+    compiled, length = (
+        compiled_pattern
+        if compiled_pattern is not None
+        else compile_pattern(pattern, byte_length=byte_length)
+    )
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(pid)
@@ -703,7 +714,7 @@ def get_processes() -> Generator[Tuple[int, str], None, None]:
 
     ``comm`` is raw bytes a process can set to anything (``prctl(PR_SET_NAME)``),
     so it is decoded as UTF-8 with replacement characters, independent of the
-    locale: one process with a non-UTF-8 name used to raise
+    locale, so one process with a non-UTF-8 name cannot raise
     ``UnicodeDecodeError`` here and break ``OpenProcess(name=...)`` for every
     other process.
     """

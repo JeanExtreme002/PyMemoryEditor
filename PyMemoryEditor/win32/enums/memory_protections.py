@@ -56,7 +56,7 @@ class MemoryProtectionsEnum(IntFlag):
     # context (alloc vs. protect), but they share the bit pattern; in an
     # IntFlag this means PAGE_TARGETS_NO_UPDATE resolves to the same member as
     # PAGE_TARGETS_INVALID. That matches Microsoft's bit-level definition and
-    # is intentional — it just was previously silent under plain Enum.
+    # is intentional.
     PAGE_TARGETS_INVALID = 0x40000000
     PAGE_TARGETS_NO_UPDATE = 0x40000000  # alias by design (see comment above).
 

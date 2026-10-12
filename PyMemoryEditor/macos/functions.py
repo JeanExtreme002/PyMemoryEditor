@@ -10,12 +10,13 @@ import logging
 import os
 import warnings
 from contextlib import contextmanager
-from typing import Generator, Iterator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, Iterator, List, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
 
 from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
 from ..process.module_info import ModuleInfo
 from ..process.region import (
+    ADDRESS_SPACE_END,
     default_address_filter,
     default_scan_filter,
     MemoryRegion,
@@ -96,11 +97,10 @@ _REGION_SKIP_BUMP = 0x1000
 # the whole 64-bit address space.
 _REGION_MAX_CONSECUTIVE_FAILURES = 64
 
-# One past the highest address a `mach_vm_address_t` (c_uint64) can hold. The
-# walk advances its cursor in place, and ctypes wraps silently on overflow: a
-# region reaching the top of the address space would send the cursor back to 0
-# and restart the walk from the bottom.
-_ADDRESS_SPACE_END = 1 << 64
+# The region walk advances a `mach_vm_address_t` (c_uint64) cursor in place,
+# and ctypes wraps silently on overflow: a region reaching the top of the
+# address space would send the cursor back to 0 and restart the walk from the
+# bottom. It stops at ADDRESS_SPACE_END instead.
 
 # mach_vm_write's data_count parameter is `mach_msg_type_number_t` — a 32-bit
 # unsigned int per the Mach interface. A write larger than UINT32_MAX would
@@ -182,7 +182,8 @@ def release_task(task: int) -> bool:
         if kr != KERN_SUCCESS:
             # A failed deallocate leaks the send right for the lifetime of the
             # process. It shouldn't happen for a port we own, but swallowing it
-            # silently hid real leaks — log it so they're at least visible.
+            # silently would hide real leaks — log it so they're at least
+            # visible.
             _logger.warning(
                 "mach_port_deallocate failed for task port %d: %s (kr=%d)",
                 task,
@@ -287,8 +288,8 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
     ``mach_vm_region`` returning :data:`KERN_INVALID_ADDRESS` is the documented
     way the kernel says "no more regions past this address" — the natural end
     of the enumeration. Any *other* non-success code (``KERN_FAILURE``,
-    ``KERN_NO_ACCESS`` on a guard page, etc.) used to terminate enumeration
-    too, silently truncating the region list. Now those are logged and the
+    ``KERN_NO_ACCESS`` on a guard page, etc.) does not end the enumeration,
+    which would silently truncate the region list: it is logged and the
     cursor is bumped one page so the walk keeps going.
 
     That skip is bounded: :data:`MACH_SEND_INVALID_DEST` (the task behind the
@@ -331,7 +332,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
                 "advancing one page",
                 address.value, kr, mach_error_message(kr),
             )
-            if address.value + _REGION_SKIP_BUMP >= _ADDRESS_SPACE_END:
+            if address.value + _REGION_SKIP_BUMP >= ADDRESS_SPACE_END:
                 return
             address.value += _REGION_SKIP_BUMP
             continue
@@ -358,7 +359,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
 
         if size.value == 0:
             # Defensive: a successful query should never report an empty
-            # region. Stopping here (the old behaviour) would drop every
+            # region. Stopping here would drop every
             # region above it, so step one page past it like the Windows
             # walk does — counted as a failure, so a kernel answering 0
             # forever can't turn this into a crawl across the address space.
@@ -375,7 +376,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
             consecutive_failures = 0
             step = size.value
 
-        if address.value + step >= _ADDRESS_SPACE_END:
+        if address.value + step >= ADDRESS_SPACE_END:
             return  # the last region reaches the top of the address space
         address.value += step
 
@@ -392,7 +393,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
 # KERN_MEMORY_FAILURE beside it (the pair is spelled out in types.py). It is
 # what file-backed, read-only mappings (code segments, dylibs, the dyld shared
 # cache) return, so any scan that walks them — every pattern scan, and any value
-# scan with "writable regions only" turned off — hits it routinely, and used to
+# scan with "writable regions only" turned off — hits it routinely and must not
 # abort on the first one.
 _PAGE_GONE_KRS = (
     KERN_INVALID_ADDRESS,
@@ -416,10 +417,10 @@ _PAGE_GONE_KRS = (
 # silently turn "permission denied" into the same `(address, None)` the caller
 # gets for an address in a gap.
 #
-# Honest limits of what is known here. This was added because a plain
-# search_by_value over the current process died with kr=2 on GitHub's
-# virtualized macOS runners, on a 22 MB region that reported VM_PROT_READ and
-# Shared=False. The mechanism was not established. It does *not* reproduce
+# Honest limits of what is known here. A plain search_by_value over the
+# current process gets kr=2 on GitHub's virtualized macOS runners, on a 22 MB
+# region that reports VM_PROT_READ and Shared=False. The mechanism is not
+# established. It does *not* reproduce
 # locally: probing all 135 scannable regions of a live process yields only kr=1
 # and kr=10, and a page deliberately re-protected to PROT_NONE (or never
 # mapped) answers KERN_INVALID_ADDRESS, not kr=2 — so the usual
@@ -442,8 +443,8 @@ class MachPartialReadError(MachReadError):
     because the read straddled a freed or guarded page) and the caller's
     buffer is part real-bytes, part zero-initialized.
 
-    The previous behavior silently accepted the short result, which let
-    downstream code decode garbage as valid memory. Mirrors the Win32
+    Accepting the short result would let downstream code decode garbage as
+    valid memory, so it raises instead. Mirrors the Win32
     partial-read check on ``ReadProcessMemory``. Scan loops classify this
     as transient so the chunk is skipped instead of aborting.
     """
@@ -767,9 +768,9 @@ def read_process_memory(
     _mach_read(task, address, ctypes.addressof(data), bufflength)
 
     if pytype is str:
-        return bytes(data).decode("utf-8", errors="replace")
+        return cast(T, bytes(data).decode("utf-8", errors="replace"))
     elif pytype is bytes:
-        return bytes(data)
+        return cast(T, bytes(data))
     else:
         # Narrow widths pad with zeroes, which reads a signed value as
         # unsigned -- and a scan for the same bytes is signed.
@@ -866,7 +867,7 @@ def search_addresses_by_value(
     task: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes, tuple],
+    value: Optional[Union[bool, int, float, str, bytes, tuple]],
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: bool = False,
     writeable_only: bool = False,
@@ -874,6 +875,7 @@ def search_addresses_by_value(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     pid: int = 0,
     aligned: bool = True,
+    target_value_bytes: Optional[Union[bytes, Tuple[bytes, ...]]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every readable, non-shared region of the task and yield addresses
@@ -881,10 +883,14 @@ def search_addresses_by_value(
     (including the dyld shared cache) are skipped via ``default_scan_filter``.
 
     Passing a `memory_regions` snapshot skips region enumeration.
+    ``target_value_bytes`` is ``value`` already encoded (see
+    :func:`~PyMemoryEditor.util.prepare_search_target`); when it is given,
+    ``value`` is not used and may be ``None``.
     """
     _validate_pytype(pytype)
 
-    target_value_bytes = values_to_bytes(pytype, bufflength, value)
+    if target_value_bytes is None:
+        target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(task, pid)
@@ -1385,13 +1391,20 @@ def search_addresses_by_pattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    compiled_pattern: Optional[Tuple[Pattern[bytes], int]] = None,
     pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target task. See
-    :meth:`AbstractProcess.search_by_pattern`.
+    :meth:`AbstractProcess.search_by_pattern`. ``compiled_pattern`` is what
+    :func:`~PyMemoryEditor.util.pattern.compile_pattern` returned for
+    ``pattern``, when the caller already compiled it.
     """
-    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+    compiled, length = (
+        compiled_pattern
+        if compiled_pattern is not None
+        else compile_pattern(pattern, byte_length=byte_length)
+    )
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(task, pid)

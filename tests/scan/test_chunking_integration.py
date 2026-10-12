@@ -14,8 +14,11 @@ from typing import List
 import pytest
 
 from PyMemoryEditor.enums import ScanTypesEnum
+from PyMemoryEditor.process.scanning import iter_search_results
 from PyMemoryEditor.util import scan as scan_module
 from PyMemoryEditor.util.scan import iter_region_chunks
+
+from ._fakes import FakeMemory, small_chunks, pattern_hits
 
 
 def test_iter_region_chunks_at_boundary():
@@ -177,3 +180,27 @@ def test_search_driver_finds_a_match_straddling_a_chunk_boundary(monkeypatch, py
     assert found == [base + straddle, base + aligned_slot]
     # And nothing is reported twice (the overlap region is clamped).
     assert len(found) == len(set(found))
+
+
+# --------------------------------------------------------------------------- #
+# Chunk overlap stops at the end of the region
+# --------------------------------------------------------------------------- #
+
+def test_chunk_overlap_never_reads_past_the_region(monkeypatch):
+    """With a width that does not divide the chunk size, the last chunk is
+    shorter than the overlap; reading the full overlap ran past the region
+    into unmapped memory and failed the read."""
+    small_chunks(monkeypatch, 8)
+    data = b"." * 5 + b"ab@c.de" + b"." * 30  # 42 bytes: last chunk is 2 bytes
+    memory = FakeMemory({0x1000: data})  # nothing mapped after the region
+    email = rb"[a-z]+@[a-z]+\.[a-z]+"
+    assert pattern_hits(memory, email, byte_length=8) == [0x1005]
+    assert all(addr + size <= 0x1000 + len(data) for addr, size in memory.reads)
+
+    memory = FakeMemory({0x1000: data})
+    found = list(iter_search_results(
+        memory.regions, bytes, 7, b"ab@c.de", ScanTypesEnum.EXACT_VALUE,
+        memory.read_chunk,
+    ))
+    assert found == [0x1005]
+    assert all(addr + size <= 0x1000 + len(data) for addr, size in memory.reads)

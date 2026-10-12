@@ -469,9 +469,9 @@ def parse_value_for_write(
     # One guard for every path that reaches an address. An entry's length is a
     # *byte* width — it is the bufflength each poll tick reads — while
     # prepare_write treats it as a hard cap and truncates past it, counting
-    # characters for str. So a wider value was written short with no word said
-    # while the cell kept showing all of it, and a multibyte str could slip the
-    # other way: "ábc" is 3 characters but 4 bytes, one past a 3-byte entry.
+    # characters for str. So a wider value would be written short with no word
+    # said while the cell kept showing all of it, and a multibyte str could slip
+    # the other way: "ábc" is 3 characters but 4 bytes, one past a 3-byte entry.
     # Measuring what actually goes on the wire covers both.
     written = _written_width(value)
     if length_override is not None and written > length_override:

@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 )
 
 from PyMemoryEditor import AbstractProcess
+from PyMemoryEditor.process.region import ADDRESS_SPACE_END
 
 from ._widgets import (
     MONOSPACE_FAMILY,
@@ -469,7 +470,7 @@ class PointerChainDialog(QDialog):
         # and formatted as hex; a negative or >= 2**64 value (raw mode with
         # large/negative offsets) would raise OverflowError/ValueError. Reject
         # it cleanly instead of crashing.
-        if not 0 <= resolved < 2 ** 64:
+        if not 0 <= resolved < ADDRESS_SPACE_END:
             self._resolved_address = None
             self._output_label.setText("Resolved address: <out of 64-bit range>")
             self._value_label.setText("Value: —")

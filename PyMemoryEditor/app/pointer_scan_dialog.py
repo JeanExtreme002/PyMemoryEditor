@@ -1059,9 +1059,9 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         for saved in survivors:
             # Survivors are all module paths (the intersection drops the
             # rest). One whose module isn't loaded now has no live base: the
-            # rescan drops it, and falling back to its saved absolute base (as
-            # this used to) walked the previous run's addresses and could show
-            # a value read from unrelated memory as if the path resolved. Its
+            # rescan drops it, and falling back to its saved absolute base
+            # would walk the previous run's addresses and could show a value
+            # read from unrelated memory as if the path resolved. Its
             # membership is already decided, so it stays, shown unresolved.
             live = saved._rebased_onto(module_bases)
             if live is None:
@@ -1090,8 +1090,8 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         self._export_btn.setEnabled(True)
 
     def _teardown(self) -> None:
-        # Unhook every signal (the previous code missed `error`/`finished`, so
-        # a late emit could land on a destroyed dialog) and join the worker; if
+        # Unhook every signal (`error`/`finished` included, or a late emit
+        # could land on a destroyed dialog) and join the worker; if
         # it can't stop in time it's detached rather than destroyed under us.
         shutdown_worker_thread(self._worker, wait_ms=2000)
         self._worker = None

@@ -5,11 +5,12 @@ Keep a backend generator bound to the open state of the process object that
 created it.
 
 Every listing and scan method returns a generator that captured the raw
-handle (Windows), task port (macOS) or pid (Linux) when it was created. The
-open check used to run only at that moment, so a generator kept past
-``close()`` went on using a released handle — and Windows hands a freed
-handle value to the next ``OpenProcess`` call, so after ``p1.close()`` and
-opening ``p2`` the next ``next(generator)`` could silently read ``p2``.
+handle (Windows), task port (macOS) or pid (Linux) when it was created, so
+the open check must run on every resume, not only at creation: a generator
+kept past ``close()`` would otherwise go on using a released handle — and
+Windows hands a freed handle value to the next ``OpenProcess`` call, so after
+``p1.close()`` and opening ``p2`` the next ``next(generator)`` could silently
+read ``p2``.
 """
 
 from typing import Callable, Generator, TypeVar

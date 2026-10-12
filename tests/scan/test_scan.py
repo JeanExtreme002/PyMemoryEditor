@@ -6,6 +6,7 @@ Unit tests for the cross-platform scan helpers in PyMemoryEditor.util.scan.
 These tests run on any platform; they do not touch process memory.
 """
 
+import random
 import struct
 
 import pytest
@@ -696,3 +697,53 @@ class TestAlignedFalse:
         ) == list(
             scan_memory(data, len(data), b"abc", 3, ScanTypesEnum.BIGGER_THAN, str, aligned=False)
         )
+
+
+# --------------------------------------------------------------------------- #
+# Ordered comparisons of bytes: lexicographic, like str
+# --------------------------------------------------------------------------- #
+
+def test_bytes_bigger_than_is_lexicographic():
+    data = b"\x01\x00\x00\x01"
+    by_bytes = list(scan_memory(data, 4, b"\x00\x01", 2, ScanTypesEnum.BIGGER_THAN, bytes))
+    by_str = list(scan_memory(data, 4, b"\x00\x01", 2, ScanTypesEnum.BIGGER_THAN, str))
+    assert by_bytes == by_str == [0]
+
+
+@pytest.mark.parametrize(
+    "scan_type, check",
+    [
+        (ScanTypesEnum.BIGGER_THAN, lambda w, t: w > t),
+        (ScanTypesEnum.SMALLER_THAN, lambda w, t: w < t),
+        (ScanTypesEnum.BIGGER_THAN_OR_EXACT_VALUE, lambda w, t: w >= t),
+        (ScanTypesEnum.SMALLER_THAN_OR_EXACT_VALUE, lambda w, t: w <= t),
+    ],
+)
+def test_bytes_ordered_scan_matches_python_bytes_comparison(scan_type, check):
+    """What a refine that compares the bytes it reads back would keep (the GUI
+    next scan does exactly that) must be what the first scan found."""
+    rng = random.Random(scan_type.value)
+    data = bytes(rng.randrange(256) for _ in range(400))
+    target = bytes((0x80, 0x10, 0x00))
+    found = list(scan_memory(data, len(data), target, 3, scan_type, bytes))
+    expected = [
+        offset
+        for offset in range(len(data) - 2)
+        if check(data[offset : offset + 3], target)
+    ]
+    assert found == expected
+
+
+def test_bytes_value_between_is_lexicographic():
+    data = b"\x00\x05\x01\x00\x02\x00"
+    found = list(
+        scan_memory(
+            data, len(data), (b"\x00\x06", b"\x01\x80"), 2, ScanTypesEnum.VALUE_BETWEEN, bytes
+        )
+    )
+    expected = [
+        offset
+        for offset in range(len(data) - 1)
+        if b"\x00\x06" <= data[offset : offset + 2] <= b"\x01\x80"
+    ]
+    assert found == expected == [2]  # 01 00 (host little-endian order found nothing)

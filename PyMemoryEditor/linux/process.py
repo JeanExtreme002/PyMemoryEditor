@@ -3,20 +3,12 @@
 import logging
 import os
 import warnings
-from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
-from ..util.pattern import compile_pattern
 from ..process import AbstractProcess
-from ..process._guard import guard_generator
 from ..process.errors import ClosedProcess, ProcessIDNotExistsError
-from ..util import (
-    UNSET,
-    prepare_write,
-    resolve_bufflength,
-    prepare_search_target,
-    resolve_bufflength_for_value,
-)
+from ..util import UNSET, prepare_write, resolve_bufflength
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
@@ -106,7 +98,7 @@ class LinuxProcess(AbstractProcess):
                 stacklevel=2,
             )
 
-    def __require_open(self) -> None:
+    def _require_open(self) -> None:
         if self.__closed:
             raise ClosedProcess()
 
@@ -121,10 +113,13 @@ class LinuxProcess(AbstractProcess):
         ``hot_path`` marks single-value reads, which callers issue in tight
         loops: they are verified only when the cheap pidfd probe is
         available. Without a pidfd the start-time read would roughly
-        quadruple the cost of every read, so there they keep the pre-pidfd
-        behaviour. Writes, scans and listings are always verified.
+        quadruple the cost of every read, so there they are not verified.
+        Writes are always verified, and so are scans and listings
+        when they are called; their generators are not re-verified between
+        items, so one held while the target exits and its pid is reused would
+        read the newcomer -- create the scan again after a long pause.
         """
-        self.__require_open()
+        self._require_open()
         if hot_path and self.__pidfd is None:
             return
         if not self._target_alive():
@@ -182,17 +177,17 @@ class LinuxProcess(AbstractProcess):
         self.__require_target()
         return _detect_process_64bit(self.pid)
 
-    def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
+    def _require_listing(self) -> None:
         self.__require_target()
-        return guard_generator(get_memory_regions(self.pid), self.__require_open)
 
-    def get_threads(self) -> Generator[ThreadInfo, None, None]:
-        self.__require_target()
-        return guard_generator(get_threads(self.pid), self.__require_open)
+    def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
+        return get_memory_regions(self.pid)
 
-    def get_modules(self) -> Generator[ModuleInfo, None, None]:
-        self.__require_target()
-        return guard_generator(get_modules(self.pid), self.__require_open)
+    def _iter_threads(self) -> Generator[ThreadInfo, None, None]:
+        return get_threads(self.pid)
+
+    def _iter_modules(self) -> Generator[ModuleInfo, None, None]:
+        return get_modules(self.pid)
 
     def read_process_memory(
         self,
@@ -209,121 +204,63 @@ class LinuxProcess(AbstractProcess):
         self.__require_target(hot_path=True)
         return read_process_memory_into(self.pid, address, buffer)
 
-    def search_by_addresses(
+    def _scan_addresses(
         self,
         pytype: Type[T],
-        bufflength: Optional[int] = None,
-        addresses: Sequence[int] = UNSET,
+        bufflength: int,
+        addresses: Sequence[int],
         *,
-        raise_error: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        raise_error: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
     ) -> Generator[Tuple[int, Optional[T]], None, None]:
-        self.__require_target()
-        if addresses is UNSET:
-            raise TypeError("addresses is required.")
-        scan = search_values_by_addresses(
+        return search_values_by_addresses(
             self.pid,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            bufflength,
             addresses,
             memory_regions=memory_regions,
             raise_error=raise_error,
         )
-        return guard_generator(scan, self.__require_open)
 
-    def search_by_value(
+    def _scan_values(
         self,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-        value: Union[bool, int, float, str, bytes] = UNSET,
-        scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
+        pytype: Type,
+        bufflength: int,
+        target_value_bytes: Union[bytes, Tuple[bytes, ...]],
+        scan_type: ScanTypesEnum,
         *,
-        progress_information: bool = False,
-        writeable_only: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-        aligned: bool = True,
+        progress_information: bool,
+        writeable_only: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+        aligned: bool,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_target()
-
-        if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
-            raise ValueError(
-                "Use the method search_by_value_between(...) to search within a range of values."
-            )
-
-        width = resolve_bufflength_for_value(pytype, bufflength, value)
-        # Validate now: the scan is a generator, so its own checks would
-        # only raise on the first next(), far from this call.
-        prepare_search_target(pytype, width, value)
-        scan = search_addresses_by_value(
+        return search_addresses_by_value(
             self.pid,
             pytype,
-            width,
-            value,
-            scan_type,
-            progress_information,
-            writeable_only,
+            bufflength,
+            value=None,  # given already encoded, as target_value_bytes
+            scan_type=scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
             memory_regions=memory_regions,
             aligned=aligned,
+            target_value_bytes=target_value_bytes,
         )
-        return guard_generator(scan, self.__require_open)
 
-    def search_by_pattern(
+    def _scan_pattern(
         self,
-        pattern,
+        compiled_pattern: Tuple[Pattern[bytes], int],
         *,
-        byte_length: int = 0,
-        progress_information: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
+        progress_information: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_target()
-        # Compile now so a malformed pattern raises at the call, not on the
-        # first next() of the returned generator.
-        compile_pattern(pattern, byte_length=byte_length)
-        scan = search_addresses_by_pattern(
+        return search_addresses_by_pattern(
             self.pid,
-            pattern,
-            byte_length=byte_length,
+            compiled_pattern[0],
             progress_information=progress_information,
             memory_regions=memory_regions,
+            compiled_pattern=compiled_pattern,
         )
-        return guard_generator(scan, self.__require_open)
-
-    def search_by_value_between(
-        self,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-        start: Union[bool, int, float, str, bytes] = UNSET,
-        end: Union[bool, int, float, str, bytes] = UNSET,
-        *,
-        not_between: bool = False,
-        progress_information: bool = False,
-        writeable_only: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-        aligned: bool = True,
-    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_target()
-
-        scan_type = (
-            ScanTypesEnum.NOT_VALUE_BETWEEN
-            if not_between
-            else ScanTypesEnum.VALUE_BETWEEN
-        )
-        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
-        # Validate now: the scan is a generator, so its own checks would
-        # only raise on the first next(), far from this call.
-        prepare_search_target(pytype, width, (start, end))
-        scan = search_addresses_by_value(
-            self.pid,
-            pytype,
-            width,
-            (start, end),
-            scan_type,
-            progress_information,
-            writeable_only,
-            memory_regions=memory_regions,
-            aligned=aligned,
-        )
-        return guard_generator(scan, self.__require_open)
 
     def write_process_memory(
         self,
@@ -338,7 +275,7 @@ class LinuxProcess(AbstractProcess):
         return value
 
     def allocate_memory(self, size: int, *, permission=None) -> int:
-        self.__require_open()
+        self._require_open()
         raise NotImplementedError(
             "allocate_memory is not supported on Linux: there is no syscall to "
             "allocate memory in another process's address space (mmap only "
@@ -348,7 +285,7 @@ class LinuxProcess(AbstractProcess):
         )
 
     def free_memory(self, address: int, size: int = 0) -> bool:
-        self.__require_open()
+        self._require_open()
         raise NotImplementedError(
             "free_memory is not supported on Linux (see allocate_memory): "
             "releasing memory in another process would require a ptrace-based "

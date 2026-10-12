@@ -58,6 +58,7 @@ from ..util import iter_region_chunks
 from ..util import scan_numpy
 from .errors import PyMemoryEditorError
 from .module_info import ModuleInfo
+from .region import ADDRESS_SPACE_END
 
 if TYPE_CHECKING:
     from .abstract import AbstractProcess
@@ -495,7 +496,7 @@ def _numpy_ranges(mapped_ranges: AddressRanges):
     not fit in 64 bits (then the pure-Python loop runs)."""
     if not scan_numpy.NUMPY_AVAILABLE or not mapped_ranges:
         return None
-    if mapped_ranges._max > 0xFFFFFFFFFFFFFFFF:
+    if mapped_ranges._max >= ADDRESS_SPACE_END:
         return None
     np = scan_numpy._np
     return (

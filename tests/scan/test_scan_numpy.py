@@ -21,6 +21,7 @@ import pytest
 from PyMemoryEditor.enums import ScanTypesEnum
 from PyMemoryEditor.util import scan as scan_module
 from PyMemoryEditor.util import scan_numpy
+from PyMemoryEditor.util.scan import scan_memory
 
 
 numpy_required = pytest.mark.skipif(
@@ -249,3 +250,53 @@ def test_bool_not_exact_kernel_equivalence():
         ) == _scan_exact_kernel(
             data, b"\x01", 1, bool, aligned=aligned, numpy_enabled=False
         )
+
+
+# --------------------------------------------------------------------------- #
+# NumPy fast path: lazy, block by block
+# --------------------------------------------------------------------------- #
+
+numpy_only = pytest.mark.skipif(not scan_numpy.NUMPY_AVAILABLE, reason="NumPy not installed")
+
+
+@numpy_only
+def test_numpy_scan_offsets_is_lazy():
+    buffer = struct.pack("<8i", *range(8))
+    offsets = scan_numpy.scan_offsets(
+        buffer, 4, ScanTypesEnum.NOT_EXACT_VALUE, int, "little", 0, 0, 0
+    )
+    assert offsets is not None
+    assert not isinstance(offsets, list)
+    assert next(iter(offsets)) == 4
+
+
+@numpy_only
+@pytest.mark.parametrize("scan_type", list(ScanTypesEnum))
+def test_numpy_blocks_match_struct_loop(monkeypatch, scan_type):
+    """Tiny blocks force many block boundaries; the offsets must still be the
+    struct loop's, in the same order."""
+    rng = random.Random(scan_type.value)
+    values = [rng.randrange(-50, 50) for _ in range(103)]
+    buffer = struct.pack("<%di" % len(values), *values)
+    target = (struct.pack("<i", -10), struct.pack("<i", 20))
+    if scan_type not in (ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN):
+        target = target[0]
+
+    monkeypatch.setattr(scan_numpy, "NUMPY_AVAILABLE", False)
+    expected = list(scan_memory(buffer, len(buffer), target, 4, scan_type, int))
+    monkeypatch.setattr(scan_numpy, "NUMPY_AVAILABLE", True)
+    monkeypatch.setattr(scan_numpy, "_BLOCK_ELEMENTS", 7)
+    found = list(scan_memory(buffer, len(buffer), target, 4, scan_type, int))
+
+    assert found == expected
+
+
+@numpy_only
+def test_numpy_unaligned_merge_still_works_with_lazy_phases(monkeypatch):
+    monkeypatch.setattr(scan_numpy, "_BLOCK_ELEMENTS", 3)
+    buffer = b"\x00" + struct.pack("<i", 7) * 5 + b"\x00\x00\x00"
+    found = list(
+        scan_memory(buffer, len(buffer), struct.pack("<i", 7), 4,
+                    ScanTypesEnum.EXACT_VALUE, int, aligned=False)
+    )
+    assert found == [1, 5, 9, 13, 17]

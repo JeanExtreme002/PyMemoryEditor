@@ -10,7 +10,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 import time
-from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
 
 from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
@@ -467,7 +467,8 @@ def _get_mapped_filename(process_handle: int, address: int) -> str:
         # truncated length, and on older Windows without a terminating NUL):
         # retry with a larger buffer instead of reporting a clipped path.
         if length < size - 1 or size >= _MAPPED_FILENAME_MAX_SIZE:
-            return buf[:min(length, size)].split("\x00", 1)[0]
+            # Slicing a c_wchar array gives a str at run time.
+            return cast(str, buf[:min(length, size)]).split("\x00", 1)[0]
         size *= 2
 
 
@@ -480,12 +481,12 @@ def GetMemoryRegions(process_handle: int, pid: int = 0) -> Generator[MemoryRegio
     64-bit Python walks a 32-bit (WOW64) target with the same 48-byte struct
     it uses for a 64-bit one.
 
-    ``VirtualQueryEx`` returning 0 used to terminate enumeration unconditionally,
-    silently truncating the region list whenever the kernel hiccuped on a
-    single region (DLL unloaded mid-walk, transient permission edge). Now we
-    consult ``GetLastError``: only fall through for the natural end-of-space
-    case; for any other failure log it and bump the cursor by one page so the
-    walk keeps making progress.
+    ``VirtualQueryEx`` returning 0 does not end enumeration unconditionally,
+    since that would silently truncate the region list whenever the kernel
+    hiccups on a single region (DLL unloaded mid-walk, transient permission
+    edge). ``GetLastError`` decides: only the natural end-of-space case ends
+    the walk; any other failure is logged and the cursor bumped by one page so
+    the walk keeps making progress.
 
     That skip is bounded: a handle-level error (``ERROR_ACCESS_DENIED``,
     ``ERROR_INVALID_HANDLE``) or more than ``_REGION_MAX_CONSECUTIVE_FAILURES``
@@ -639,9 +640,9 @@ def ReadProcessMemory(
     if pytype is str:
         # Match convert_from_byte_array: tolerate non-UTF-8 bytes in raw memory
         # (callers needing the raw bytes should pass pytype=bytes).
-        return bytes(data).decode("utf-8", errors="replace")
+        return cast(T, bytes(data).decode("utf-8", errors="replace"))
     elif pytype is bytes:
-        return bytes(data)
+        return cast(T, bytes(data))
     else:
         # Narrow widths pad with zeroes, which reads a signed value as
         # unsigned -- and a scan for the same bytes is signed.
@@ -758,7 +759,7 @@ def SearchAddressesByValue(
     process_handle: int,
     pytype: Type[T],
     bufflength: int,
-    value: Union[bool, int, float, str, bytes, tuple],
+    value: Optional[Union[bool, int, float, str, bytes, tuple]],
     scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
     progress_information: bool = False,
     writeable_only: bool = False,
@@ -766,6 +767,7 @@ def SearchAddressesByValue(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     pid: int = 0,
     aligned: bool = True,
+    target_value_bytes: Optional[Union[bytes, Tuple[bytes, ...]]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -774,10 +776,14 @@ def SearchAddressesByValue(
     Passing a `memory_regions` snapshot (see `snapshot_memory_regions()`) skips
     the per-call region enumeration — useful in refine-scan workflows. ``pid``
     only feeds the error reported when that enumeration finds the target gone.
+    ``target_value_bytes`` is ``value`` already encoded (see
+    :func:`~PyMemoryEditor.util.prepare_search_target`); when it is given,
+    ``value`` is not used and may be ``None``.
     """
     _validate_pytype(pytype)
 
-    target_value_bytes = values_to_bytes(pytype, bufflength, value)
+    if target_value_bytes is None:
+        target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
         memory_regions
@@ -817,13 +823,18 @@ def SearchAddressesByPattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    compiled_pattern: Optional[Tuple[Pattern[bytes], int]] = None,
     pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target process.
     See :meth:`AbstractProcess.search_by_pattern`.
     """
-    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+    compiled, length = (
+        compiled_pattern
+        if compiled_pattern is not None
+        else compile_pattern(pattern, byte_length=byte_length)
+    )
 
     source_regions = (
         memory_regions
@@ -886,8 +897,8 @@ def SearchValuesByAddresses(
             for region in GetMemoryRegions(process_handle, pid)
             # An address-list read has the caller already deciding *where* —
             # the library has no business filtering by region "interestingness"
-            # (which used to exclude MEM_MAPPED here and diverge from
-            # Linux/macOS). All three backends now agree: just readable.
+            # (that would exclude MEM_MAPPED and diverge from Linux/macOS).
+            # All three backends agree: just readable.
             if default_address_filter(region)
         ]
     elif not isinstance(memory_regions, MemoryRegionSnapshot):

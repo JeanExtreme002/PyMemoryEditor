@@ -20,16 +20,25 @@ from typing import (
 )
 
 from ..enums import ScanTypesEnum
-from ..util import UNSET, _check_int_fits
-from ..util.pattern import PatternLike
+from ..util import (
+    UNSET,
+    _check_int_fits,
+    prepare_search_target,
+    resolve_bufflength,
+    resolve_bufflength_for_value,
+)
+from ..util.pattern import PatternLike, compile_pattern
+from ._guard import guard_generator
 from .errors import BitnessDetectionError, ProcessIDNotExistsError, PyMemoryEditorError
 from .info import ProcessInfo
 from .module_info import ModuleInfo
-from .region import MemoryRegion, MemoryRegionSnapshot
+from .region import ADDRESS_SPACE_END, MemoryRegion, MemoryRegionSnapshot
 from .thread_info import ThreadInfo
 from .util import pid_exists
 
 if TYPE_CHECKING:
+    from re import Pattern
+
     from .pointer_scan import PointerPath
     from .remote_pointer import RemotePointer
 
@@ -42,9 +51,6 @@ T = TypeVar("T")
 # ``load_pointer_paths``.
 _POINTER_SCAN_FORMAT = "pymemoryeditor-pointerscan"
 _POINTER_SCAN_VERSION = 1
-
-# One past the highest address a pointer chain may dereference.
-_ADDRESS_SPACE_END = 1 << 64
 
 
 class _PointerOutOfRangeError(ValueError, OSError):
@@ -60,6 +66,61 @@ class AbstractProcess(ABC):
     """
     Abstract class to represent a process.
     """
+
+    # Each listing / search method and the backend hook its implementation
+    # here relies on. A subclass must override one or the other: the hooks
+    # are not abstract (see "Backend hooks" below), so this is what still
+    # makes an incomplete subclass fail when it is defined rather than with
+    # a NotImplementedError on first use.
+    _METHOD_HOOKS = (
+        ("get_memory_regions", "_iter_memory_regions"),
+        ("get_threads", "_iter_threads"),
+        ("get_modules", "_iter_modules"),
+        ("search_by_addresses", "_scan_addresses"),
+        ("search_by_value", "_scan_values"),
+        ("search_by_value_between", "_scan_values"),
+        ("search_by_pattern", "_scan_pattern"),
+    )
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        # An intermediate class that still leaves an abstract method open
+        # cannot be instantiated anyway; its concrete subclasses are checked.
+        # The open methods are found the way ABCMeta finds them (it has not
+        # run yet at this point): this class's own abstract attributes, plus
+        # the bases' abstract names this class did not implement.
+        open_methods = [
+            name for name, value in vars(cls).items()
+            if getattr(value, "__isabstractmethod__", False)
+        ] + [
+            name
+            for base in cls.__bases__
+            for name in getattr(base, "__abstractmethods__", ())
+            if getattr(getattr(cls, name, None), "__isabstractmethod__", False)
+        ]
+        if open_methods:
+            return
+
+        # Overriding a method with anything (a function, a property, a mixin's
+        # method) counts as implementing it; assigning AbstractProcess's own
+        # function again does not.
+        missing: Dict[str, List[str]] = {}
+        uses_base = False
+        for method, hook in cls._METHOD_HOOKS:
+            if getattr(cls, method) is not getattr(AbstractProcess, method):
+                continue  # implemented directly, as up to 3.3
+            uses_base = True
+            if getattr(cls, hook) is getattr(AbstractProcess, hook):
+                missing.setdefault(hook, []).append(method)
+        problems = [
+            "%s (or %s)" % (hook, ", ".join(methods)) for hook, methods in missing.items()
+        ]
+        if uses_base and cls._require_open is AbstractProcess._require_open:
+            problems.append("_require_open")
+        if problems:
+            raise TypeError(
+                "%s must implement %s." % (cls.__name__, "; ".join(problems))
+            )
 
     @abstractmethod
     def __init__(
@@ -245,7 +306,6 @@ class AbstractProcess(ABC):
         """
         raise NotImplementedError()
 
-    @abstractmethod
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         """
         Yield a :class:`~PyMemoryEditor.MemoryRegion` for every memory region
@@ -256,9 +316,9 @@ class AbstractProcess(ABC):
         ``is_shared``, the backing file ``path`` (when known), and the
         platform-specific ``struct`` for advanced introspection.
         """
-        raise NotImplementedError()
+        self._require_listing()
+        return guard_generator(self._iter_memory_regions(), self._require_open)
 
-    @abstractmethod
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         """
         Yield a :class:`~PyMemoryEditor.ThreadInfo` for every thread running
@@ -290,9 +350,9 @@ class AbstractProcess(ABC):
 
         Use :attr:`main_thread` for the conventional "main thread" shortcut.
         """
-        raise NotImplementedError()
+        self._require_listing()
+        return guard_generator(self._iter_threads(), self._require_open)
 
-    @abstractmethod
     def get_modules(self) -> Generator[ModuleInfo, None, None]:
         """
         Yield a :class:`~PyMemoryEditor.ModuleInfo` for every module loaded in
@@ -308,7 +368,8 @@ class AbstractProcess(ABC):
         cheaply — see :class:`~PyMemoryEditor.ModuleInfo` for the per-platform
         meaning of ``raw`` and for when ``size`` may be ``0``.
         """
-        raise NotImplementedError()
+        self._require_listing()
+        return guard_generator(self._iter_modules(), self._require_open)
 
     @property
     def main_thread(self) -> Optional[ThreadInfo]:
@@ -346,7 +407,6 @@ class AbstractProcess(ABC):
         regions = sorted(self.get_memory_regions(), key=lambda region: region.address)
         return MemoryRegionSnapshot(regions)
 
-    @abstractmethod
     def search_by_addresses(
         self,
         pytype: Type[T],
@@ -371,15 +431,23 @@ class AbstractProcess(ABC):
             in :meth:`search_by_value`; only the requested bytes are read, and
             the value is sign-extended — so this method,
             :meth:`read_process_memory` and a scan for the same bytes all
-            agree. Widths 3, 5, 6 and 7 used to yield ``None`` here while the
-            direct read succeeded.
+            agree, widths 3, 5, 6 and 7 included.
         :param addresses: the addresses to read. Required.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
         """
-        raise NotImplementedError()
+        self._require_scanning()
+        if addresses is UNSET:
+            raise TypeError("addresses is required.")
+        scan = self._scan_addresses(
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            addresses,
+            raise_error=raise_error,
+            memory_regions=memory_regions,
+        )
+        return guard_generator(scan, self._require_open)
 
-    @abstractmethod
     def search_by_value(
         self,
         pytype: Type[T],
@@ -446,9 +514,26 @@ class AbstractProcess(ABC):
            (that argument only skips region *enumeration*, not the filtering),
            so shared regions can't be opted back in.
         """
-        raise NotImplementedError()
+        self._require_scanning()
 
-    @abstractmethod
+        if scan_type in (ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN):
+            raise ValueError(
+                "Use the method search_by_value_between(...) to search within a range of values."
+            )
+
+        width = resolve_bufflength_for_value(pytype, bufflength, value)
+        scan = self._scan_values(
+            pytype,
+            width,
+            prepare_search_target(pytype, width, value),
+            scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
+            memory_regions=memory_regions,
+            aligned=aligned,
+        )
+        return guard_generator(scan, self._require_open)
+
     def search_by_pattern(
         self,
         pattern: PatternLike,
@@ -477,9 +562,14 @@ class AbstractProcess(ABC):
             ``snapshot_memory_regions()`` to skip region enumeration on
             iterative workflows.
         """
-        raise NotImplementedError()
+        self._require_scanning()
+        scan = self._scan_pattern(
+            compile_pattern(pattern, byte_length=byte_length),
+            progress_information=progress_information,
+            memory_regions=memory_regions,
+        )
+        return guard_generator(scan, self._require_open)
 
-    @abstractmethod
     def search_by_value_between(
         self,
         pytype: Type[T],
@@ -504,6 +594,115 @@ class AbstractProcess(ABC):
         by keyword when omitting ``bufflength``:
         ``search_by_value_between(int, start=10, end=20)``.
         """
+        self._require_scanning()
+
+        scan_type = (
+            ScanTypesEnum.NOT_VALUE_BETWEEN
+            if not_between
+            else ScanTypesEnum.VALUE_BETWEEN
+        )
+        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
+        scan = self._scan_values(
+            pytype,
+            width,
+            prepare_search_target(pytype, width, (start, end)),
+            scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
+            memory_regions=memory_regions,
+            aligned=aligned,
+        )
+        return guard_generator(scan, self._require_open)
+
+    # ------------------------------------------------------------------ #
+    # Backend hooks
+    #
+    # The listing and search methods above are written once, here: they check
+    # access, validate and encode their arguments at the call (the scans are
+    # generators, whose own checks would only run on the first next(), far
+    # from the call), and bind the returned generator to this object, so that
+    # resuming it after close() raises instead of using a released handle. A
+    # backend supplies the access checks and the raw generators below.
+    #
+    # The hooks are deliberately not abstract: AbstractProcess is public, and a
+    # subclass written against the earlier contract -- one that overrides the
+    # public listing and search methods itself -- must keep instantiating.
+    # Such a subclass never reaches these defaults.
+    # ------------------------------------------------------------------ #
+
+    def _require_open(self) -> None:
+        """Raise :class:`~PyMemoryEditor.ClosedProcess` once :meth:`close` ran.
+
+        Called before every item a returned generator yields, so it must be
+        cheap: an attribute test, no syscall.
+        """
+        raise NotImplementedError()
+
+    def _require_listing(self) -> None:
+        """Raise if the regions, threads or modules cannot be listed now
+        (closed, or the target gone where the backend can tell). Defaults to
+        :meth:`_require_open`."""
+        self._require_open()
+
+    def _require_scanning(self) -> None:
+        """Raise if memory cannot be searched now: as :meth:`_require_listing`,
+        plus read access where that is a property of the handle. Defaults to
+        :meth:`_require_listing`."""
+        self._require_listing()
+
+    def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
+        """The backend's region walk, for :meth:`get_memory_regions`."""
+        raise NotImplementedError()
+
+    def _iter_threads(self) -> Generator[ThreadInfo, None, None]:
+        """The backend's thread listing, for :meth:`get_threads`."""
+        raise NotImplementedError()
+
+    def _iter_modules(self) -> Generator[ModuleInfo, None, None]:
+        """The backend's module listing, for :meth:`get_modules`."""
+        raise NotImplementedError()
+
+    def _scan_addresses(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        addresses: Sequence[int],
+        *,
+        raise_error: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Tuple[int, Optional[T]], None, None]:
+        """The read behind :meth:`search_by_addresses`, with ``bufflength``
+        resolved."""
+        raise NotImplementedError()
+
+    def _scan_values(
+        self,
+        pytype: Type,
+        bufflength: int,
+        target_value_bytes: Union[bytes, Tuple[bytes, ...]],
+        scan_type: ScanTypesEnum,
+        *,
+        progress_information: bool,
+        writeable_only: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+        aligned: bool,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        """The scan behind :meth:`search_by_value` and
+        :meth:`search_by_value_between`. ``target_value_bytes`` is the value,
+        or the ``(start, end)`` pair of a range scan, already validated and
+        encoded."""
+        raise NotImplementedError()
+
+    def _scan_pattern(
+        self,
+        compiled_pattern: Tuple["Pattern[bytes]", int],
+        *,
+        progress_information: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        """The scan behind :meth:`search_by_pattern`. ``compiled_pattern`` is
+        what :func:`~PyMemoryEditor.util.pattern.compile_pattern` returned for
+        the pattern."""
         raise NotImplementedError()
 
     @abstractmethod
@@ -613,12 +812,12 @@ class AbstractProcess(ABC):
               writes the whole value. ``str`` is encoded as UTF-8; no NUL
               terminator is appended.
         :param value: value to be written. Required — since ``bufflength`` is
-            now optional, pass it by keyword when omitting ``bufflength``::
+            optional, pass it by keyword when omitting ``bufflength``::
 
                 write_process_memory(address, str, value="hi")
                 write_process_memory(address, int, value=99)
 
-            Positional calls keep working unchanged
+            Positional calls work as well
             (``write_process_memory(address, int, 4, 99)``).
         :raises ValueError: if ``pytype`` is unsupported, or if an ``int``
             ``value`` does not fit in ``bufflength`` bytes (rejected up front
@@ -659,7 +858,7 @@ class AbstractProcess(ABC):
 
     def _write_unsigned(self, address: int, size: int, value: int) -> int:
         # The signed helpers reject a float with TypeError (the ctypes integer
-        # setter refuses it); `int(value)` here used to truncate 3.7 to 3 and
+        # setter refuses it), and `int(value)` would truncate 3.7 to 3 and
         # report success. `operator.index` accepts exactly what that setter
         # accepts -- ints, bools, numpy integers -- and raises the same
         # TypeError for everything else.
@@ -990,7 +1189,7 @@ class AbstractProcess(ABC):
             # ctypes masks an address argument to 64 bits instead of rejecting
             # it, so `ptr + offset` below zero or past 2**64 would silently
             # read a *different*, wrapped address. Refuse it by name instead.
-            if not 0 <= addr < _ADDRESS_SPACE_END:
+            if not 0 <= addr < ADDRESS_SPACE_END:
                 raise _PointerOutOfRangeError(
                     "pointer chain step produced address %s, outside the "
                     "64-bit address space; the chain is stale (a hop read "

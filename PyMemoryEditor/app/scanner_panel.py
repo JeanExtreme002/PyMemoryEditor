@@ -558,7 +558,7 @@ class ScannerPanel(QWidget):
         # its own width, and there is no earlier width to fall back on. Dropping
         # it would send the next Changed/Unchanged refine to the spec default —
         # 16 for a String scanned at 4 — which is the failure this whole branch
-        # exists to fix. _has_results tells the two apart: a first scan only
+        # exists to prevent. _has_results tells the two apart: a first scan only
         # runs when there are none yet.
         if self._has_results:
             self._pending_scan_length = None

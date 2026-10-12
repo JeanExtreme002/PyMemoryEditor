@@ -21,9 +21,8 @@ libc = ctypes.CDLL(find_library("c"), use_errno=True)
 # Configuring `argtypes` is not cosmetic: without it, ctypes passes Python ints
 # through the platform's default C-int width. On a 32-bit Linux build (or any
 # host where the default int is narrower than the iovec pointer's representation)
-# the address gets silently truncated before the kernel sees it — the same class
-# of bug that motivated the v2 audit of the Win32 backend, where every API now
-# declares argtypes/restype explicitly.
+# the address gets silently truncated before the kernel sees it. The Win32
+# backend declares argtypes/restype explicitly on every API for the same reason.
 _PROCESS_VM_ARGTYPES = (
     ctypes.c_int,              # pid_t
     ctypes.POINTER(iovec),     # local_iov

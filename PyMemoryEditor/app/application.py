@@ -542,8 +542,7 @@ def main(argv=None):
 
     ``argv`` defaults to ``sys.argv`` so packaging tools (which call
     ``main()`` with no arguments) keep working. Tests and embedders can pass
-    an explicit list — previously a positional ``*args`` was accepted but
-    ignored, which made the parameter meaningless.
+    an explicit list.
 
     Terminal users want Ctrl+C to kill the app, which takes a process-wide
     signal change — see :func:`main_cli`, the console-script entry point.
@@ -611,9 +610,9 @@ def main_cli(argv=None):
     Entry point for the ``pymemoryeditor`` console script and ``python -m``.
 
     Qt's event loop blocks inside C++, so Python's default SIGINT handler only
-    runs once the interpreter next regains control. In practice it raised
+    runs once the interpreter next regains control. In practice it raises
     KeyboardInterrupt inside our own _PointerCursorFilter.eventFilter override,
-    where PySide6 swallows it and merely prints a traceback (#76). Hand SIGINT
+    where PySide6 swallows it and merely prints a traceback. Hand SIGINT
     back to the OS for the duration of the run so Ctrl+C from a terminal
     terminates the app immediately.
 

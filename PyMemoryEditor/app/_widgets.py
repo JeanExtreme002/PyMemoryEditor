@@ -2,8 +2,8 @@
 
 """Small Qt widgets shared between dialogs.
 
-Centralises tiny helpers (numeric sort items, hex address parsing) that
-previously appeared duplicated across several dialog modules.
+Centralises tiny helpers (numeric sort items, hex address parsing) shared by
+several dialog modules.
 """
 
 import threading
@@ -46,9 +46,9 @@ def shutdown_worker_thread(worker: Optional[QThread], wait_ms: int = 2000) -> No
         cancel()
     try:
         # The four-argument static form on purpose: bare `worker.disconnect()`
-        # raises TypeError in PySide6 (so this except swallowed it and nothing
-        # was disconnected), and `worker.disconnect(worker)` only drops
-        # connections whose *receiver* is the worker — ours belong to the dialog.
+        # raises TypeError in PySide6, and `worker.disconnect(worker)` only
+        # drops connections whose *receiver* is the worker — ours belong to the
+        # dialog.
         QObject.disconnect(worker, None, None, None)
     except (RuntimeError, TypeError):
         pass
@@ -141,8 +141,8 @@ class TearsDownOnClose:
     ``QDialog`` delivers a ``QCloseEvent`` only for a real close. The app's own
     "Close" buttons call ``accept()`` and Esc reaches ``reject()``; both land in
     ``done()``, which hides the dialog and emits ``finished`` *without* any
-    close event — so a teardown living in ``closeEvent`` never ran, and the
-    dialog kept polling, hidden and unreachable.
+    close event — so a teardown living in ``closeEvent`` would never run, and
+    the dialog would keep polling, hidden and unreachable.
 
     Subclasses implement :meth:`_teardown`; the mixin runs it exactly once,
     whichever way the dialog is dismissed, and must precede ``QDialog`` in the
