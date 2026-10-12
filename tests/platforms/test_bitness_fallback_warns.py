@@ -5,10 +5,9 @@ Regression guard: the bitness detectors must *warn* when they can't read the
 target's header and fall back to a guess, instead of mis-detecting silently.
 
 A wrong bitness silently poisons the pointer-width default used by the pointer
-APIs (resolve_pointer_chain / RemotePointer / scan_pointer_paths). The Windows
-path (``IsProcess64Bit``) already warned on the
-``IsWow64Process`` failure; these tests lock the same contract on the macOS and
-Linux fallbacks so a refactor can't drop the warning unnoticed.
+APIs (resolve_pointer_chain / RemotePointer / scan_pointer_paths). These tests
+lock that contract on the Windows (``IsProcess64Bit``), macOS and Linux
+fallbacks so a refactor can't drop the warning unnoticed.
 
 Each test forces the no-header fallback via monkeypatch (no special process or
 permission needed) and asserts a WARNING reaches the ``PyMemoryEditor`` logger.
@@ -72,5 +71,25 @@ def test_is_process_64bit_warns_when_elf_class_unknown(monkeypatch, warning_reco
     assert isinstance(result, bool)
     assert any(
         r.levelno == logging.WARNING and "is_process_64bit" in r.getMessage()
+        for r in warning_records
+    )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows backend only")
+@pytest.mark.parametrize("host_is_64bit", [False, True])
+def test_is_process_64bit_win32_falls_back_to_host_bitness(
+    monkeypatch, warning_records, host_is_64bit
+):
+    """When IsWow64Process fails the answer is the host's bitness, as the
+    warning says -- not a hardcoded 64-bit, which is wrong from a 32-bit
+    Python."""
+    from PyMemoryEditor.win32 import functions as win
+
+    monkeypatch.setattr(win, "_detect_process_64bit", lambda handle: None)
+    monkeypatch.setattr(win, "_HOST_IS_64BIT", host_is_64bit)
+
+    assert win.IsProcess64Bit(0) is host_is_64bit
+    assert any(
+        r.levelno == logging.WARNING and "IsWow64Process" in r.getMessage()
         for r in warning_records
     )

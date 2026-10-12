@@ -74,6 +74,14 @@ def compile_pattern(
         ``re.Pattern[bytes]``.
     """
     if isinstance(pattern, re.Pattern):
+        # A str pattern can't match process memory: it would only fail later,
+        # deep inside the scan, with "cannot use a string pattern on a
+        # bytes-like object".
+        if not isinstance(pattern.pattern, bytes):
+            raise TypeError(
+                "Pattern must be a compiled bytes regex (re.compile(rb'...')), "
+                "not a str one."
+            )
         if byte_length <= 0:
             raise ValueError(
                 "byte_length= is required when passing a pre-compiled regex "

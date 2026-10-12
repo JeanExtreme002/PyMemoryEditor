@@ -1316,11 +1316,10 @@ class AbstractProcess(ABC):
             live = path.rebase(process).to_pointer(process, pytype=int, bufflength=4)
             live.value = 9999
         """
-        from .pointer_scan import (
-            AddressRanges,
-            build_pointer_map,
-            find_pointer_paths,
-        )
+        # Validate eagerly, like every search_* method: a bad argument or a
+        # closed process raises here, at the call, not on the first next().
+        # The map build and path search stay lazy in _iter_pointer_paths.
+        self._require_scanning()
 
         if ptr_size is None:
             ptr_size = self.pointer_size
@@ -1329,6 +1328,44 @@ class AbstractProcess(ABC):
             raise ValueError(
                 "ptr_size must be 4 (32-bit target) or 8 (64-bit target)."
             )
+
+        scan = self._iter_pointer_paths(
+            target_address,
+            max_depth=max_depth,
+            max_offset=max_offset,
+            ptr_size=ptr_size,
+            aligned=aligned,
+            writable_only=writable_only,
+            static_ranges=static_ranges,
+            max_results=max_results,
+            memory_regions=memory_regions,
+            progress_callback=progress_callback,
+            should_stop=should_stop,
+        )
+        return guard_generator(scan, self._require_open)
+
+    def _iter_pointer_paths(
+        self,
+        target_address: int,
+        *,
+        max_depth: int,
+        max_offset: int,
+        ptr_size: int,
+        aligned: bool,
+        writable_only: bool,
+        static_ranges: Optional[Sequence[Tuple[int, int]]],
+        max_results: Optional[int],
+        memory_regions: Optional[Sequence[MemoryRegion]],
+        progress_callback: Optional["Callable[[float], None]"],
+        should_stop: Optional["Callable[[], bool]"],
+    ) -> Generator["PointerPath", None, None]:
+        """The lazy body of :meth:`scan_pointer_paths`, run once arguments are
+        validated."""
+        from .pointer_scan import (
+            AddressRanges,
+            build_pointer_map,
+            find_pointer_paths,
+        )
 
         if memory_regions is None:
             memory_regions = list(self.get_memory_regions())
