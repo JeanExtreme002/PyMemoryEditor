@@ -158,6 +158,15 @@ class TestParseOffset:
         assert parse_offset(hex(MAX_OFFSET_MAGNITUDE)) == MAX_OFFSET_MAGNITUDE
         assert parse_offset(-MAX_OFFSET_MAGNITUDE) == -MAX_OFFSET_MAGNITUDE
 
+    @pytest.mark.parametrize("raw", ["--8", "-+8", "- -8"])
+    def test_a_doubled_sign_is_refused_not_cancelled(self, raw):
+        """``"--8"`` used to strip one minus and let ``int()`` read the other,
+        so the two cancelled and the hop walked forwards instead of back."""
+        from PyMemoryEditor.mcp.toolset import parse_offset
+
+        with pytest.raises(ToolError, match="Could not parse"):
+            parse_offset(raw)
+
 
 class TestNumericArgumentsReachTheModelAsToolError:
     """Only ``ToolError`` text reaches the model.
@@ -252,6 +261,17 @@ class TestParseValue:
     def test_bad_hex_rejected(self, raw):
         with pytest.raises(ToolError, match="hex"):
             parse_value(bytes, raw)
+
+    @pytest.mark.parametrize("raw", ["--5", "-+5", "- -5", "--0x5"])
+    def test_int_refuses_a_doubled_sign_instead_of_cancelling_it(self, raw):
+        """``"--5"`` parsed as +5, so a ``write_value`` of it stored the
+        opposite sign of what was sent. A typo must fail, not flip."""
+        with pytest.raises(ToolError, match="Could not parse"):
+            parse_value(int, raw)
+
+    @pytest.mark.parametrize("raw, expected", [("+5", 5), ("- 5", -5)])
+    def test_a_single_sign_still_parses(self, raw, expected):
+        assert parse_value(int, raw) == expected
 
     def test_int_rejects_junk_with_actionable_message(self):
         with pytest.raises(ToolError, match="0x"):
