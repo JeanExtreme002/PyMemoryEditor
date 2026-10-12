@@ -191,7 +191,6 @@ exclude = [
     "/codecov.yml",
     "/.coveragerc-lib",
     "/.coveragerc-mcp",
-    "/.coveragerc-app",
     "/scripts",
     "/server.json",
 ]
