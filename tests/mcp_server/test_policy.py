@@ -228,6 +228,7 @@ class TestFilterAndDescribe:
         assert described["denied_system_process_count"] > 0
 
 
+@pytest.mark.real_self_protection
 class TestSelfProtection:
     """The server never opens itself or the client that launched it."""
 
@@ -272,8 +273,10 @@ class TestSelfProtection:
         import os
 
         policy = ProcessPolicy(platform="linux", allow_any=True)
-        kept = policy.filter([(os.getpid(), "python"), (5000, "game.exe")])
-        assert kept == [(5000, "game.exe")]
+        # Any pid outside the real chain: this class runs against it.
+        other = next(pid for pid in range(5000, 6000) if pid not in policy.protected_pids)
+        kept = policy.filter([(os.getpid(), "python"), (other, "game.exe")])
+        assert kept == [(other, "game.exe")]
 
     def test_describe_reports_it(self):
         assert ProcessPolicy(platform="linux").describe()["self_protected"] is True
@@ -336,6 +339,7 @@ class TestTruncatedNamesMatchTheAllowlist:
         assert policy.check(5000, "my-very-long-ga").needs_approval is True
 
 
+@pytest.mark.real_self_protection
 class TestTheWholeLaunchChainIsProtected:
     """Under ``uvx`` the server's parent is ``uv``; the client is further up."""
 

@@ -864,6 +864,7 @@ class TestHttpTransportsRefuseWritesByDefault:
 
 
 class TestServerConfigProtectsItself:
+    @pytest.mark.real_self_protection
     def test_default_policy_refuses_the_server_pid(self):
         import os
 

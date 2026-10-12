@@ -46,6 +46,7 @@ import pytest
 
 from PyMemoryEditor.enums import ScanTypesEnum
 from PyMemoryEditor.mcp import MemoryToolset, ServerConfig
+from PyMemoryEditor.mcp import policy as policy_module
 from PyMemoryEditor.process.module_info import ModuleInfo
 from PyMemoryEditor.process.region import MemoryRegion, MemoryRegionSnapshot
 from PyMemoryEditor.process.thread_info import ThreadInfo
@@ -424,3 +425,47 @@ def make_toolset(fake_process: FakeProcess):
 def session(toolset: MemoryToolset) -> Dict[str, Any]:
     """An open session on the fake target."""
     return toolset.open_process(pid=4242)
+
+
+#: The real chain, captured at import -- before the session fixture swaps it.
+_REAL_SELF_AND_ANCESTOR_PIDS = policy_module._self_and_ancestor_pids
+
+#: Stand-ins for this process's ancestors: far above any pid a test makes up,
+#: and above the Linux and macOS pid ranges (Windows pids reach this high only
+#: in theory), so a fake pid never collides with one.
+FAKE_ANCESTOR_PIDS = frozenset({0x7FFF_FF01, 0x7FFF_FF02})
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fake_ancestor_chain():
+    """Keep made-up pids clear of the real ancestor chain.
+
+    ``ProcessPolicy`` refuses this process and every ancestor. Tests use fixed
+    fake pids (1000, 4242, 5000, ...), and when a real ancestor happens to own
+    one -- a CI runner process at pid 1001 did -- the fake is refused and the
+    test fails for reasons unrelated to the code. So the ancestors are swapped
+    for stand-ins; this process itself stays protected, as a safety net for a
+    test that reaches the real opener.
+
+    Session-scoped so policies built by module-scoped fixtures (the fidelity
+    suite's shared attach) see the stand-ins too. Tests about the protection
+    itself opt back into the real chain with
+    ``@pytest.mark.real_self_protection`` -- a new one must carry it, or it
+    checks the stand-ins.
+    """
+    import os
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            policy_module,
+            "_self_and_ancestor_pids",
+            lambda: frozenset({os.getpid()}) | FAKE_ANCESTOR_PIDS,
+        )
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _real_self_protection(request, monkeypatch):
+    """Give ``@pytest.mark.real_self_protection`` tests the real chain back."""
+    if request.node.get_closest_marker("real_self_protection") is not None:
+        monkeypatch.setattr(policy_module, "_self_and_ancestor_pids", _REAL_SELF_AND_ANCESTOR_PIDS)

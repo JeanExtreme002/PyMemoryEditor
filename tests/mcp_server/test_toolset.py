@@ -1809,6 +1809,7 @@ class TestAttachRechecksTheTargetsIdentity:
         toolset._name_for_pid = lambda pid: next(names)
         assert toolset.open_process(pid=4242)["opened"] is True
 
+    @pytest.mark.real_self_protection
     def test_the_server_refuses_its_own_pid(self, make_toolset):
         import os
 

@@ -218,6 +218,12 @@ class AccessDecision:
     needs_approval: bool = False
 
 
+def _self_and_ancestor_pids() -> FrozenSet[int]:
+    """This process, its parent and every ancestor: what ``protect_self``
+    refuses. A function of its own so tests can swap the real chain out."""
+    return frozenset({os.getpid(), os.getppid()}) | ancestor_pids()
+
+
 class ProcessPolicy:
     """Decides whether a given ``(pid, name)`` may be attached to.
 
@@ -282,9 +288,7 @@ class ProcessPolicy:
         # further up. Taken once: the chain that launched the server does not
         # change while it runs.
         self._protected: FrozenSet[int] = (
-            frozenset({os.getpid(), os.getppid()}) | ancestor_pids()
-            if protect_self
-            else frozenset()
+            _self_and_ancestor_pids() if protect_self else frozenset()
         )
         self._identify = identify
         # Only Linux truncates names; applying the rule elsewhere would let a
