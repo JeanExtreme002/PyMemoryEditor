@@ -424,6 +424,10 @@ def _parse_signed_int(raw: Any, field: str) -> int:
     negative = text.startswith("-")
     body = text[1:] if negative else text
     try:
+        # int() accepts a sign of its own, so "--5" would strip to "-5" and
+        # the two minuses cancel: a write of "--5" stored +5. One sign only.
+        if negative and body.lstrip()[:1] in ("-", "+"):
+            raise ValueError(body)
         value = int(body, 16) if body[:2].lower() == "0x" else int(body, 10)
     except (ValueError, IndexError):
         raise ToolError(

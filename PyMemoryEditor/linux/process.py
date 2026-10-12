@@ -196,12 +196,14 @@ class LinuxProcess(AbstractProcess):
         bufflength: Optional[int] = None,
     ) -> T:
         self.__require_target(hot_path=True)
+        self._require_address(address)
         return read_process_memory(
             self.pid, address, pytype, resolve_bufflength(pytype, bufflength)
         )
 
     def read_process_memory_into(self, address: int, buffer: object) -> int:
         self.__require_target(hot_path=True)
+        self._require_address(address)
         return read_process_memory_into(self.pid, address, buffer)
 
     def _scan_addresses(
@@ -270,6 +272,7 @@ class LinuxProcess(AbstractProcess):
         value: Union[bool, int, float, str, bytes] = UNSET,
     ) -> Union[bool, int, float, str, bytes]:
         self.__require_target()
+        self._require_address(address)
         w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
         write_process_memory(self.pid, address, w_pytype, w_length, w_value)
         return value

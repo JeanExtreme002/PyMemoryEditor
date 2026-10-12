@@ -255,12 +255,14 @@ class MacProcess(AbstractProcess):
         bufflength: Optional[int] = None,
     ) -> T:
         self._require_open()
+        self._require_address(address)
         return read_process_memory(
             self.__task, address, pytype, resolve_bufflength(pytype, bufflength)
         )
 
     def read_process_memory_into(self, address: int, buffer: object) -> int:
         self._require_open()
+        self._require_address(address)
         return read_process_memory_into(self.__task, address, buffer)
 
     def write_process_memory(
@@ -296,6 +298,7 @@ class MacProcess(AbstractProcess):
         :param value: value to be written.
         """
         self._require_open()
+        self._require_address(address)
         w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
         write_process_memory(self.__task, address, w_pytype, w_length, w_value)
         return value
@@ -308,6 +311,7 @@ class MacProcess(AbstractProcess):
 
     def free_memory(self, address: int, size: int = 0) -> bool:
         self._require_open()
+        self._require_address(address)
         # mach_vm_deallocate needs the exact size. Reuse the tracked size when
         # the caller doesn't supply one.
         actual_size = size or self.__allocations.get(address, 0)
