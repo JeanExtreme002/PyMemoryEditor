@@ -1319,7 +1319,20 @@ class AbstractProcess(ABC):
         # Validate eagerly, like every search_* method: a bad argument or a
         # closed process raises here, at the call, not on the first next().
         # The map build and path search stay lazy in _iter_pointer_paths.
-        self._require_scanning()
+        #
+        # A subclass written against the 3.3 contract implements the listings
+        # itself and need not define _require_open (see __init_subclass__);
+        # it keeps the unguarded behaviour instead of a NotImplementedError.
+        guarded = type(self)._require_open is not AbstractProcess._require_open
+        if guarded:
+            self._require_scanning()
+
+        if max_depth < 1:
+            raise ValueError("max_depth must be at least 1.")
+        if max_offset < 0:
+            raise ValueError("max_offset must not be negative.")
+        if max_results is not None and max_results < 0:
+            raise ValueError("max_results must not be negative.")
 
         if ptr_size is None:
             ptr_size = self.pointer_size
@@ -1342,7 +1355,7 @@ class AbstractProcess(ABC):
             progress_callback=progress_callback,
             should_stop=should_stop,
         )
-        return guard_generator(scan, self._require_open)
+        return guard_generator(scan, self._require_open) if guarded else scan
 
     def _iter_pointer_paths(
         self,

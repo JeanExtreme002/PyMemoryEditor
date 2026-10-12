@@ -9,6 +9,8 @@ keep its own implementations.
 
 import os
 
+import pytest
+
 from PyMemoryEditor import AbstractProcess
 
 
@@ -69,6 +71,10 @@ def test_a_subclass_of_the_earlier_contract_still_instantiates_and_runs_its_own_
     assert list(process.search_by_addresses(int, addresses=[7])) == [(7, "own")]
     assert list(process.get_memory_regions()) == []
     assert process.main_thread is None
+    # Built on the methods above only: no _require_open needed.
+    assert list(process.scan_pointer_paths(0x1000)) == []
+    with pytest.raises(ValueError, match="ptr_size"):
+        process.scan_pointer_paths(0x1000, ptr_size=3)
 
 
 def test_every_backend_implements_every_raw_hook():

@@ -524,11 +524,28 @@ def test_scan_pointer_paths_stops_once_the_process_is_closed(monkeypatch):
     monkeypatch.setattr(pointer_scan, "find_pointer_paths", lambda *a, **k: iter([path, path]))
 
     handle = OpenProcess(pid=os.getpid())
-    walk = handle.scan_pointer_paths(0x1000, max_depth=1, memory_regions=[])
-    assert next(walk) == path
-    handle.close()
+    try:
+        walk = handle.scan_pointer_paths(0x1000, max_depth=1, memory_regions=[])
+        assert next(walk) == path
+    finally:
+        handle.close()
     with pytest.raises(ClosedProcess):
         next(walk)
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"max_depth": 0}, "max_depth"),
+        ({"max_offset": -8}, "max_offset"),
+        ({"max_results": -1}, "max_results"),
+    ],
+)
+def test_scan_pointer_paths_rejects_bad_limits_at_the_call(process, kwargs, message):
+    """Out-of-range limits used to build the whole pointer map on the first
+    next() and then silently yield nothing."""
+    with pytest.raises(ValueError, match=message):
+        process.scan_pointer_paths(0x1000, **kwargs)
 
 
 def _one_writable_region(process):
