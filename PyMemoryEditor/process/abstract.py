@@ -53,13 +53,20 @@ _POINTER_SCAN_FORMAT = "pymemoryeditor-pointerscan"
 _POINTER_SCAN_VERSION = 1
 
 
-class _PointerOutOfRangeError(ValueError, OSError):
-    """A pointer chain step landed outside the address space.
+class _AddressOutOfRangeError(ValueError, OSError):
+    """An address (or a pointer chain step) lies outside the address space.
 
     A ``ValueError`` as documented, and also an ``OSError`` because the failed
     read of the wrapped address it replaces raised one: callers that guard a
-    stale chain with ``except OSError`` keep working.
+    stale chain or a bad address with ``except OSError`` keep working.
     """
+
+
+# One past the highest address this host can pass to the OS. ctypes masks an
+# address argument to the width of the C type it is converted to instead of
+# rejecting it, so a 32-bit Python would turn 0x1_0000_1000 into 0x1000 just as
+# a 64-bit one turns 2**64 + 0x1000 into 0x1000.
+_HOST_ADDRESS_END = min(ADDRESS_SPACE_END, 1 << (8 * ctypes.sizeof(ctypes.c_void_p)))
 
 
 class AbstractProcess(ABC):
@@ -204,6 +211,23 @@ class AbstractProcess(ABC):
         """
         if not self._target_alive():
             raise ProcessIDNotExistsError(self.pid)
+
+    @staticmethod
+    def _require_address(address: int) -> None:
+        """
+        Refuse an address outside ``[0, host address space)`` before it
+        reaches ctypes, which would mask it to the C type's width and read,
+        write or free a *different*, wrapped address instead of failing.
+        """
+        if not 0 <= address < _HOST_ADDRESS_END:
+            raise _AddressOutOfRangeError(
+                "address %s is outside the %d-bit address space; it would "
+                "wrap around to a different address."
+                % (
+                    ("-0x%X" % -address) if address < 0 else ("0x%X" % address),
+                    _HOST_ADDRESS_END.bit_length() - 1,
+                )
+            )
 
     @abstractmethod
     def _detect_is_64bit(self) -> Optional[bool]:
@@ -736,7 +760,9 @@ class AbstractProcess(ABC):
            and ``convert_from_byte_array``. Callers that need the original
            bytes verbatim (no decoding) should pass ``pytype=bytes``.
 
-        :raises ValueError: if ``pytype`` is unsupported.
+        :raises ValueError: if ``pytype`` is unsupported, or ``address`` is
+            negative or past the end of the address space (also an
+            ``OSError``, so ``except OSError`` still catches it).
         :raises OSError: if the read fails, or returns fewer bytes than
             requested (e.g. the range crosses an unreadable/freed page).
         """
@@ -770,7 +796,9 @@ class AbstractProcess(ABC):
 
         :raises TypeError: if ``buffer`` is not a writable buffer (e.g. an
             immutable ``bytes`` object).
-        :raises ValueError: if ``buffer`` is empty or not contiguous.
+        :raises ValueError: if ``buffer`` is empty or not contiguous, or
+            ``address`` is outside the address space (as in
+            :meth:`read_process_memory`).
         :raises OSError: if the read fails, or returns fewer bytes than
             requested (e.g. the range crosses an unreadable/freed page).
 
@@ -821,7 +849,8 @@ class AbstractProcess(ABC):
             (``write_process_memory(address, int, 4, 99)``).
         :raises ValueError: if ``pytype`` is unsupported, or if an ``int``
             ``value`` does not fit in ``bufflength`` bytes (rejected up front
-            rather than silently truncated).
+            rather than silently truncated), or if ``address`` is outside the
+            address space (as in :meth:`read_process_memory`).
         :raises OSError: if the write fails, or fewer bytes than requested are
             written (e.g. the range crosses an unwritable/freed page).
         :return: the original ``value`` passed in.
@@ -1080,7 +1109,8 @@ class AbstractProcess(ABC):
         :return: ``True`` on success.
 
         :raises ValueError: on macOS and Windows, for a region this object did
-            not allocate when no ``size`` is given.
+            not allocate when no ``size`` is given, or for an ``address``
+            outside the address space.
         :raises NotImplementedError: on Linux (see :meth:`allocate_memory`).
         """
         raise NotImplementedError()
@@ -1190,7 +1220,7 @@ class AbstractProcess(ABC):
             # it, so `ptr + offset` below zero or past 2**64 would silently
             # read a *different*, wrapped address. Refuse it by name instead.
             if not 0 <= addr < ADDRESS_SPACE_END:
-                raise _PointerOutOfRangeError(
+                raise _AddressOutOfRangeError(
                     "pointer chain step produced address %s, outside the "
                     "64-bit address space; the chain is stale (a hop read "
                     "NULL or garbage) or an offset is wrong."

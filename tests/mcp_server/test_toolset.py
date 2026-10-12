@@ -672,10 +672,10 @@ class TestPointers:
     ):
         # The library's range error is both a ValueError and an OSError; it
         # must read as a stale chain, not as a malformed argument.
-        from PyMemoryEditor.process.abstract import _PointerOutOfRangeError
+        from PyMemoryEditor.process.abstract import _AddressOutOfRangeError
 
         def resolve(*args, **kwargs):
-            raise _PointerOutOfRangeError("pointer chain step produced address -0x100")
+            raise _AddressOutOfRangeError("pointer chain step produced address -0x100")
 
         monkeypatch.setattr(fake_process, "resolve_pointer_chain", resolve)
         with pytest.raises(ToolError) as caught:

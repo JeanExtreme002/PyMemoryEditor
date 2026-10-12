@@ -303,6 +303,7 @@ class WindowsProcess(AbstractProcess):
     ) -> T:
         self._require_open()
         self.__require_read()
+        self._require_address(address)
         return ReadProcessMemory(
             self.__process_handle,
             address,
@@ -313,6 +314,7 @@ class WindowsProcess(AbstractProcess):
     def read_process_memory_into(self, address: int, buffer: object) -> int:
         self._require_open()
         self.__require_read()
+        self._require_address(address)
         return ReadProcessMemoryInto(self.__process_handle, address, buffer)
 
     def write_process_memory(
@@ -324,6 +326,7 @@ class WindowsProcess(AbstractProcess):
     ) -> Union[bool, int, float, str, bytes]:
         self._require_open()
         self.__require_write()
+        self._require_address(address)
         w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
         WriteProcessMemory(
             self.__process_handle,
@@ -344,6 +347,7 @@ class WindowsProcess(AbstractProcess):
     def free_memory(self, address: int, size: int = 0) -> bool:
         self._require_open()
         self.__require_operation()
+        self._require_address(address)
         # MEM_RELEASE tears down whatever VirtualAlloc'd block starts at
         # `address` -- a heap segment or a thread stack just as readily as one
         # of ours -- so an address this object did not allocate is refused

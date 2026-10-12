@@ -208,3 +208,65 @@ def test_write_to_unmapped_address_raises():
             process.write_int(0x1, 7)
     finally:
         process.close()
+
+
+# --------------------------------------------------------------------------- #
+# (3) an address outside the address space must raise, not wrap.
+#     ctypes masks an address argument to 64 bits (32 on a 32-bit Python), so
+#     ``2**64 + addr`` used to read and write ``addr`` itself, with no error.
+# --------------------------------------------------------------------------- #
+
+_ADDRESS_WIDTH = 8 * ctypes.sizeof(ctypes.c_void_p)
+
+
+def _wrapping_addresses(address):
+    """Addresses that ctypes would mask onto ``address``."""
+    return [address + (1 << _ADDRESS_WIDTH), address - (1 << _ADDRESS_WIDTH)]
+
+
+@pytest.fixture
+def own_process():
+    process = OpenProcess(pid=os.getpid())
+    try:
+        yield process
+    finally:
+        process.close()
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["past-the-end", "negative"])
+def test_write_to_a_wrapping_address_raises_and_leaves_memory_untouched(own_process, which):
+    target = ctypes.c_int32(1234)
+    wrapped = _wrapping_addresses(ctypes.addressof(target))[which]
+
+    with pytest.raises(ValueError, match="outside the %d-bit address space" % _ADDRESS_WIDTH):
+        own_process.write_process_memory(wrapped, int, 4, 4321)
+    with pytest.raises(ValueError, match="outside"):
+        own_process.write_int(wrapped, 4321)
+
+    assert target.value == 1234
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["past-the-end", "negative"])
+def test_read_of_a_wrapping_address_raises(own_process, which):
+    target = ctypes.c_int32(1234)
+    wrapped = _wrapping_addresses(ctypes.addressof(target))[which]
+
+    with pytest.raises(ValueError, match="outside"):
+        own_process.read_process_memory(wrapped, int, 4)
+    with pytest.raises(ValueError, match="outside"):
+        own_process.read_process_memory_into(wrapped, bytearray(4))
+
+
+def test_out_of_range_address_is_still_an_os_error(own_process):
+    """A negative address used to fail inside the OS read with ``OSError``;
+    callers guarding a bad address with ``except OSError`` must still catch it."""
+    with pytest.raises(OSError, match="outside"):
+        own_process.read_process_memory(-1, int, 4)
+
+
+def test_the_last_address_of_the_space_is_not_refused_by_the_range_check(own_process):
+    """The top address is in range: whatever happens there is the OS's call
+    (unmapped, so ``OSError``), not the range check's ``ValueError``."""
+    with pytest.raises(OSError) as error:
+        own_process.read_process_memory((1 << _ADDRESS_WIDTH) - 1, bytes, 1)
+    assert not isinstance(error.value, ValueError)
