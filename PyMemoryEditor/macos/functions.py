@@ -1342,7 +1342,8 @@ def _detect_task_64bit(task: int) -> Optional[bool]:
     unknown result means (the public :func:`is_task_64bit` defaults to 64-bit;
     ``AbstractProcess.is_64bit`` honors ``strict_bitness``).
     """
-    for module in get_modules(task):
+    # Only the header magic is read, so skip each image's load-command walk.
+    for module in get_modules(task, image_sizes=False):
         try:
             magic = int.from_bytes(
                 read_process_memory(task, module.base_address, bytes, 4), "little"

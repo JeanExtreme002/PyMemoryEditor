@@ -1043,7 +1043,7 @@ class TestApprovalPromptNotes:
         toolset = _toolset_for(process, ServerConfig())
         toolset.policy._identify = {4242: 12345}.get
         assert toolset.policy.grant("python3", pid=4242) == "instance"
-        identities = iter([12345, 99999])
+        identities = iter([12345, 99999, 99999])
         toolset.policy._identify = lambda pid: next(identities)
         server, _toolset = build_server(toolset=toolset)
 
@@ -1055,6 +1055,47 @@ class TestApprovalPromptNotes:
         assert result.is_error
         assert "pid was reused" in result.content[0].text
         assert toolset.store.sessions == ()
+
+    def test_an_unreadable_identity_on_the_recheck_is_not_called_a_reused_pid(self):
+        # A start time that fails to read is not evidence of reuse: the
+        # message must say what actually happened.
+        process = FakeProcess(name="python3")
+        toolset = _toolset_for(process, ServerConfig())
+        toolset.policy._identify = {4242: 12345}.get
+        assert toolset.policy.grant("python3", pid=4242) == "instance"
+        identities = iter([12345, None, None])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        assert result.is_error
+        assert "could not be read" in result.content[0].text
+        assert "reused" not in result.content[0].text
+        assert toolset.store.sessions == ()
+
+    def test_a_shared_runtime_shown_without_a_start_time_is_not_remembered(self):
+        # Nothing ties the approval to the instance in the prompt, so reading
+        # the start time afterwards could remember a process nobody saw.
+        process = FakeProcess(name="python3")
+        answerer = Answerer("accept", remember=True)
+        toolset = _toolset_for(process, ServerConfig())
+        identities = iter([None, 777])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        payload = _payload(asyncio.run(run()))
+        assert payload["opened"] is True
+        assert payload["approval_remembered"] is False
+        assert "start time could not be read" in payload["approval_note"]
+        assert toolset.policy.granted_instances == ()
 
     def test_an_ordinary_name_reports_a_name_scope(self):
         payload, _toolset = self._open(FakeProcess(), Answerer("accept", remember=True))

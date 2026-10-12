@@ -46,7 +46,7 @@ def test_is_task_64bit_warns_when_no_header_readable(monkeypatch, warning_record
     from PyMemoryEditor.macos import functions as mac
 
     # No module yields a readable Mach-O header → the fallback fires.
-    monkeypatch.setattr(mac, "get_modules", lambda task: iter(()))
+    monkeypatch.setattr(mac, "get_modules", lambda task, **kwargs: iter(()))
 
     result = mac.is_task_64bit(0)
 

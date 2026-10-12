@@ -186,12 +186,14 @@ else:
             return None
 
     def start_identity(pid: int) -> Optional[int]:
-        """``starttime`` (field 22 of ``/proc/<pid>/stat``), or ``None``."""
-        fields = _linux_stat_fields(pid)
-        try:
-            return int(fields[19]) if fields else None
-        except (IndexError, ValueError):
-            return None
+        """``starttime`` (field 22 of ``/proc/<pid>/stat``), or ``None``.
+
+        The Linux backend's PID-reuse guard reads the same field; sharing its
+        parser keeps the two identities from ever disagreeing.
+        """
+        from ..linux.functions import read_start_time
+
+        return read_start_time(pid)
 
 
 def ancestor_pids(pid: Optional[int] = None) -> FrozenSet[int]:

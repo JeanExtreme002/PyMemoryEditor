@@ -253,13 +253,20 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
             # took its pid in between, the policy no longer allows it. Asking
             # again now that the handle pins the pid closes that window; for
             # name and allowlist approvals the verdict cannot have changed.
-            if not toolset.policy.check(found_pid, found_name).allowed:
+            recheck = await _off_loop(toolset.policy.check, found_pid, found_name)
+            if not recheck.allowed:
                 await _off_loop(toolset.close_process, result["session_id"])
+                if await _off_loop(toolset.policy.identify, found_pid) is None:
+                    why = (
+                        "its start time could not be read, so it cannot be "
+                        "confirmed to be the process that was approved"
+                    )
+                else:
+                    why = "it exited and the pid was reused"
                 raise SdkToolError(
-                    'pid %d is no longer the "%s" process that was approved: it '
-                    "exited and the pid was reused. Nothing was attached; call "
-                    "open_process again so the user is asked about the new one."
-                    % (found_pid, found_name)
+                    'pid %d is not confirmed as the "%s" process that was '
+                    "approved: %s. Nothing was attached; call open_process "
+                    "again so the user is asked." % (found_pid, found_name, why)
                 )
             return result
 
@@ -370,7 +377,12 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
                     % (found_pid, found_name)
                 )
 
-        if remember and found_name:
+        if remember and found_name and shared and shown_identity is None:
+            # Nothing ties the approval to the instance that was shown: reading
+            # the start time now could name a process that took the pid while
+            # the prompt was open. Not remembered; the note below says so.
+            _logger.info("Approved target %r (start time unreadable, not remembered)", found_name)
+        elif remember and found_name:
             # With the pid, so a shared runtime (python3, node) is remembered
             # as this one running instance rather than as a name every script
             # on the machine shares -- the instance that was shown, not
