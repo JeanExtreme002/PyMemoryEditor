@@ -3,13 +3,12 @@
 Shared base for the read-only, auto-refreshing table dialogs (Memory Map,
 Modules, Threads).
 
-All three did the same dance — run a one-shot read off the UI thread, repopulate
+All three do the same dance — run a one-shot read off the UI thread, repopulate
 a sortable table when it returns, poll on a timer, and tear the worker down
-safely on close — each with its own near-identical ``_*Worker(QThread)`` and
-lifecycle boilerplate. That triplicated the fiddly bits (the in-flight guard
-that self-throttles the poll, the detach-on-shutdown safety) where a fix to one
-copy wouldn't reach the others. This owns the lifecycle once; subclasses provide
-only what differs: how to fetch the data, and how to render it.
+safely on close. This owns that lifecycle once, so the fiddly bits (the
+in-flight guard that self-throttles the poll, the detach-on-shutdown safety)
+live in one place; subclasses provide only what differs: how to fetch the
+data, and how to render it.
 
 It also owns *when* a failure is worth interrupting the user — see
 :meth:`AutoRefreshTableDialog._handle_failed`.
@@ -182,7 +181,7 @@ class AutoRefreshTableDialog(TearsDownOnClose, QDialog):
         Process) *every* tick fails, and ``_on_data_failed`` pops a **modal**
         dialog. A modal runs a nested event loop, so the timer fires again while
         it is up and the failures stack — hundreds of focus-stealing dialogs the
-        user could only escape by killing the app from another TTY (issue #74).
+        user could only escape by killing the app from another TTY.
 
         Reporting is therefore tied to the two moments where a failure changes
         what the user sees: the **first** fetch (empty window) and the one that

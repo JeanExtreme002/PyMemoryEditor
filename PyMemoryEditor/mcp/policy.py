@@ -10,7 +10,7 @@ reading through tool code.
 
 Three outcomes, not two. A target is **allowed** outright, **denied**
 outright, or **needs approval** — the last one being what makes the server
-usable for work you did not plan in advance. The operator no longer has to name
+usable for work you did not plan in advance. The operator does not have to name
 every target at configuration time; an unlisted one simply prompts, and the
 answer can be remembered for the rest of the server's life.
 
@@ -255,11 +255,11 @@ class ProcessPolicy:
         identify: Callable[[int], Optional[int]] = process_identity,
     ) -> None:
         if isinstance(allowed_names, str):
-            # A str is a valid Sequence[str], so a scalar was consumed
-            # character by character: `allowed_names="notepad.exe"` became
-            # eleven single-letter rules and pre-approved every process whose
-            # name contains any of those letters — silently turning the consent
-            # prompt off. A JSON scalar where an array was meant is the natural
+            # A str is a valid Sequence[str], so a scalar would be consumed
+            # character by character: `allowed_names="notepad.exe"` would
+            # become eleven single-letter rules and pre-approve every process
+            # whose name contains any of those letters — silently turning the
+            # consent prompt off. A JSON scalar where an array was meant is the natural
             # mistake for exactly the embedder the comment below describes.
             allowed_names = (allowed_names,)
 

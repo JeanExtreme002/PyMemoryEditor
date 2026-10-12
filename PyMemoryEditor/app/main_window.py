@@ -471,8 +471,8 @@ class MainWindow(QMainWindow):
         self._cleanup_worker()
         # A cancelled scan still emits finished_ok (with the partial count) and
         # a failed one emits error; either way the user asked for no more
-        # work — Cancel started "Updating values…", and a dead target popped
-        # a second error dialog from the refresh.
+        # work — otherwise Cancel would start "Updating values…", and a dead
+        # target would pop a second error dialog from the refresh.
         if completed:
             self._fill_initial_values(request)
 
@@ -547,9 +547,9 @@ class MainWindow(QMainWindow):
     def _cleanup_worker(self) -> None:
         # Runs from the worker's `finished`, and only one scan runs at a time,
         # so self._worker is the worker that just finished. It is a child of
-        # this window: dropping the reference alone kept every scan's QThread
-        # (and the address list / value map it was handed) alive until the
-        # window closed. `finished` is emitted as run() returns, so wait()
+        # this window: dropping the reference alone would keep every scan's
+        # QThread (and the address list / value map it was handed) alive until
+        # the window closed. `finished` is emitted as run() returns, so wait()
         # comes back at once; it makes sure the thread is really over before
         # deleteLater() (destroying a running QThread aborts the process).
         worker = self._worker
@@ -603,8 +603,8 @@ class MainWindow(QMainWindow):
         """Forget a closed tool dialog and free it.
 
         The dialogs are children of this window and are rebuilt on the next
-        open, so dropping the reference alone kept every closed instance (and
-        the tables it held) alive for the life of the window. By the time
+        open, so dropping the reference alone would keep every closed instance
+        (and the tables it held) alive for the life of the window. By the time
         ``finished`` gets here the dialog's teardown has already run — it is
         driven from ``done()`` — so its background worker is stopped, or
         detached from it if it would not stop, and the delete can't take a
@@ -919,8 +919,8 @@ class MainWindow(QMainWindow):
 
         # Tear down auxiliary dialogs that hold a reference to the old
         # process — reopening them rebuilds against the new target. The Memory
-        # Map belongs here too: it polls on a timer, so leaving it open left it
-        # reading the handle closed just below (issue #74).
+        # Map belongs here too: it polls on a timer, so leaving it open would
+        # leave it reading the handle closed just below.
         for dialog_attr in (
             "_memory_map",
             "_threads_dialog",
@@ -1019,8 +1019,8 @@ class MainWindow(QMainWindow):
         """Ask before quitting with unsaved cheat entries. True = go ahead.
 
         The table is not persisted between runs (Export… is the way to keep
-        it), so a stray Cmd+Q / window close used to throw away every saved
-        address silently.
+        it), so a stray Cmd+Q / window close would otherwise throw away every
+        saved address silently.
         """
         count = self._cheat.entry_count()
         if count == 0 or not self.confirm_close_with_entries:

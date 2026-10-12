@@ -376,8 +376,7 @@ class AbstractProcess(ABC):
             in :meth:`search_by_value`; only the requested bytes are read, and
             the value is sign-extended — so this method,
             :meth:`read_process_memory` and a scan for the same bytes all
-            agree. Widths 3, 5, 6 and 7 used to yield ``None`` here while the
-            direct read succeeded.
+            agree, widths 3, 5, 6 and 7 included.
         :param addresses: the addresses to read. Required.
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
@@ -765,12 +764,12 @@ class AbstractProcess(ABC):
               writes the whole value. ``str`` is encoded as UTF-8; no NUL
               terminator is appended.
         :param value: value to be written. Required — since ``bufflength`` is
-            now optional, pass it by keyword when omitting ``bufflength``::
+            optional, pass it by keyword when omitting ``bufflength``::
 
                 write_process_memory(address, str, value="hi")
                 write_process_memory(address, int, value=99)
 
-            Positional calls keep working unchanged
+            Positional calls work as well
             (``write_process_memory(address, int, 4, 99)``).
         :raises ValueError: if ``pytype`` is unsupported, or if an ``int``
             ``value`` does not fit in ``bufflength`` bytes (rejected up front
@@ -811,7 +810,7 @@ class AbstractProcess(ABC):
 
     def _write_unsigned(self, address: int, size: int, value: int) -> int:
         # The signed helpers reject a float with TypeError (the ctypes integer
-        # setter refuses it); `int(value)` here used to truncate 3.7 to 3 and
+        # setter refuses it), and `int(value)` would truncate 3.7 to 3 and
         # report success. `operator.index` accepts exactly what that setter
         # accepts -- ints, bools, numpy integers -- and raises the same
         # TypeError for everything else.

@@ -195,8 +195,8 @@ def make_region(address: int, size: int, struct: Any, *, path: str = "") -> Memo
 
     Backends call this once per region instead of constructing a dict and
     enriching it in a second step. Computing every boolean upfront keeps the
-    public type immutable and removes a class of "what fields are populated?"
-    bugs that the old enrichment pattern was prone to.
+    public type immutable and rules out "what fields are populated?" bugs
+    that a build-then-enrich pattern invites.
 
     :param path: optional pre-resolved file path for the region. When non-empty
         this overrides the struct-based ``region_path()`` lookup (used by the

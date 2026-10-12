@@ -481,12 +481,12 @@ def GetMemoryRegions(process_handle: int, pid: int = 0) -> Generator[MemoryRegio
     64-bit Python walks a 32-bit (WOW64) target with the same 48-byte struct
     it uses for a 64-bit one.
 
-    ``VirtualQueryEx`` returning 0 used to terminate enumeration unconditionally,
-    silently truncating the region list whenever the kernel hiccuped on a
-    single region (DLL unloaded mid-walk, transient permission edge). Now we
-    consult ``GetLastError``: only fall through for the natural end-of-space
-    case; for any other failure log it and bump the cursor by one page so the
-    walk keeps making progress.
+    ``VirtualQueryEx`` returning 0 does not end enumeration unconditionally,
+    since that would silently truncate the region list whenever the kernel
+    hiccups on a single region (DLL unloaded mid-walk, transient permission
+    edge). ``GetLastError`` decides: only the natural end-of-space case ends
+    the walk; any other failure is logged and the cursor bumped by one page so
+    the walk keeps making progress.
 
     That skip is bounded: a handle-level error (``ERROR_ACCESS_DENIED``,
     ``ERROR_INVALID_HANDLE``) or more than ``_REGION_MAX_CONSECUTIVE_FAILURES``
@@ -896,8 +896,8 @@ def SearchValuesByAddresses(
             for region in GetMemoryRegions(process_handle, pid)
             # An address-list read has the caller already deciding *where* —
             # the library has no business filtering by region "interestingness"
-            # (which used to exclude MEM_MAPPED here and diverge from
-            # Linux/macOS). All three backends now agree: just readable.
+            # (that would exclude MEM_MAPPED and diverge from Linux/macOS).
+            # All three backends agree: just readable.
             if default_address_filter(region)
         ]
     elif not isinstance(memory_regions, MemoryRegionSnapshot):

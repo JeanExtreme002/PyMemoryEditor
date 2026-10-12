@@ -11,8 +11,8 @@ governs the server, and they need to be the ones that make it useful *and*
 keep a human in the loop.
 
 Both halves are load-bearing here. The server is a memory **editor**: a
-read-only default made the headline workflow — find a value, change it —
-require a flag nobody discovers, which is a bad trade when the protections that
+read-only default would make the headline workflow — find a value, change it
+— require a flag nobody discovers, which is a bad trade when the protections that
 matter are elsewhere. Consent is enforced at the two points where it can
 actually be given:
 
@@ -113,14 +113,13 @@ class ServerConfig:
     .. note::
        The three numeric bounds are validated here as well as in
        ``parse_args``, so an embedder constructing this in code gets the same
-       answer the CLI operator gets. They used to be checked only at the CLI,
-       which meant a config built in Python failed quietly instead of loudly:
-       ``scan_batch_bytes=0`` made every region its own scan batch (thousands
-       of generator setups per scan on a desktop target), and
-       ``max_scan_results=0`` made every scan return nothing while flagging
-       itself partial. Neither is unsafe — that is why the process allowlist,
-       where a bad value silently disables the consent prompt, was fixed first
-       — but both are indistinguishable from a broken server.
+       answer the CLI operator gets, and a config built in Python fails
+       loudly instead of quietly: ``scan_batch_bytes=0`` would make every
+       region its own scan batch (thousands of generator setups per scan on a
+       desktop target), and ``max_scan_results=0`` would make every scan
+       return nothing while flagging itself partial. Neither is unsafe — unlike
+       the process allowlist, where a bad value silently disables the consent
+       prompt — but both are indistinguishable from a broken server.
     """
 
     allow_write: bool = True
@@ -316,9 +315,9 @@ def parse_args(
         )
 
     # Stripped, not merely tested for blankness: a JSON args array carrying
-    # "notepad.exe " (trailing space) used to be stored verbatim, so the
-    # substring matched no process at all — the pre-approval silently did
-    # nothing while the operator kept being prompted.
+    # "notepad.exe " (trailing space) would otherwise be stored verbatim, so
+    # the substring would match no process at all — the pre-approval silently
+    # doing nothing while the operator kept being prompted.
     allowed: List[str] = [
         stripped
         for stripped in (name.strip() for name in args.allowed_processes)

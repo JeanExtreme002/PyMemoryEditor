@@ -375,8 +375,7 @@ def make_predicate(
     ``int.from_bytes`` fallback, and the ordered-string fast path — plus the MCP
     server's ``refine_scan``, which re-reads a stored result set instead of
     walking memory but must narrow it by exactly the same rules. A change to a
-    comparison can't silently diverge between them. (Previously each of
-    those branches inlined its own copy: sixteen near-identical loop bodies.)
+    comparison can't silently diverge between them.
     The closure is built once per ``scan_memory`` call, outside the hot loop, so
     the per-element cost is a single Python call rather than the re-evaluated
     ``scan_type`` chain. The fast/slow equivalence is pinned by

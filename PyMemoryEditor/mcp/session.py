@@ -43,7 +43,7 @@ MAX_SCANS_PER_SESSION = 20
 #: How long ``close_process`` waits for a running operation to release the
 #: session before it stops waiting. The handle is not closed early: the
 #: operation that holds it closes it on its way out (see :class:`SessionLock`),
-#: so a slow pointer walk delays the close but can no longer hang it.
+#: so a slow pointer walk delays the close but cannot hang it.
 CLOSE_WAIT_SECONDS = 5.0
 
 _logger = logging.getLogger("PyMemoryEditor")
@@ -274,9 +274,9 @@ def looks_alive(pid: int) -> bool:
     The reaper runs inside ``open``, so anything raised here escapes as
     something other than a ``SessionError`` and the model is told only
     "Error executing tool". ``pid_exists(2**31)`` raises ``OverflowError``
-    (the value does not fit the platform's pid type), which the argument
-    fuzzer found by generating exactly that. A number the OS refuses cannot
-    name a running process, so treating it as dead is both safe and correct.
+    (the value does not fit the platform's pid type). A number the OS
+    refuses cannot name a running process, so treating it as dead is both
+    safe and correct.
     """
     try:
         return pid_exists(pid)
@@ -379,9 +379,9 @@ class SessionStore:
         One message, rendered once. The protocol layer asks this *before*
         prompting the user — spending an approval on an attach that cannot
         happen is worse than refusing outright — and :meth:`open` raises it as
-        the authoritative guard. Duplicating the text gave the early path a
-        worse message than the late one, which is the path a model actually
-        hits.
+        the authoritative guard. Rendering it in one place keeps the early
+        path, which is the one a model actually hits, as informative as the
+        late one.
 
         Reaps first, or a server full of exited processes reports as full when
         :meth:`open` would have made room.
@@ -399,15 +399,12 @@ class SessionStore:
         """Render the refusal, or ``None``. **Caller holds** ``self._lock``.
 
         Separate from :meth:`capacity_refusal` so :meth:`open` can check and
-        insert under one acquisition. When the check released the lock and the
-        insert took it again, the cap could be exceeded: every thread saw room,
-        then every thread inserted. Demonstrated with 12 concurrent opens
-        against a cap of 8.
+        insert under one acquisition. If the check released the lock and the
+        insert took it again, the cap could be exceeded: every racing thread
+        would see room, then every one would insert.
         """
         # Deterministic, so a refactor that checks capacity outside the lock
-        # fails here instead of in a timing test. That regression happened
-        # once: the check and the insert were split across two acquisitions,
-        # every racing thread saw room, and the cap was exceeded.
+        # fails here instead of in a timing test.
         assert self._lock.locked(), "capacity must be judged under the lock"
 
         if self._handles_held_locked() < MAX_OPEN_SESSIONS:
@@ -545,9 +542,9 @@ class SessionStore:
         Scan ids are unique across the store, so the model only has to carry
         the one handle through a refine chain.
         """
-        # Under the store lock, which `new_scan` adds (and evicts) under: the
-        # membership test and the lookup used to run outside it, so an
-        # eviction between the two turned a found id into "Unknown scan id".
+        # Under the store lock, which `new_scan` adds (and evicts) under, so
+        # an eviction cannot land between the membership test and the lookup
+        # and turn a found id into "Unknown scan id".
         with self._lock:
             for session in self._sessions.values():
                 if scan_id in session.scan_ids:
@@ -637,9 +634,10 @@ def batch_regions(
     split without splitting a value across the seam, so the budget is a target
     rather than a guarantee, and the batch that exceeds it should at least not
     be carrying anything else. Without the flush, a run of small regions
-    followed by a large one became a *single* batch — ``[10, 10, 10, 5000]``
-    against a 100-byte budget produced one batch of four — so the deadline was
-    checked once for the whole thing, which is the one job this function has.
+    followed by a large one would become a *single* batch — ``[10, 10, 10,
+    5000]`` against a 100-byte budget would be one batch of four — so the
+    deadline would be checked once for the whole thing, defeating the one job
+    this function has.
 
     Batches are plain lists even when ``regions`` is a
     :class:`MemoryRegionSnapshot`: the snapshot tag is only consulted by
@@ -690,9 +688,9 @@ def split_regions(
 ) -> List[MemoryRegion]:
     """Cut every region larger than one piece into consecutive pieces.
 
-    :func:`batch_regions` cannot split a region, so before this a single
-    multi-gigabyte heap was one batch: the scan deadline was not checked until
-    it had been read end to end, and a pointer map was built over all of it in
+    :func:`batch_regions` cannot split a region, so without this a single
+    multi-gigabyte heap is one batch: the scan deadline is not checked until
+    it has been read end to end, and a pointer map is built over all of it in
     one go. Pieces restore the bound.
 
     :param piece_bytes: target piece size; rounded down to

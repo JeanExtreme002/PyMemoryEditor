@@ -288,7 +288,7 @@ class OpenProcessDialog(TearsDownOnClose, QDialog):
         selected_pid = self._selected_pid()
 
         # Restoring the selection below re-triggers Qt's scrollTo(current), which
-        # jumped the list back to the selected row on every tick (#75). The
+        # would jump the list back to the selected row on every tick. The
         # rebuild is harmless on its own: Qt defers the scrollbar range update.
         scrollbar = self._table.verticalScrollBar()
         scroll_offset = scrollbar.value()

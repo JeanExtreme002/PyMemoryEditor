@@ -67,7 +67,7 @@ class ResultsModel(QAbstractTableModel):
         # row). Rows dropped since then are listed, ascending, in ``_removed``:
         # an address's current row is its base minus the dropped rows above it
         # (see ``_row_of``). Rebuilding the whole dict after every refine chunk
-        # made a refine quadratic in the result count.
+        # would make a refine quadratic in the result count.
         self._index: Dict[int, int] = {}
         self._removed: List[int] = []
         # Set when an address was appended twice: the base-row bookkeeping
@@ -201,8 +201,8 @@ class ResultsModel(QAbstractTableModel):
 
         # One dataChanged per contiguous run of patched rows rather than one
         # per row: the view repaints on every emit, and a refine chunk is a
-        # few thousand rows, so per-row emits turned each chunk into a redraw
-        # storm.
+        # few thousand rows, so per-row emits would turn each chunk into a
+        # redraw storm.
         for first, last in _contiguous_runs(sorted(set(rows_changed))):
             self.dataChanged.emit(
                 self.index(first, COL_VALUE), self.index(last, COL_PREVIOUS)
@@ -219,9 +219,9 @@ class ResultsModel(QAbstractTableModel):
         a block of neighbours costs one signal, not one per row. Past
         ``_RESET_RUN_THRESHOLD`` runs (a refine that keeps a sparse scatter of
         a huge result set) the model is reset instead: one O(n) rebuild and
-        one repaint, at the price of the view's selection. The previous shape
-        (one pair plus a mid-list ``list.pop`` per row) was quadratic: a
-        refine dropping 900k of 1M rows did 900k pops and fired 900k signals.
+        one repaint, at the price of the view's selection. One pair plus a
+        mid-list ``list.pop`` per row would be quadratic: a refine dropping
+        900k of 1M rows would do 900k pops and fire 900k signals.
         """
         count = len(self._addresses)
         rows = [row for row in rows if 0 <= row < count]

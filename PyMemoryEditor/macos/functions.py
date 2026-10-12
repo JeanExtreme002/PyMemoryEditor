@@ -182,7 +182,8 @@ def release_task(task: int) -> bool:
         if kr != KERN_SUCCESS:
             # A failed deallocate leaks the send right for the lifetime of the
             # process. It shouldn't happen for a port we own, but swallowing it
-            # silently hid real leaks — log it so they're at least visible.
+            # silently would hide real leaks — log it so they're at least
+            # visible.
             _logger.warning(
                 "mach_port_deallocate failed for task port %d: %s (kr=%d)",
                 task,
@@ -287,8 +288,8 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
     ``mach_vm_region`` returning :data:`KERN_INVALID_ADDRESS` is the documented
     way the kernel says "no more regions past this address" — the natural end
     of the enumeration. Any *other* non-success code (``KERN_FAILURE``,
-    ``KERN_NO_ACCESS`` on a guard page, etc.) used to terminate enumeration
-    too, silently truncating the region list. Now those are logged and the
+    ``KERN_NO_ACCESS`` on a guard page, etc.) does not end the enumeration,
+    which would silently truncate the region list: it is logged and the
     cursor is bumped one page so the walk keeps going.
 
     That skip is bounded: :data:`MACH_SEND_INVALID_DEST` (the task behind the
@@ -358,7 +359,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
 
         if size.value == 0:
             # Defensive: a successful query should never report an empty
-            # region. Stopping here (the old behaviour) would drop every
+            # region. Stopping here would drop every
             # region above it, so step one page past it like the Windows
             # walk does — counted as a failure, so a kernel answering 0
             # forever can't turn this into a crawl across the address space.
@@ -392,7 +393,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
 # KERN_MEMORY_FAILURE beside it (the pair is spelled out in types.py). It is
 # what file-backed, read-only mappings (code segments, dylibs, the dyld shared
 # cache) return, so any scan that walks them — every pattern scan, and any value
-# scan with "writable regions only" turned off — hits it routinely, and used to
+# scan with "writable regions only" turned off — hits it routinely and must not
 # abort on the first one.
 _PAGE_GONE_KRS = (
     KERN_INVALID_ADDRESS,
@@ -416,10 +417,10 @@ _PAGE_GONE_KRS = (
 # silently turn "permission denied" into the same `(address, None)` the caller
 # gets for an address in a gap.
 #
-# Honest limits of what is known here. This was added because a plain
-# search_by_value over the current process died with kr=2 on GitHub's
-# virtualized macOS runners, on a 22 MB region that reported VM_PROT_READ and
-# Shared=False. The mechanism was not established. It does *not* reproduce
+# Honest limits of what is known here. A plain search_by_value over the
+# current process gets kr=2 on GitHub's virtualized macOS runners, on a 22 MB
+# region that reports VM_PROT_READ and Shared=False. The mechanism is not
+# established. It does *not* reproduce
 # locally: probing all 135 scannable regions of a live process yields only kr=1
 # and kr=10, and a page deliberately re-protected to PROT_NONE (or never
 # mapped) answers KERN_INVALID_ADDRESS, not kr=2 — so the usual
@@ -442,8 +443,8 @@ class MachPartialReadError(MachReadError):
     because the read straddled a freed or guarded page) and the caller's
     buffer is part real-bytes, part zero-initialized.
 
-    The previous behavior silently accepted the short result, which let
-    downstream code decode garbage as valid memory. Mirrors the Win32
+    Accepting the short result would let downstream code decode garbage as
+    valid memory, so it raises instead. Mirrors the Win32
     partial-read check on ``ReadProcessMemory``. Scan loops classify this
     as transient so the chunk is skipped instead of aborting.
     """

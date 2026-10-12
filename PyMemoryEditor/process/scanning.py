@@ -3,17 +3,15 @@
 """
 Shared scan/lookup helpers consumed by the three platform backends.
 
-The chunking + boundary logic was copy-pasted between `linux/functions.py` and
-`macos/functions.py` (and partially `win32/functions.py`) — same bug surface
-in three places. This module owns it once:
+The chunking + boundary logic lives here once, so the three backends cannot
+drift apart:
 
   - `iter_values_for_addresses` reads the value at each of a sorted list of
     addresses, grouping nearby addresses of the same region into one syscall,
     and yields `(address, value | None)` tuples. Addresses that fall in gaps
     between regions, or whose `[address, address+bufflength)` would extend
     past the containing region into unmapped memory, yield `(address, None)`
-    — the previous per-backend code silently dropped gap-addresses and
-    zero-padded truncated reads.
+    — never dropped and never zero-padded.
 
   - `iter_search_results` walks every chunk of every region and yields
     `(found_address, chunk_offset, region_index)` triples driven by a
@@ -113,7 +111,7 @@ _READ_ERRORS = (OSError, PyMemoryEditorError)
 
 # Two requested addresses closer than this share one read: copying the gap is
 # cheaper than another syscall. Farther apart, each cluster gets its own read,
-# so a handful of addresses in a 256 MiB region no longer pulls in the whole
+# so a handful of addresses in a 256 MiB region does not pull in the whole
 # chunk.
 _ADDRESS_WINDOW_GAP = 64 * 1024
 
@@ -150,8 +148,8 @@ def iter_values_for_addresses(
       - Address is near the very end of the region and `address + bufflength`
         extends past it: when the following regions continue the range
         without a gap (and are readable), the value is read directly, the way
-        ``read_process_memory`` would; otherwise yield (address, None). The
-        previous code silently zero-padded.
+        ``read_process_memory`` would; otherwise yield (address, None) —
+        never a zero-padded value.
     """
     if transient_error_check is None:
         transient_error_check = _always_false
@@ -333,11 +331,9 @@ def iter_search_results(
     finds a match against ``target_value_bytes``. ``aligned=False`` lets a
     numeric value match at any byte offset (see the kernels).
 
-    The three platform backends used to duplicate this loop verbatim — same
-    chunking, same progress-info computation, same try/except classification.
-    The duplication tracked bugs three-fold (off-by-one in chunk indexing,
-    progress overflow, missing transient-error handling). Owning it once here
-    keeps the next fix in one place.
+    All three platform backends share this loop — chunking, progress-info
+    computation and try/except classification — so chunk indexing, progress
+    accounting and transient-error handling cannot drift between them.
 
     ``read_chunk(address, size)`` is expected to return a buffer object
     accepted by ``scan_memory``/``scan_memory_for_exact_value`` (typically a

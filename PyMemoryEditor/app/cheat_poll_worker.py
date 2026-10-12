@@ -56,8 +56,8 @@ class _CheatPollWorker(QThread):
     with the current ``{key: "ErrorType: message"}`` map. The signal fires only
     when that set *changes* (a freeze starts or stops failing), so the UI gets a
     persistent cue without 10 Hz spam, and the first failure of each entry is
-    logged once. Previously the exception was swallowed silently, so a freeze
-    that never landed looked identical to one that did.
+    logged once. Swallowing the exception instead would make a freeze that
+    never landed look identical to one that did.
     """
 
     values_ready = Signal(object)  # list[tuple[int, type, int, Any]]
@@ -96,9 +96,9 @@ class _CheatPollWorker(QThread):
     ) -> None:
         """Queue a one-shot manual write to be performed on the worker thread.
 
-        The cheat table's inline value edits used to call
-        ``write_process_memory`` directly on the UI thread, freezing the UI when
-        the target was slow or the page faulted. Routing them here keeps the
+        The cheat table's inline value edits come through here: calling
+        ``write_process_memory`` directly on the UI thread would freeze the UI
+        when the target is slow or the page faults. Routing them here keeps the
         syscall off the UI thread; a write that fails comes back via the
         ``write_failed`` signal. Latency is at most one tick (~100 ms), which is
         imperceptible for a manual edit.

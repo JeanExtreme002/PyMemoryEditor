@@ -12,8 +12,8 @@ stays fresh.
 This module hosts only the Qt widget; the dataclass and the worker thread
 live in ``cheat_entry.py`` and ``cheat_poll_worker.py`` respectively. The
 ``CheatEntry`` and ``_CheatPollWorker`` names are re-exported from here for
-backward compatibility with code (and tests) that imported them from this
-module before the split.
+backward compatibility with code (and tests) that import them from this
+module.
 """
 import copy
 import json
@@ -95,8 +95,8 @@ class CheatTable(QWidget):
         self._poller.start()
 
         # A short cadence to push fresh entry snapshots into the worker. This
-        # is far cheaper than the previous QTimer that did real syscalls — it
-        # only copies a small list of tuples.
+        # is cheap — it does no syscalls, it only copies a small list of
+        # tuples.
         self._publish_timer = QTimer(self)
         self._publish_timer.setInterval(TICK_INTERVAL_MS)
         self._publish_timer.timeout.connect(self._publish_snapshot_to_worker)
@@ -221,8 +221,8 @@ class CheatTable(QWidget):
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self._table, 1)
 
-        # Delete removes the selected rows — the standard gesture, previously
-        # only reachable through the context menu. Scoped to the table widget
+        # Delete removes the selected rows — the standard gesture, alongside
+        # the context menu. Scoped to the table widget
         # (WidgetShortcut) so Delete still edits text while a cell is in
         # inline-edit mode (the editor child, not the table, has focus then).
         delete_shortcut = QShortcut(QKeySequence(QKeySequence.Delete), self._table)
@@ -247,8 +247,9 @@ class CheatTable(QWidget):
         next, so that is refused -- the import loop reports and skips it.
 
         Batched so a bulk promotion costs one address lookup per row and one
-        rebuild in total: one ``add_entry`` per row did a linear duplicate
-        scan plus a full table rebuild each, quadratic in the selection.
+        rebuild in total: one ``add_entry`` per row would do a linear
+        duplicate scan plus a full table rebuild each, quadratic in the
+        selection.
 
         :raises ValueError: if an entry's length is over ``MAX_ENTRY_LENGTH``;
             checked for every entry before any is added.
@@ -261,7 +262,7 @@ class CheatTable(QWidget):
                     % (entry.address, length, MAX_ENTRY_LENGTH)
                 )
 
-        # First entry per address, as the linear scan used to find.
+        # First entry per address wins, should the table hold duplicates.
         by_address: Dict[int, CheatEntry] = {}
         for existing in self._entries:
             by_address.setdefault(existing.address, existing)
@@ -347,8 +348,8 @@ class CheatTable(QWidget):
         type_label = entry.spec_label
         # Show the width whenever it belongs to the entry rather than to the
         # spec. An IDA pattern declares none (length 0) yet carries a real one
-        # here — writes are refused against it — so hiding it left the user
-        # told to "widen the entry" with no way to see what it holds.
+        # here — writes are refused against it — so hiding it would leave the
+        # user told to "widen the entry" with no way to see what it holds.
         if entry.spec.accepts_length_override or not entry.spec.length:
             type_label += f"  · {entry.length}B"
         type_item = QTableWidgetItem(type_label)
@@ -428,8 +429,8 @@ class CheatTable(QWidget):
             # and nothing to write to while the target is known to be gone.
             if self._poller_stopped or self._paused:
                 # Put the cell back and say so, as the bulk edit does —
-                # returning quietly left the typed text on screen as if it had
-                # been written.
+                # returning quietly would leave the typed text on screen as if
+                # it had been written.
                 self._suspend_signals = True
                 item.setText(self._value_text_for(entry))
                 self._suspend_signals = False
@@ -525,7 +526,8 @@ class CheatTable(QWidget):
         against it here is cheap and keeps the cue in sync: a red value cell plus
         an explanatory tooltip while a freeze keeps failing, restored to normal
         the moment the write lands again. Without this, a frozen value that the
-        backend silently refuses to write looked identical to one that worked.
+        backend silently refuses to write would look identical to one that
+        worked.
         """
         rows_by_key: Dict[Tuple[int, type, int], int] = {}
         for row, entry in enumerate(self._entries):
@@ -911,7 +913,7 @@ class CheatTable(QWidget):
 
 
 # Ceiling for an entry's buffer width. Entries are promoted at the width of the
-# value scanned for, which the scanner doesn't cap, so 1024 was too tight — but
+# value scanned for, which the scanner doesn't cap, so 1024 is too tight — but
 # the poll worker allocates this many bytes per entry on every 100 ms tick, so
 # an unbounded field turns one typo into a multi-gigabyte allocation the tick's
 # blanket except swallows and retries forever. A megabyte is far past any real

@@ -10,7 +10,7 @@ interesting half of the server — result-set handles, value parsing, the refine
 loop, every safety check — is testable by calling a method, and stays testable
 if the SDK renames its decorators again.
 
-Three conventions run through every tool, each earned the hard way:
+Three conventions run through every tool:
 
 **Addresses cross the wire as ``0x``-prefixed strings, never numbers.** An
 address is an identifier the model copies from one call into the next, and JSON
@@ -71,7 +71,7 @@ SAMPLE_SIZE = 10
 
 #: Hard cap on a ``str`` / ``bytes`` width. Those two go to
 #: ``create_string_buffer(length)``, which allocates exactly what it is asked
-#: for — so an unbounded width was not a wrong answer but an OOM kill of the
+#: for — so an unbounded width is not a wrong answer but an OOM kill of the
 #: server, taking every open session with it and returning no error at all.
 #: 64 KiB is far past any plausible string or byte-array read.
 MAX_TEXT_BYTES = 0x10000
@@ -119,7 +119,7 @@ MAX_SAMPLE_VALUE_CHARS = 8 * 1024
 #: bits *silently* rather than raising -- so an address above this does not
 #: fail, it addresses somewhere else. A model that duplicates or concatenates
 #: a hex string it was handed (the kind of slip that produces
-#: ``"0x7FFD123456787FFD12345678"``) had that accepted and written to
+#: ``"0x7FFD123456787FFD12345678"``) would have it truncated and written to
 #: ``0x56787FFD12345678``: not the address it meant, not the prefix it typed,
 #: and possibly mapped. This is the module whose docstring says a write to a
 #: rounded address is exactly the failure it must not have.
@@ -132,11 +132,10 @@ MAX_ADDRESS = ADDRESS_SPACE_END - 1
 #: approach 4 GiB. The module-base-plus-RVA form cannot either: ``SizeOfImage``
 #: in a PE header is 32 bits, so an RVA never exceeds this.
 #:
-#: What it does *not* do is keep the running address inside the space. An
-#: earlier version of this comment claimed it kept ``base + sum(offsets)``
-#: clear of the truncation boundary, and that arithmetic does not happen:
-#: ``resolve_pointer_chain`` dereferences first and adds each offset to a value
-#: read out of the target, which is unbounded up to 2**64-1. The address is
+#: What it does *not* do is keep the running address inside the space, since
+#: ``base + sum(offsets)`` is never computed: ``resolve_pointer_chain``
+#: dereferences first and adds each offset to a value read out of the target,
+#: which is unbounded up to 2**64-1. The address is
 #: guarded where it is produced instead -- see the check at the end of
 #: ``resolve_pointer_chain``.
 #:
@@ -144,12 +143,11 @@ MAX_ADDRESS = ADDRESS_SPACE_END - 1
 #: (see :func:`parse_offset`).
 MAX_OFFSET_MAGNITUDE = 1 << 32
 
-#: Defaults for ``find_pointer_paths``, named because they were previously
-#: written twice — once in the signature and once in the clamp — and the two
-#: disagreed for ``None``. ``max_offset`` fell to 0, the *narrowest* possible
-#: search, while its siblings fell to their documented defaults; a client that
-#: renders an unset integer as JSON null therefore got "No static path reached
-#: that address" for a target the default call finds.
+#: Defaults for ``find_pointer_paths``, named once so the signature and the
+#: clamp cannot disagree about ``None``. A client that renders an unset integer
+#: as JSON null must get the documented default, not 0 -- for ``max_offset``
+#: that is the *narrowest* possible search, which answers "No static path
+#: reached that address" for a target the default call finds.
 POINTER_SCAN_DEFAULTS = {"max_depth": 3, "max_offset": 1024, "max_results": 20}
 
 #: Ceilings for the same three. ``max_offset`` may legitimately be 0 (keep only
@@ -226,9 +224,9 @@ def format_address(address: int) -> str:
 def format_offset(offset: int) -> str:
     """Render a pointer-chain offset so it parses back.
 
-    ``"0x%X" % -8`` is ``"0x-8"``, which :func:`parse_offset` rejects — so the
-    server was echoing a recipe it could not read back, and a model that fed
-    its own output in again got told the offset was malformed.
+    ``"0x%X" % -8`` is ``"0x-8"``, which :func:`parse_offset` rejects — so a
+    plain format would echo a recipe the server cannot read back, and a model
+    that fed its own output in again would be told the offset was malformed.
     """
     return "-0x%X" % -offset if offset < 0 else "0x%X" % offset
 
@@ -236,14 +234,14 @@ def format_offset(offset: int) -> str:
 def parse_offset(raw: Any, *, field: str = "offset") -> int:
     """Parse a pointer-chain offset, which may be negative.
 
-    Split from :func:`parse_address` because the two have different domains,
-    and conflating them cost real capability: an address is never negative, but
-    a Cheat Engine recipe walks backwards through a struct all the time
-    (``[-0x8]`` to reach a header behind the pointer) and
-    ``resolve_pointer_chain`` handles those fine. Rejecting them made a whole
-    class of published recipe unusable here — with a message ("must not be
-    negative") that reads like a formatting complaint, so a model would "fix"
-    it by mangling the offset rather than reporting the limit.
+    Split from :func:`parse_address` because the two have different domains:
+    an address is never negative, but a Cheat Engine recipe walks backwards
+    through a struct all the time (``[-0x8]`` to reach a header behind the
+    pointer) and ``resolve_pointer_chain`` handles those fine. Rejecting them
+    would make a whole class of published recipe unusable here — with a
+    message ("must not be negative") that reads like a formatting complaint,
+    so a model would "fix" it by mangling the offset rather than reporting the
+    limit.
 
     Bounded in magnitude all the same: an offset is added to an address, and
     an absurd one pushes an intermediate dereference past the truncation
@@ -304,9 +302,9 @@ def parse_address(raw: Any, *, field: str = "address") -> int:
     if value < 0:
         raise ToolError("%s must not be negative (got %r)." % (field, raw))
 
-    # The floor was checked and the ceiling was not, and only one of the two
-    # fails loudly. See MAX_ADDRESS: past it, ctypes truncates instead of
-    # raising, so the write lands somewhere else entirely.
+    # The ceiling needs its own check: unlike the floor, it does not fail
+    # loudly. See MAX_ADDRESS: past it, ctypes truncates instead of raising,
+    # so the write lands somewhere else entirely.
     if value > MAX_ADDRESS:
         raise ToolError(
             "%s 0x%X is outside any 64-bit address space (it needs %d bits). "
@@ -457,9 +455,9 @@ def parse_int_arg(raw: Any, field: str, *, default: Optional[int] = None) -> int
     A bare ``int(raw)`` on a model-supplied value is a hole in this module's
     error contract: only ``ToolError`` text reaches the model, and everything
     else becomes an ``UnexpectedToolError`` whose message is withheld. So
-    ``max_depth="deep"`` or ``limit="dez"`` raised
-    ``ValueError: invalid literal for int() with base 10`` and the model was
-    told nothing it could act on — for an argument it can fix by itself, which
+    ``max_depth="deep"`` or ``limit="dez"`` through ``int()`` raises
+    ``ValueError: invalid literal for int() with base 10`` and the model is
+    told nothing it can act on — for an argument it can fix by itself, which
     is the worst case to be silent about.
 
     ``bool`` is refused for the same reason :func:`parse_address` refuses it:
@@ -509,8 +507,8 @@ def parse_scan_bounds(
         the result set (``"int == 100"``, ``"float in [1.5, 2.5]"``).
     :raises ToolError: when a range comparison lacks ``end_value``, or a
         single-value comparison is given one — silently ignoring the latter
-        turned ``exact, 90..100`` into a plain exact-90 whose empty result
-        pointed the caller away from the real mistake.
+        would turn ``exact, 90..100`` into a plain exact-90 whose empty result
+        points the caller away from the real mistake.
     """
     parsed = parse_value(pytype, value)
 
@@ -579,17 +577,17 @@ def parse_bufflength(raw: int, pytype: Type, *, required: bool) -> Optional[int]
     it is free to mean "use the default".
     """
     if isinstance(raw, bool):
-        # An int subclass, so `bufflength=true` silently meant a width of 1 --
+        # An int subclass, so `bufflength=true` would silently mean a width of 1 --
         # the same trap parse_address and _parse_signed_int already refuse.
         raise ToolError(
             "bufflength must be a number, not a boolean (got %r)." % raw
         )
 
-    # Parsed before the sentinel test, not after: a client that sends the
-    # sentinel as the string "0" -- truthy as a str -- used to skip the
-    # "use the default" branch and be refused as an unusable width for every
-    # numeric type, and for str / bytes it reached the read as a zero-byte
-    # buffer instead of the "bufflength is required" guidance.
+    # Parsed before the sentinel test, not after: a client may send the
+    # sentinel as the string "0", which is truthy as a str. Tested raw, it
+    # would skip the "use the default" branch and be refused as an unusable
+    # width for every numeric type, and for str / bytes reach the read as a
+    # zero-byte buffer instead of the "bufflength is required" guidance.
     if isinstance(raw, str) and not raw.strip():
         raw = 0  # "" was falsy, so it always meant the default; keep that
     width = parse_int_arg(raw, "bufflength", default=0)
@@ -768,10 +766,8 @@ class MemoryToolset:
             desktop is several hundred entries of pure noise.
         :param limit: maximum entries to return, capped at
             ``server_info().limits.max_page_size``.
-        :param offset: entries to skip, for paging. It exists because the cap
-            used to be a different number from the one ``server_info``
-            advertised, with no way past it — so everything after the first
-            page was simply unreachable.
+        :param offset: entries to skip, for paging: page with ``offset`` to
+            reach every entry past the first ``limit``.
 
         Processes blocked by the server's policy are omitted, and the result
         says how many were hidden so the absence of an expected target is
@@ -1111,7 +1107,7 @@ class MemoryToolset:
             # "smallest tid", which holds on Linux (POSIX tids are assigned in
             # order) and macOS (tid is the system-wide thread id, also
             # assigned in order) but not reliably on Windows. Calling it
-            # main_thread_id presented a guess to the model as a fact.
+            # main_thread_id would present a guess to the model as a fact.
             "lowest_thread_id": (
                 min(thread.tid for thread in threads) if threads else None
             ),
@@ -1575,7 +1571,8 @@ class MemoryToolset:
         pytype = parse_value_type(value_type)
         width = parse_bufflength(bufflength, pytype, required=True)
         # Echo the canonical spelling, as scan results do: " INT " parses
-        # fine, and repeating it verbatim fed it into the model's next call.
+        # fine, but repeating it verbatim would feed it into the model's next
+        # call.
         value_type = canonical_value_type(value_type)
 
         with session.lock, self._target_errors(
@@ -1648,13 +1645,13 @@ class MemoryToolset:
             # multibyte text the widths disagree too: the read counts bytes
             # while a ``str`` write caps characters.)
             # Through the same ceiling the scan paths use. `_write_span` on an
-            # omitted bufflength returns len(value), which drove both the undo
+            # omitted bufflength returns len(value), which sizes both the undo
             # read's allocation *in this server* and the write into the target:
-            # a 200 KB `bytes` value wrote 200 KB, 3x the cap the very same
-            # call enforces when the width is explicit and past what
-            # server_info advertises. The str case escaped even with an
-            # explicit width, since that cap counts characters — 65000 of them
-            # in CJK is 195 KB.
+            # uncapped, a 200 KB `bytes` value would write 200 KB, 3x the cap
+            # the very same call enforces when the width is explicit and past
+            # what server_info advertises. The str case needs the cap even with
+            # an explicit width, since that width counts characters — 65000 of
+            # them in CJK is 195 KB.
             replaced_width = self._capped_span(pytype, width, parsed)
             undo_type = "bytes" if pytype in (str, bytes) else value_type
 
@@ -1681,8 +1678,8 @@ class MemoryToolset:
             "value_type": value_type,
             # What actually landed, not what was asked for: a str/bytes
             # bufflength is a cap, so write_value(..., "DEADBEEF", 2) writes
-            # DE AD. Echoing the request made the model report a change that
-            # did not happen.
+            # DE AD. Echoing the request would make the model report a change
+            # that did not happen.
             "written": format_value(_truncate_to_span(pytype, parsed, replaced_width)),
             "requested": format_value(parsed),
             "previous_value": format_value(previous),
@@ -1691,7 +1688,7 @@ class MemoryToolset:
             "previous_value_type": None if previous is None else undo_type,
             # And the width, because replaying without it defaults to the
             # type's natural size: undoing a 4-byte float write as an 8-byte
-            # double put zeros in the replaced span and clobbered four bytes
+            # double puts zeros in the replaced span and clobbers four bytes
             # past it. The hint is documented as the only way back, so it has
             # to carry every argument needed to actually get back.
             "previous_value_bufflength": (
@@ -1786,9 +1783,9 @@ class MemoryToolset:
 
         if isinstance(offsets, str):
             # Same hazard as ProcessPolicy.allowed_names, same fix: a str is a
-            # valid sequence of str, so a scalar was consumed character by
-            # character — "108" became a three-hop chain [1, 0, 8] instead of
-            # one hop of 0x108. Whether that errors or silently resolves to a
+            # valid sequence of str, so a scalar would be consumed character
+            # by character — "108" would become a three-hop chain [1, 0, 8]
+            # instead of one hop of 0x108. Whether that errors or silently resolves to a
             # plausible-looking wrong address depends on what happens to be
             # mapped in the target, which nobody controls; and the address goes
             # straight into read_value or write_value.
@@ -1817,8 +1814,7 @@ class MemoryToolset:
         # lands under zero. Calling that "outside any 64-bit address space" is
         # true but useless — it points at the offset instead of at the dead
         # pointer. It also has to be rendered with `format_offset`: `"0x%X" %
-        # -8` is `"0x-8"`, the malformed form that function exists to prevent,
-        # and this message was emitting it.
+        # -8` is `"0x-8"`, the malformed form that function exists to prevent.
         if final < 0:
             raise ToolError(
                 "The chain resolved to %s, below zero. The last offset is "
@@ -1871,9 +1867,7 @@ class MemoryToolset:
             the assumed struct size. Larger finds more and noisier paths.
             An explicit ``0`` is meaningful rather than "unset": it keeps only
             hops that point exactly at the address. ``null`` means "use the
-            default" (1024) — it used to mean 0, i.e. the narrowest search
-            possible, which is the opposite of what a client sending null for
-            an unset field intends.
+            default" (1024), not 0.
         :param max_results: stop after this many paths.
 
         This is the most expensive tool here, and it runs in two phases: it
@@ -1945,8 +1939,8 @@ class MemoryToolset:
                     max_results=max_results,
                     # In pieces: the map reports progress -- the only point
                     # this tool can check its deadline in that phase -- once
-                    # per region, so one multi-gigabyte heap used to be mapped
-                    # in full however far past the budget that ran. Aligned
+                    # per region, so one whole multi-gigabyte heap would be
+                    # mapped however far past the budget that ran. Aligned
                     # seams cut no pointer slot, and the map merges adjacent
                     # ranges back, so the result is unchanged.
                     memory_regions=split_regions(
@@ -2030,12 +2024,12 @@ class MemoryToolset:
     def _resolved_width(self, pytype: Type, width: Optional[int], *values: Any) -> int:
         """Resolve a width from the value, then apply the same text cap.
 
-        ``parse_bufflength`` capped an *explicit* ``bufflength``, but leaving it
-        at 0 — which the tools' own docstrings recommend — inferred the width
-        from the value with no ceiling at all, handing
-        ``create_string_buffer`` whatever length the model happened to send.
-        That reopened the allocation path the cap exists to close, and the
-        inferred width is then stored on the scan and reused by every refine.
+        ``parse_bufflength`` caps only an *explicit* ``bufflength``. Leaving it
+        at 0 — which the tools' own docstrings recommend — infers the width
+        from the value, and without this ceiling would hand
+        ``create_string_buffer`` whatever length the model happened to send,
+        reopening the allocation path the cap exists to close. The inferred
+        width is also stored on the scan and reused by every refine.
         """
         try:
             resolved = resolve_bufflength_for_value(pytype, width, *values)
@@ -2063,7 +2057,7 @@ class MemoryToolset:
         :param hint: what to say after an ``OSError`` / library error, in place
             of the default "the target has most likely exited". A read of an
             unmapped page on a live target has a different likely cause from a
-            region walk failing, and one wording for both misdirected the
+            region walk failing, and one wording for both would misdirect the
             model.
 
         ``_surface_errors`` in the protocol layer only forwards our own
@@ -2091,9 +2085,9 @@ class MemoryToolset:
         except ValueError as error:
             # The encoders reject a value that cannot fit the requested width
             # ("value 70000 does not fit in a 2-byte integer", "byte string too
-            # long"). Those messages are already the right advice — they just
-            # never reached the model, because the SDK withholds the text of
-            # anything that is not our ToolError.
+            # long"). Those messages are already the right advice, but the SDK
+            # withholds the text of anything that is not our ToolError, so they
+            # have to be re-raised as one to reach the model.
             raise ToolError(
                 "%s rejected an argument: %s. Check value_type, value and "
                 "bufflength against each other — a value has to fit the width "
@@ -2101,8 +2095,8 @@ class MemoryToolset:
             ) from None
         except MemoryError as error:
             # A width the caps let through can still fail to allocate. This is
-            # neither OSError nor PyMemoryEditorError, so it used to reach the
-            # model as a bare "Error executing tool".
+            # neither OSError nor PyMemoryEditorError, so without this clause
+            # it reaches the model as a bare "Error executing tool".
             raise ToolError(
                 "%s ran out of memory: %s. Ask for a smaller bufflength or a "
                 "narrower scan." % (action, error)
@@ -2133,9 +2127,9 @@ class MemoryToolset:
 
         Always a concrete count, never ``None``. It is reported to the model as
         ``previous_value_bufflength`` and interpolated into the undo hint, so an
-        unresolved width there meant the most ordinary call of all —
+        unresolved width there would make the most ordinary call of all —
         ``write_value(.., "int", "5")`` with the schema's default
-        ``bufflength=0`` — died on ``"%d" % None``.
+        ``bufflength=0`` — die on ``"%d" % None``.
 
         For ``str`` / ``bytes`` an explicit ``width`` is a *cap* rather than an
         exact size, so the span is whichever is smaller; the value never pads.
@@ -2201,9 +2195,9 @@ class MemoryToolset:
         """Best-effort executable name for a pid, for the policy check.
 
         Guarded: this runs on every ``open_process(pid=...)`` — the most common
-        flow there is — and an enumeration failure here used to escape as a raw
-        OSError, which is exactly the stripped "Error executing tool
-        open_process" the translation layer exists to prevent.
+        flow there is — and an enumeration failure escaping as a raw OSError
+        would be exactly the stripped "Error executing tool open_process" the
+        translation layer exists to prevent.
         """
         try:
             for found_pid, name in iter_processes():
@@ -2238,7 +2232,7 @@ class MemoryToolset:
         :param split_overlap: when not ``None``, regions larger than a batch
             are first cut into pieces overlapping by this many bytes (see
             :func:`~PyMemoryEditor.mcp.session.split_regions`), so one huge
-            region no longer runs past the deadline unchecked. ``None`` keeps
+            region cannot run past the deadline unchecked. ``None`` keeps
             regions whole, for the scans a seam could change.
         """
         limit = self.config.max_scan_results
@@ -2267,7 +2261,7 @@ class MemoryToolset:
                     addresses.append(address)
                     # Collect one *past* the cap to tell a complete set of
                     # exactly `limit` matches from a genuinely truncated one.
-                    # Stopping at `limit` marked the former partial, and
+                    # Stopping at `limit` would mark the former partial, and
                     # refine_scan propagates that flag down the whole chain —
                     # so the server would keep insisting a model rescan a set
                     # that was already exhaustive.
@@ -2522,9 +2516,10 @@ def _truncate_to_span(pytype: Type, value: Any, span: Optional[int]) -> Any:
 def _clamp_pointer_arg(name: str, value: Any) -> int:
     """Resolve one ``find_pointer_paths`` argument: null means the default.
 
-    Written once for all three because writing it per argument is how they
-    came to disagree — ``max_offset or 0`` sent a null to the narrowest
-    possible search while ``max_depth or 3`` sent it to the documented one.
+    Written once for all three so they cannot disagree: per-argument
+    defaults like ``max_offset or 0`` and ``max_depth or 3`` would send a
+    null to the narrowest possible search for one and to the documented
+    default for the other.
     """
     low, high = POINTER_SCAN_LIMITS[name]
     resolved = parse_int_arg(value, name, default=POINTER_SCAN_DEFAULTS[name])

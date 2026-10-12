@@ -154,8 +154,8 @@ def _read_only(toolset: MemoryToolset) -> List[Tuple[Any, bool]]:
     the pure lookups, false of anything that mints a scan id. Clients use the
     hint to decide what may be retried silently.
 
-    ``close_process`` used to be in this list and is not read-only: it drops
-    the handle *and* every scan result set in the session. A client that treats
+    ``close_process`` is deliberately absent because it is not read-only: it
+    drops the handle *and* every scan result set in the session. A client that treats
     ``read_only_hint`` as licence to auto-approve would throw away a refine
     chain the user spent minutes building, without asking. It is registered
     separately below.
@@ -278,13 +278,13 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
 
         # Before the prompt, not after. The cap lives in SessionStore.open,
         # which runs once the handle is already open -- so without this the
-        # user was asked to approve an attach, approved it, and then got told
-        # the server was full. An approval is the most expensive step here and
-        # the one thing this server must not spend carelessly.
+        # user would be asked to approve an attach, approve it, and then be
+        # told the server was full. An approval is the most expensive step
+        # here and the one thing this server must not spend carelessly.
         #
-        # The store renders the message, rather than this having its own: the
-        # first version here named neither the open sessions nor their scan
-        # counts, so the path a model actually hits was the less useful one.
+        # The store renders the message, rather than this having its own, so
+        # the path a model actually hits names the open sessions and their
+        # scan counts too.
         refusal = await _off_loop(toolset.store.capacity_refusal, found_pid)
         if refusal is not None:
             raise SdkToolError(
@@ -637,7 +637,7 @@ def build_server(
 
     # Not read-only, and the annotation has to say so. Closing discards every
     # scan set in the session -- work that took the user real time to narrow --
-    # so a client auto-approving on `read_only_hint` was destroying state on
+    # so a client auto-approving on `read_only_hint` would destroy state on
     # the model's word alone.
     #
     # No `_ALWAYS_ASK`, though: this is the ordinary way to finish, and

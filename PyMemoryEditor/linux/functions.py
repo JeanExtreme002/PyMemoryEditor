@@ -60,9 +60,9 @@ class _LinuxPartialIOError(OSError):
 
     In practice this happens when the target range straddles a freed or
     inaccessible page — the kernel transfers what it can and reports the
-    short count. The previous behavior was to silently accept the short
-    result, leaving the caller's buffer half-filled with real bytes and
-    half with zeros (which downstream decoding would treat as valid).
+    short count. Accepting the short result would leave the caller's buffer
+    half-filled with real bytes and half with zeros (which downstream
+    decoding would treat as valid), so it raises instead.
     Mirrors the partial-read/write check the Win32 backend already does
     against ``ReadProcessMemory`` / ``WriteProcessMemory``.
     """
@@ -181,10 +181,9 @@ def _make_read_chunk(pid: int):
     """
     Build a `read_chunk(address, size)` closure bound to ``pid``.
 
-    Each backend used to define this closure inline three times
+    One closure per backend, shared by its three scan entry points
     (``search_addresses_by_value``, ``search_addresses_by_pattern``,
-    ``search_values_by_addresses``) — drift between them was a recurring source
-    of subtle bugs. Owning it once per backend keeps the trio in lockstep.
+    ``search_values_by_addresses``) so they cannot drift.
     """
     def read_chunk(address: int, size: int):
         buffer = (ctypes.c_byte * size)()
@@ -722,7 +721,7 @@ def get_processes() -> Generator[Tuple[int, str], None, None]:
 
     ``comm`` is raw bytes a process can set to anything (``prctl(PR_SET_NAME)``),
     so it is decoded as UTF-8 with replacement characters, independent of the
-    locale: one process with a non-UTF-8 name used to raise
+    locale, so one process with a non-UTF-8 name cannot raise
     ``UnicodeDecodeError`` here and break ``OpenProcess(name=...)`` for every
     other process.
     """
