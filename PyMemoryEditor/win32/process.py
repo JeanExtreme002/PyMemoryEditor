@@ -8,11 +8,14 @@ from ..util import (
     UNSET,
     prepare_write,
     resolve_bufflength,
+    prepare_search_target,
     resolve_bufflength_for_value,
 )
 
 from ..enums import ScanTypesEnum
+from ..util.pattern import compile_pattern
 from ..process import AbstractProcess
+from ..process._guard import guard_generator
 from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
@@ -226,17 +229,23 @@ class WindowsProcess(AbstractProcess):
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()
-        return GetMemoryRegions(self.__process_handle, self.pid)
+        return guard_generator(
+            GetMemoryRegions(self.__process_handle, self.pid), self.__require_open
+        )
 
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         self.__require_open()
         # Toolhelp32 takes a PID, not a handle — no PROCESS_* right needed.
-        return GetThreads(self.pid)
+        return guard_generator(GetThreads(self.pid), self.__require_open)
 
     def get_modules(self) -> Generator[ModuleInfo, None, None]:
         self.__require_open()
-        # The Toolhelp32 module snapshot takes a PID, not a handle.
-        return GetModules(self.pid)
+        # The Toolhelp32 module snapshot takes a PID, not a handle; the handle
+        # only tells a failed snapshot of an exited target apart.
+        return guard_generator(
+            GetModules(self.pid, process_handle=self.__process_handle),
+            self.__require_open,
+        )
 
     def search_by_addresses(
         self,
@@ -251,7 +260,7 @@ class WindowsProcess(AbstractProcess):
         self.__require_read()
         if addresses is UNSET:
             raise TypeError("addresses is required.")
-        return SearchValuesByAddresses(
+        scan = SearchValuesByAddresses(
             self.__process_handle,
             pytype,
             resolve_bufflength(pytype, bufflength),
@@ -260,6 +269,7 @@ class WindowsProcess(AbstractProcess):
             raise_error=raise_error,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_value(
         self,
@@ -281,10 +291,14 @@ class WindowsProcess(AbstractProcess):
                 "Use the method search_by_value_between(...) to search within a range of values."
             )
 
-        return SearchAddressesByValue(
+        width = resolve_bufflength_for_value(pytype, bufflength, value)
+        # Validate now: the scan is a generator, so its own checks would
+        # only raise on the first next(), far from this call.
+        prepare_search_target(pytype, width, value)
+        scan = SearchAddressesByValue(
             self.__process_handle,
             pytype,
-            resolve_bufflength_for_value(pytype, bufflength, value),
+            width,
             value,
             scan_type,
             progress_information,
@@ -293,6 +307,7 @@ class WindowsProcess(AbstractProcess):
             aligned=aligned,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_pattern(
         self,
@@ -304,7 +319,10 @@ class WindowsProcess(AbstractProcess):
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
         self.__require_read()
-        return SearchAddressesByPattern(
+        # Compile now so a malformed pattern raises at the call, not on the
+        # first next() of the returned generator.
+        compile_pattern(pattern, byte_length=byte_length)
+        scan = SearchAddressesByPattern(
             self.__process_handle,
             pattern,
             byte_length=byte_length,
@@ -312,6 +330,7 @@ class WindowsProcess(AbstractProcess):
             memory_regions=memory_regions,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_value_between(
         self,
@@ -334,10 +353,14 @@ class WindowsProcess(AbstractProcess):
             if not_between
             else ScanTypesEnum.VALUE_BETWEEN
         )
-        return SearchAddressesByValue(
+        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
+        # Validate now: the scan is a generator, so its own checks would
+        # only raise on the first next(), far from this call.
+        prepare_search_target(pytype, width, (start, end))
+        scan = SearchAddressesByValue(
             self.__process_handle,
             pytype,
-            resolve_bufflength_for_value(pytype, bufflength, start, end),
+            width,
             (start, end),
             scan_type,
             progress_information,
@@ -346,6 +369,7 @@ class WindowsProcess(AbstractProcess):
             aligned=aligned,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def read_process_memory(
         self,

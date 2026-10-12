@@ -58,6 +58,15 @@ For full control:
 OpenProcess(name="game.exe", permission=ProcessOperationsEnum.PROCESS_ALL_ACCESS)
 ```
 
+```{admonition} Least privilege
+:class: note
+
+The default mask includes `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` even when
+you only read, so the handle you hold can modify the target. A tool that only
+reads or scans should pass the read-only mask above: write and allocation
+calls on that object then raise `PermissionError` before reaching the OS.
+```
+
 ### Running as Administrator
 
 To attach to **elevated apps, services or another user's processes**, run your
@@ -73,7 +82,9 @@ memory access from user mode at all.
 
 `allocate_memory` defaults to `PAGE_EXECUTE_READWRITE` so the region is
 usable for both data and injected code. Pass an explicit
-`MemoryProtectionsEnum` value to narrow it.
+`MemoryProtectionsEnum` value to narrow it. Writable *and* executable memory
+is what exploits look for, and security software flags it, so allocate data
+buffers with `PAGE_READWRITE` and keep RWX for code you actually inject.
 
 `free_memory` releases only what this object allocated unless you pass an
 explicit `size=` — see [Allocating and freeing](guide/allocate-free.md).
@@ -135,6 +146,15 @@ process has been given the same pid. Single-value reads are checked too when a
 pidfd is available; without one they skip the check for speed, and a read of
 an exited target fails with the kernel's `OSError` (`ESRCH`). `close()`
 releases the pidfd.
+
+### Non-UTF-8 names and paths
+
+A process or thread name (`/proc/<pid>/comm`, set with `prctl(PR_SET_NAME)`)
+and a mapped file path in `/proc/<pid>/maps` are raw bytes, not necessarily
+UTF-8. They are decoded as UTF-8 with replacement characters (`\ufffd`), so
+such a process never breaks the process list, `OpenProcess(name=...)`, or a
+region walk; match it by pid instead. `MemoryRegion.struct.Path` keeps the raw
+bytes of the path.
 
 ### Writes to read-only pages
 
@@ -206,6 +226,13 @@ RWX. Under W^X (Apple Silicon, the hardened runtime) it does not, so the page
 is briefly non-executable, and a target thread executing on that exact page
 during the write can crash.
 
+`VM_PROT_COPY` also adds `WRITE` to the region's *maximum* protection (that
+is what lets the write land on a read-only file mapping, privately to the
+target). The restore lowers the maximum back as well, so the page ends with
+both its original protection and its original maximum. The written page stays
+a private copy: other processes mapping the same file, and the file itself,
+never see the change.
+
 **If the restore step fails** (e.g. the target task disappears mid-call),
 the library emits a `ResourceWarning` and the target page is left more
 permissive than it started. Treat the warning as a signal to investigate.
@@ -216,6 +243,12 @@ share it. On Windows, `WriteProcessMemory` changes the page protection
 itself (which is why the handle needs `PROCESS_VM_OPERATION`), and Linux
 cannot change it at all: writing to a read-only page there fails with
 `OSError` (`EFAULT`) — see [Linux → Writes to read-only pages](#writes-to-read-only-pages).
+
+### `close()` result
+
+`close()` returns `False` (and logs a warning) when the task port could not
+be released, the same way the Windows backend reports a failed `CloseHandle`.
+The object is closed either way.
 
 ### `ModuleInfo.size` quirk
 

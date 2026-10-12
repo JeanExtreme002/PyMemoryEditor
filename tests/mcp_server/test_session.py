@@ -588,3 +588,98 @@ class TestRegionRendering:
     def test_empty_path_becomes_null(self):
         rendered = region_to_dict(MemoryRegion(address=0x1000, size=1, path=""))
         assert rendered["path"] is None
+
+
+class TestSplitRegions:
+    """One huge region used to be one batch, read end to end before the scan
+    deadline was looked at again."""
+
+    @pytest.fixture(autouse=True)
+    def small_pieces(self, monkeypatch):
+        monkeypatch.setattr(session_module, "SPLIT_ALIGNMENT", 16)
+        monkeypatch.setattr(session_module, "MIN_SPLIT_BYTES", 16)
+
+    def test_small_regions_are_left_alone(self):
+        from PyMemoryEditor.mcp.session import split_regions
+
+        regions = [MemoryRegion(address=0x1000, size=32, is_writable=True)]
+        assert split_regions(regions, 64) == regions
+
+    def test_a_large_region_is_cut_at_aligned_seams(self):
+        from PyMemoryEditor.mcp.session import split_regions
+
+        region = MemoryRegion(address=0x1000, size=100, is_writable=True, path="x")
+        pieces = split_regions([region], 32)
+        assert [(p.address - 0x1000, p.size) for p in pieces] == [
+            (0, 32), (32, 32), (64, 32), (96, 4)
+        ]
+        assert all(p.is_writable and p.path == "x" for p in pieces)
+
+    def test_overlap_extends_every_piece_but_the_last(self):
+        from PyMemoryEditor.mcp.session import split_regions
+
+        region = MemoryRegion(address=0x1000, size=100)
+        pieces = split_regions([region], 32, overlap=3)
+        assert [(p.address - 0x1000, p.size) for p in pieces] == [
+            (0, 35), (32, 35), (64, 35), (96, 4)
+        ]
+
+    @pytest.mark.parametrize("pytype, needle, scan_type", [
+        ("bytes", b"\xde\xad\xbe\xef", "exact"),
+        ("str", b"hello", "exact"),
+        ("int", (0x11223344).to_bytes(4, "little"), "exact_unaligned"),
+    ])
+    def test_the_real_scanner_finds_the_same_matches_split_or_whole(
+        self, pytype, needle, scan_type
+    ):
+        """Through the library's own scan loop, with matches placed across
+        every seam: splitting must neither lose nor duplicate one."""
+        import ctypes
+
+        from PyMemoryEditor.enums import ScanTypesEnum
+        from PyMemoryEditor.mcp.session import split_regions
+        from PyMemoryEditor.process.scanning import iter_search_results
+
+        base, size = 0x10000, 256
+        memory = bytearray(size)
+        for start in (0, 13, 30, 31, 62, 64, 94, 200, size - len(needle)):
+            memory[start : start + len(needle)] = needle
+
+        def read_chunk(address, length):
+            offset = address - base
+            data = bytes(memory[offset : offset + length])
+            return (ctypes.c_char * len(data)).from_buffer_copy(data)
+
+        types = {"bytes": bytes, "str": str, "int": int}
+        target = needle if pytype != "str" else needle
+        aligned = scan_type != "exact_unaligned"
+
+        def scan(regions):
+            return sorted(iter_search_results(
+                regions, types[pytype], len(needle), target,
+                ScanTypesEnum.EXACT_VALUE, read_chunk, aligned=aligned,
+            ))
+
+        whole = [MemoryRegion(address=base, size=size, is_readable=True)]
+        pieces = split_regions(whole, 32, overlap=len(needle) - 1)
+        assert len(pieces) > 1
+        assert scan(pieces) == scan(whole)
+        assert len(scan(whole)) >= 5
+
+
+class TestFindScanHoldsTheStoreLock:
+    def test_the_lookup_runs_under_the_lock(self, store, monkeypatch):
+        session = store.open(FakeProcess(), 4242, "faketarget")
+        scan = store.new_scan(
+            session, value_type="int", bufflength=4, addresses=[1], description="d"
+        )
+        seen = []
+        original = Session.get_scan
+
+        def spy(self, scan_id):
+            seen.append(store._lock.locked())
+            return original(self, scan_id)
+
+        monkeypatch.setattr(Session, "get_scan", spy)
+        assert store.find_scan(scan.scan_id)[1] is scan
+        assert seen == [True]

@@ -6,7 +6,16 @@ Beyond memory regions, PyMemoryEditor exposes two more inspection APIs:
   process.
 - **`get_threads()`** — every thread currently running inside the process.
 
-Both return immutable dataclass instances and are cross-platform.
+Both return immutable dataclass instances and are cross-platform. Both are
+generators bound to the process object: resuming one after `close()` raises
+`ClosedProcess` instead of reading through a released handle.
+
+When the target has exited, `get_modules()` raises `ProcessIDNotExistsError`
+on every platform. `get_threads()` differs per platform: Linux raises
+`ProcessIDNotExistsError`, Windows yields nothing (its thread snapshot is
+system-wide and simply has no entries for the pid), and macOS raises
+`OSError` (`task_threads` fails on a dead task). Don't read "no threads" as
+"still running".
 
 ## Loaded modules
 

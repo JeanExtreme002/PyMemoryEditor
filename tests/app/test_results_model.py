@@ -74,7 +74,7 @@ def test_patch_values_drops_scattered_rows_with_one_reset(qapp):
     # Previous column carries the value from before the patch.
     assert model._previous[: 3] == [survivors[0], survivors[1], survivors[2]]
     # Index agrees with the lists for every surviving address.
-    assert all(model._index[a] == r for r, a in enumerate(model._addresses))
+    assert all(model._row_of(a) == r for r, a in enumerate(model._addresses))
     assert len(model._index) == model.count()
 
     assert resets == [1]
@@ -97,7 +97,59 @@ def test_patch_values_announces_one_removal_per_contiguous_run(qapp):
     assert removed == [(999, 999), (500, 502), (10, 19)]
     assert model.count() == 1_000 - len(drop)
     assert model.address_at(10) == 0x1000 + 4 * 20
-    assert all(model._index[a] == r for r, a in enumerate(model._addresses))
+    assert all(model._row_of(a) == r for r, a in enumerate(model._addresses))
+
+
+def test_a_chunked_refine_keeps_rows_right_without_rebuilding_the_index(qapp):
+    """
+    A refine arrives as many small chunks. Every chunk used to rebuild the
+    whole address→row dict after dropping its rows, which made a refine
+    quadratic in the result count. The index is now adjusted incrementally:
+    whatever order the chunks arrive in, and whether they drop a scattered
+    set (reset path) or a few blocks (per-run path), every surviving address
+    still maps to its row and patches land on the right one.
+    """
+    from PyMemoryEditor.app import results_view
+
+    count = 6_000
+    model = _filled_model(count)
+    rng = random.Random(11)
+    order = list(range(count))
+    rng.shuffle(order[count // 2:])  # first half in order, second shuffled
+    keep = {i for i in range(count) if rng.random() < 0.4 or i % 97 == 0}
+
+    rebuilds = []
+    original = results_view.ResultsModel._reindex
+    model._reindex = lambda: (rebuilds.append(1), original(model))
+
+    for start in range(0, count, 750):
+        model.patch_values(
+            [(0x1000 + 4 * i, i + 1, i in keep) for i in order[start:start + 750]]
+        )
+        assert all(model._row_of(a) == r for r, a in enumerate(model._addresses))
+
+    survivors = sorted(keep)
+    assert model.all_addresses() == [0x1000 + 4 * i for i in survivors]
+    assert [model.value_at(r) for r in range(model.count())] == [i + 1 for i in survivors]
+    # Amortised: rebuilt only when the dropped rows outnumber the kept ones,
+    # never once per chunk.
+    assert len(rebuilds) <= 2
+
+    # A second pass on the shrunken model still lands every value correctly.
+    model.patch_values([(0x1000 + 4 * i, -i, True) for i in survivors])
+    assert [model.value_at(r) for r in range(model.count())] == [-i for i in survivors]
+
+
+def test_duplicate_addresses_fall_back_to_a_rebuilt_index(qapp):
+    model = _filled_model(4)
+    model.append_chunk([(0x1000, 9)])  # 0x1000 now appears twice
+    model.patch_values([(0x1004, 0, False)])
+    assert model.all_addresses() == [0x1000, 0x1008, 0x100C, 0x1000]
+    assert all(
+        model._row_of(a) == r
+        for r, a in enumerate(model._addresses)
+        if a != 0x1000
+    )
 
 
 def test_patch_values_coalesces_data_changed_per_run(qapp):
@@ -137,7 +189,7 @@ def test_rows_dropped_then_appended_keep_a_consistent_index(qapp):
     model.append_chunk([(0x9000, 1), (0x9004, 2)])
 
     assert model.all_addresses() == [0x1000, 0x1008, 0x1010, 0x9000, 0x9004]
-    assert model._index[0x9004] == 4
+    assert model._row_of(0x9004) == 4
     assert model.address_at(4) == 0x9004
 
 

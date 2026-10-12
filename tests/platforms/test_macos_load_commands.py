@@ -183,3 +183,66 @@ def test_the_real_module_list_is_unaffected():
     assert len(modules) > 1
     assert any(module.size > 0 for module in modules)
     assert len(modules) < mac._MAX_DYLD_IMAGES
+
+
+# --- dead target -------------------------------------------------------------
+
+# A pid that is not in use (pid_max's ceiling), as in test_macos_region_walk.
+_DEAD_PID = 2**31 - 1
+
+
+def test_get_modules_of_a_gone_process_raises_process_id_not_exists(monkeypatch):
+    from PyMemoryEditor import ProcessIDNotExistsError
+    from PyMemoryEditor.macos.types import MACH_SEND_INVALID_DEST
+
+    monkeypatch.setattr(
+        mac.libsystem, "task_info", lambda *args: MACH_SEND_INVALID_DEST
+    )
+
+    with pytest.raises(ProcessIDNotExistsError) as excinfo:
+        list(mac.get_modules(0x1234, _DEAD_PID))
+    assert excinfo.value.pid == _DEAD_PID
+
+
+def test_get_modules_of_a_live_process_keeps_the_os_error(monkeypatch):
+    import os
+
+    from PyMemoryEditor.macos.types import MACH_SEND_INVALID_DEST
+
+    monkeypatch.setattr(
+        mac.libsystem, "task_info", lambda *args: MACH_SEND_INVALID_DEST
+    )
+
+    with pytest.raises(OSError, match="task_info"):
+        list(mac.get_modules(0x1234, os.getpid()))
+
+
+# --- one load-command parse per image for the pointer scanner ----------------
+
+
+def test_static_image_ranges_parse_each_image_once(monkeypatch):
+    import os
+
+    from PyMemoryEditor import OpenProcess
+
+    calls = []
+    real = mac._iter_load_commands
+
+    def counting(task, load_address):
+        calls.append(load_address)
+        return real(task, load_address)
+
+    with OpenProcess(pid=os.getpid()) as process:
+        modules = list(process.get_modules())
+        without_segments = sum(
+            1 for module in modules
+            if not mac.get_image_segments(_TASK, module.base_address)
+        )
+        monkeypatch.setattr(mac, "_iter_load_commands", counting)
+        ranges = process._static_image_ranges()
+
+    assert ranges
+    # get_image_segments parses each image once; the __TEXT size parse that
+    # get_modules used to add for every image now runs only as the fallback
+    # for an image without segments.
+    assert len(calls) == len(modules) + without_segments

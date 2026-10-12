@@ -264,3 +264,237 @@ def test_free_memory_refuses_an_unknown_address_before_any_syscall(monkeypatch):
             process.free_memory(0x1000)
 
     assert calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Module snapshot: ERROR_BAD_LENGTH retry, exited target
+# --------------------------------------------------------------------------- #
+
+_INVALID_HANDLE_VALUE = ctypes.wintypes.HANDLE(-1).value
+_FAKE_SNAPSHOT = 0x5678
+
+
+def _fake_snapshot(script):
+    """
+    ``CreateToolhelp32Snapshot`` stand-in: each entry of ``script`` is a Win32
+    error code (the call fails with it) or ``None`` (it returns a snapshot
+    handle). The last entry repeats forever.
+    """
+    calls = []
+
+    def fake(flags, pid):
+        index = min(len(calls), len(script) - 1)
+        err = script[index]
+        calls.append(err)
+        if err is None:
+            return _FAKE_SNAPSHOT
+        ctypes.set_last_error(err)
+        return _INVALID_HANDLE_VALUE
+
+    fake.calls = calls
+    return fake
+
+
+@pytest.fixture
+def empty_module_walk(monkeypatch):
+    """Module32FirstW finds nothing; CloseHandle is recorded, not called."""
+    closed = []
+    monkeypatch.setattr(win.kernel32, "Module32FirstW", lambda snapshot, entry: 0)
+    monkeypatch.setattr(win.kernel32, "CloseHandle", lambda handle: closed.append(handle) or 1)
+    # The target is alive unless a test says otherwise.
+    monkeypatch.setattr(win, "ProcessExists", lambda pid: True)
+    return closed
+
+
+def test_module_snapshot_is_retried_on_bad_length(monkeypatch, empty_module_walk):
+    # MSDN: "If the function fails with ERROR_BAD_LENGTH, retry the function
+    # until it succeeds" — the loader was changing the module list.
+    fake = _fake_snapshot([_ERROR_BAD_LENGTH, _ERROR_BAD_LENGTH, None])
+    monkeypatch.setattr(win.kernel32, "CreateToolhelp32Snapshot", fake)
+
+    assert list(win.GetModules(os.getpid())) == []
+    assert fake.calls == [_ERROR_BAD_LENGTH, _ERROR_BAD_LENGTH, None]
+    assert empty_module_walk == [_FAKE_SNAPSHOT]
+
+
+def test_module_snapshot_retries_are_bounded(monkeypatch, empty_module_walk):
+    fake = _fake_snapshot([_ERROR_BAD_LENGTH])
+    monkeypatch.setattr(win.kernel32, "CreateToolhelp32Snapshot", fake)
+
+    with pytest.raises(OSError) as excinfo:
+        list(win.GetModules(os.getpid()))
+
+    assert excinfo.value.winerror == _ERROR_BAD_LENGTH
+    assert len(fake.calls) == win._SNAPSHOT_BAD_LENGTH_RETRIES
+
+
+def test_other_snapshot_errors_are_not_retried(monkeypatch, empty_module_walk):
+    fake = _fake_snapshot([_ERROR_ACCESS_DENIED])
+    monkeypatch.setattr(win.kernel32, "CreateToolhelp32Snapshot", fake)
+
+    with pytest.raises(PermissionError):
+        list(win.GetModules(os.getpid()))
+
+    assert fake.calls == [_ERROR_ACCESS_DENIED]
+
+
+def test_a_failed_module_snapshot_of_an_exited_target_reports_the_pid(
+    monkeypatch, empty_module_walk
+):
+    from PyMemoryEditor import ProcessIDNotExistsError
+
+    monkeypatch.setattr(
+        win.kernel32, "CreateToolhelp32Snapshot", _fake_snapshot([_ERROR_INVALID_PARAMETER])
+    )
+    monkeypatch.setattr(win, "_process_has_exited", lambda handle: True)
+
+    with pytest.raises(ProcessIDNotExistsError) as excinfo:
+        list(win.GetModules(4242, process_handle=_FAKE_HANDLE))
+
+    assert excinfo.value.pid == 4242
+
+
+def test_an_empty_module_snapshot_of_an_exited_target_reports_the_pid(
+    monkeypatch, empty_module_walk
+):
+    from PyMemoryEditor import ProcessIDNotExistsError
+
+    monkeypatch.setattr(win.kernel32, "CreateToolhelp32Snapshot", _fake_snapshot([None]))
+    monkeypatch.setattr(win, "_process_has_exited", lambda handle: True)
+
+    with pytest.raises(ProcessIDNotExistsError):
+        list(win.GetModules(4242, process_handle=_FAKE_HANDLE))
+
+    assert empty_module_walk == [_FAKE_SNAPSHOT]  # the snapshot is still closed
+
+
+def test_an_empty_module_snapshot_of_a_live_target_is_just_empty(
+    monkeypatch, empty_module_walk
+):
+    monkeypatch.setattr(win.kernel32, "CreateToolhelp32Snapshot", _fake_snapshot([None]))
+    monkeypatch.setattr(win, "_process_has_exited", lambda handle: False)
+
+    assert list(win.GetModules(4242, process_handle=_FAKE_HANDLE)) == []
+
+
+# --------------------------------------------------------------------------- #
+# Short ReadProcessMemory during a scan
+# --------------------------------------------------------------------------- #
+
+def _fake_short_read(fill, returned):
+    """``ReadProcessMemory`` that succeeds but copies only ``returned`` bytes
+    of ``fill`` (the rest of the caller's buffer stays zero)."""
+    def fake(handle, address, buffer, size, bytes_read_ref):
+        ctypes.memmove(buffer, fill, min(returned, size))
+        bytes_read_ref._obj.value = returned  # type: ignore[attr-defined]
+        return 1
+    return fake
+
+
+def test_a_short_read_is_a_skipped_chunk_not_a_zero_filled_one(monkeypatch):
+    monkeypatch.setattr(
+        win.kernel32, "ReadProcessMemory", _fake_short_read(b"\xff" * 8, 8)
+    )
+
+    assert win._read_region(_FAKE_HANDLE, 0x1000, 16) is None
+
+
+def test_a_short_read_cannot_produce_false_zero_matches(monkeypatch):
+    # The zero-filled tail of a short read used to be scanned like real
+    # memory, so an exact scan for 0 "found" four addresses nobody read.
+    monkeypatch.setattr(
+        win.kernel32, "ReadProcessMemory", _fake_short_read(b"\xff" * 16, 16)
+    )
+    regions = [_region(0x10000)]  # 4 KiB region, only 16 bytes "readable"
+
+    assert list(win.SearchAddressesByValue(
+        _FAKE_HANDLE, int, 4, 0, memory_regions=regions
+    )) == []
+
+
+def test_a_full_read_is_returned(monkeypatch):
+    monkeypatch.setattr(
+        win.kernel32, "ReadProcessMemory", _fake_short_read(b"\x01" * 16, 16)
+    )
+
+    assert bytes(win._read_region(_FAKE_HANDLE, 0x1000, 16)) == b"\x01" * 16
+
+
+# --------------------------------------------------------------------------- #
+# GetMappedFileNameW buffer growth
+# --------------------------------------------------------------------------- #
+
+def test_a_long_mapped_file_name_is_not_truncated(monkeypatch):
+    name = "\\Device\\HarddiskVolume1\\" + "d" * 900 + "\\file.bin"
+    sizes = []
+
+    def fake(handle, address, buffer, size):
+        # Like the real call: copy what fits (NUL-terminated) and return the
+        # number of characters copied.
+        sizes.append(size)
+        copied = min(len(name), size - 1)
+        ctypes.memmove(
+            buffer,
+            ctypes.create_unicode_buffer(name[:copied]),
+            (copied + 1) * ctypes.sizeof(ctypes.c_wchar),
+        )
+        return copied
+
+    monkeypatch.setattr(win.psapi, "GetMappedFileNameW", fake)
+
+    assert win._get_mapped_filename(_FAKE_HANDLE, 0x1000) == name
+    assert sizes[0] == win._MAPPED_FILENAME_BUF_SIZE
+    assert len(sizes) > 1
+
+
+def test_a_short_mapped_file_name_takes_one_call(monkeypatch):
+    sizes = []
+
+    def fake(handle, address, buffer, size):
+        sizes.append(size)
+        source = ctypes.create_unicode_buffer("\\Device\\x.dll")
+        ctypes.memmove(buffer, source, ctypes.sizeof(source))
+        return len(source.value)
+
+    monkeypatch.setattr(win.psapi, "GetMappedFileNameW", fake)
+
+    assert win._get_mapped_filename(_FAKE_HANDLE, 0x1000) == "\\Device\\x.dll"
+    assert len(sizes) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Value / pattern scans keep a snapshot's order
+# --------------------------------------------------------------------------- #
+
+def _capture_scan_regions(monkeypatch, name):
+    captured = []
+
+    def fake(memory_regions, *args, **kwargs):
+        captured.append([region.address for region in memory_regions])
+        return iter(())
+
+    monkeypatch.setattr(win, name, fake)
+    return captured
+
+
+@pytest.mark.parametrize("snapshot_type, expected", (
+    # A snapshot is sorted by contract, so it is not sorted again. The order
+    # here deliberately breaks that contract to make a re-sort observable.
+    (MemoryRegionSnapshot, [0x3000, 0x1000]),
+    (list, [0x1000, 0x3000]),
+))
+def test_scans_sort_only_non_snapshot_inputs(monkeypatch, snapshot_type, expected):
+    values = _capture_scan_regions(monkeypatch, "iter_search_results")
+    patterns = _capture_scan_regions(monkeypatch, "iter_pattern_results")
+
+    list(win.SearchAddressesByValue(
+        _FAKE_HANDLE, int, 4, 7,
+        memory_regions=snapshot_type([_region(0x3000), _region(0x1000)]),
+    ))
+    list(win.SearchAddressesByPattern(
+        _FAKE_HANDLE, "90",
+        memory_regions=snapshot_type([_region(0x3000), _region(0x1000)]),
+    ))
+
+    assert values == [expected]
+    assert patterns == [expected]

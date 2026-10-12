@@ -705,6 +705,189 @@ def test_compare_view_says_why_values_are_missing_when_modules_fail(
         process.close()
 
 
+class _FakePointerProcess:
+    """Enough of a process for the pointer-scan worker and dialog, no memory."""
+
+    def __init__(self, path_count=0, stall_in_map_build=False):
+        self.pid = os.getpid()
+        self.path_count = path_count
+        self.stall_in_map_build = stall_in_map_build
+
+    def scan_pointer_paths(self, target, *, progress_callback, should_stop, **_kwargs):
+        from PyMemoryEditor import PointerPath
+
+        import time
+
+        while self.stall_in_map_build:
+            # Stop raises out of the progress callback, as in the real build.
+            progress_callback(0.5)
+            time.sleep(0.005)
+        for index in range(self.path_count):
+            yield PointerPath(
+                base_address=0x1000 + 8 * index, offsets=(0x10,), ptr_size=8
+            )
+
+    def resolve_pointer_chain(self, base_address, offsets, ptr_size=8):
+        return 0x5000
+
+    def read_process_memory(self, address, pytype, length):
+        return 7
+
+    def get_modules(self):
+        return []
+
+    def close(self):
+        pass
+
+
+def _pointer_request(max_results=None):
+    from PyMemoryEditor.app.pointer_scan_dialog import PointerScanRequest
+    from PyMemoryEditor.app.value_types import find_spec
+
+    return PointerScanRequest(
+        target_address=0x5000, max_depth=2, max_offset=0x100, ptr_size=8,
+        writable_only=False, aligned=True, max_results=max_results,
+        spec=find_spec("4 Bytes (Int32)"), length=4,
+    )
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_stopping_a_pointer_scan_mid_map_build_says_stopped(qtbot):
+    """
+    Stop while the pointer map was still being built made the worker report
+    0 paths, and the dialog answered "No pointer paths found. Try a higher
+    depth…" for a scan that never got to look.
+    """
+    from PyMemoryEditor.app.pointer_scan_dialog import PointerScanDialog, PointerScanWorker
+
+    process = _FakePointerProcess(stall_in_map_build=True)
+    dialog = PointerScanDialog(process)
+    qtbot.addWidget(dialog)
+    dialog._set_scanning(True)
+    dialog._start_worker(PointerScanWorker(process, _pointer_request(), dialog))
+    dialog._on_stop()
+    qtbot.waitUntil(lambda: dialog._worker is None, timeout=5000)
+
+    label = dialog._count_label.text()
+    assert "No pointer paths found" not in label
+    assert label.startswith("Stopped")
+    dialog.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_pointer_scan_worker_waits_for_the_ui_to_draw_its_batches(qtbot):
+    """
+    ``rows_ready`` was fire-and-forget: with "Unlimited" results a fast walk
+    queued batches faster than the UI appended them, without bound. The worker
+    now waits once a few batches are outstanding, and Stop still ends it.
+    """
+    from PyMemoryEditor.app.pointer_scan_dialog import (
+        _MAX_BATCHES_IN_FLIGHT,
+        _UI_BATCH,
+        PointerScanDialog,
+        PointerScanWorker,
+    )
+
+    process = _FakePointerProcess(path_count=_UI_BATCH * 20)
+    worker = PointerScanWorker(process, _pointer_request())
+    received = []
+    worker.rows_ready.connect(received.append)  # drawn, but never acknowledged
+    worker.start()
+    try:
+        qtbot.waitUntil(
+            lambda: worker._in_flight == _MAX_BATCHES_IN_FLIGHT, timeout=5000
+        )
+        qtbot.wait(100)
+        assert worker.isRunning()
+        assert worker._in_flight == _MAX_BATCHES_IN_FLIGHT
+        assert len(received) <= _MAX_BATCHES_IN_FLIGHT
+    finally:
+        worker.cancel()
+        assert worker.wait(5000)
+
+    # Wired through the dialog, every batch is acknowledged and the scan ends.
+    total = _UI_BATCH * 20 + 37
+    process = _FakePointerProcess(path_count=total)
+    dialog = PointerScanDialog(process)
+    qtbot.addWidget(dialog)
+    dialog._set_scanning(True)
+    dialog._start_worker(PointerScanWorker(process, _pointer_request(), dialog))
+    qtbot.waitUntil(lambda: dialog._worker is None, timeout=10000)
+    assert dialog._model.rowCount() == total
+    assert dialog._count_label.text() == f"{total:,} pointer path(s)."
+    dialog.close()
+
+
+@pytest.mark.skipif(not qtbot_available, reason="pytest-qt not installed.")
+def test_compare_shows_a_path_whose_module_is_gone_as_unresolved(
+    qtbot, tmp_path, monkeypatch
+):
+    """
+    Compare used to fall back to a module path's saved absolute base when the
+    module isn't loaded now, walking the previous run's addresses and showing
+    whatever it read there as the path's value. Rescan drops such a path;
+    compare keeps it (membership is decided by recipe) but shows it
+    unresolved. A path whose module is loaded still resolves.
+    """
+    import json
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QFileDialog
+
+    from PyMemoryEditor import PointerPath
+    from PyMemoryEditor.app.pointer_scan_dialog import (
+        _COL_RESOLVED,
+        _COL_VALUE,
+        PointerScanDialog,
+    )
+
+    paths = [
+        PointerPath(
+            base_address=0x1000, offsets=(0x10,), module=name,
+            module_offset=0x1000, ptr_size=8,
+        )
+        for name in ("engine.dll", "game.exe")
+    ]
+    files = []
+    for index in range(2):
+        target = tmp_path / ("scan%d.json" % index)
+        target.write_text(json.dumps({"paths": [p.to_dict() for p in paths]}))
+        files.append(str(target))
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *a, **k: (files, ""))
+
+    process = _FakePointerProcess()
+    # Only game.exe is loaded in this run.
+    process.get_modules = lambda: [SimpleNamespace(name="game.exe", base_address=0x400000)]
+    dialog = PointerScanDialog(process)
+    qtbot.addWidget(dialog)
+    dialog._on_compare_saved()
+
+    shown = {
+        dialog._model.item(row, 0).data(0x0100).module: (
+            dialog._model.item(row, _COL_RESOLVED).text(),
+            dialog._model.item(row, _COL_VALUE).text(),
+        )
+        for row in range(dialog._model.rowCount())
+    }
+    assert shown == {"engine.dll": ("—", "—"), "game.exe": ("0x5000", "7")}
+
+    # Acting on the unresolved row must not walk its saved absolute base
+    # either: "Add to cheat table" / "hex viewer" refuse it with a message.
+    from PySide6.QtWidgets import QMessageBox
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+    rows = {
+        dialog._model.item(row, 0).data(0x0100).module: row
+        for row in range(dialog._model.rowCount())
+    }
+    for module, expected in (("engine.dll", None), ("game.exe", 0x5000)):
+        dialog._table.selectRow(rows[module])
+        assert dialog._resolve_selected() == expected
+    assert len(warnings) == 1 and "engine.dll" in warnings[0][2]
+    dialog.close()
+
+
 # --- excepthook ------------------------------------------------------------- #
 
 

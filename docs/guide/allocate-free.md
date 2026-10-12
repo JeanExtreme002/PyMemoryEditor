@@ -138,6 +138,18 @@ Common values:
 <tr><td><code>PAGE_EXECUTE_READWRITE</code> <em>(default)</em></td><td>Read + write + execute.</td></tr>
 </table>
 
+```{admonition} Prefer the least protection you need
+:class: tip
+
+The Windows default is `PAGE_EXECUTE_READWRITE` for compatibility with code
+injection workflows. Memory that is both writable and executable is a classic
+exploit primitive and is flagged by security software, so pass
+`PAGE_READWRITE` for data buffers and switch to an executable protection only
+for code. Allocating also requires a handle opened with
+`PROCESS_VM_OPERATION`; a read-only handle (see
+[Platform notes](../platform-notes.md)) refuses it with `PermissionError`.
+```
+
 ### On macOS
 
 Pass a `VM_PROT_*` bitmask (or leave `None` for the default of read+write):

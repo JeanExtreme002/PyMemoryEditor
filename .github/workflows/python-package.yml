@@ -23,6 +23,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege for every job's GITHUB_TOKEN. Nothing here writes to the
+# repository: checkout only reads it, and the Codecov uploads authenticate
+# with CODECOV_TOKEN, not with the workflow token.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -59,6 +65,16 @@ jobs:
     - name: Run mypy
       run: |
         mypy PyMemoryEditor
+    # The shared layer branches on sys.platform in places (process/util.py,
+    # the backend dispatch in __init__.py), and mypy only follows the branch
+    # for the platform it is told about. Checking as Windows and macOS too
+    # covers the branches this Linux runner would otherwise skip, without
+    # paying for a Windows or macOS runner. The backends themselves stay
+    # under ignore_errors (see pyproject.toml).
+    - name: Run mypy as Windows and macOS
+      run: |
+        mypy --platform win32 PyMemoryEditor
+        mypy --platform darwin PyMemoryEditor
 
   build:
     needs: lint
@@ -160,10 +176,18 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
 
-  # macOS gets a single cell instead of a row in the matrix above. Its only
+  # macOS gets its own short row instead of joining the matrix above. Its
   # purpose is to measure the `macos` backend so the merged Codecov report
-  # covers all three platforms; the Python-version sweep stays on Linux and
-  # Windows, where it costs a fraction of the wall clock.
+  # covers all three platforms; the full Python-version sweep stays on Linux
+  # and Windows, where it costs a fraction of the wall clock.
+  #
+  # Three versions -- the floor (3.10), the reference (3.12) and the newest
+  # stable (3.14) -- rather than one: the backend is ctypes over Mach structs
+  # and a ctypes or struct-layout change between CPython versions would only
+  # show up here. A cell took 4m06s on 2026-10-11, under the slowest Windows
+  # cell, and the cells run in parallel, so the extra two cost runner minutes
+  # (free for a public repository) but no wall clock. With build-mcp's macOS
+  # cell that is four concurrent macOS jobs, inside the free plan's five.
   #
   # Unlike the matrix, this job installs `.[dev,speed]` (NumPy). That is not a
   # preference — it is what makes a macOS cell viable at all. A macOS process
@@ -179,12 +203,16 @@ jobs:
     runs-on: macos-latest
     # Hard ceiling so a pathological scan can never sit at the 6h default.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12', '3.14']
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-    - name: Set up Python
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
       with:
-        python-version: '3.12'
+        python-version: ${{ matrix.python-version }}
     # No Qt system-library step here: the PySide6 macOS wheel bundles its own
     # Qt frameworks, unlike the Linux one.
     - name: Install dependencies (with NumPy speed extra)
@@ -204,7 +232,7 @@ jobs:
       uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
       with:
         files: ./coverage.xml
-        flags: macOS-py3.12
+        flags: macOS-py${{ matrix.python-version }}
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
 
@@ -264,6 +292,29 @@ jobs:
       with:
         files: ./coverage.xml
         flags: speed-Linux-py3.12
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+    # The Qt app is omitted from the library gate (.coveragerc-lib), so on its
+    # own it was never measured at all. This measures it -- informational, no
+    # floor -- under its own config and Codecov flag, so the number exists and
+    # its trend is visible before anyone picks a gate for it. Only tests/app
+    # runs here (~30s), and only in this one cell: the app is the same Python
+    # on every OS.
+    - name: Measure app coverage (informational)
+      # The same tests already gate in the step above; a failure here must
+      # not fail the job a second time.
+      if: always()
+      continue-on-error: true
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        pytest tests/app -q --cov=PyMemoryEditor/app --cov-config=.coveragerc-app --cov-report=term --cov-report=xml:coverage-app.xml
+    - name: Upload app coverage to Codecov
+      if: always()
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        files: ./coverage-app.xml
+        flags: app-Linux-py3.12
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
 
@@ -398,26 +449,47 @@ jobs:
 
   # Dependency audit. The core library has no dependencies; this checks the
   # extras (Qt app, MCP SDK, NumPy) and their transitive closure against the
-  # PyPI advisory database. Advisory, not a gate: `continue-on-error` keeps a
-  # new upstream CVE from blocking an unrelated PR, and the weekly `schedule`
-  # run surfaces it on main regardless. Dependabot security PRs remain the
+  # PyPI advisory database.
+  #
+  # Advisory on pull requests, a gate everywhere else. On a PR,
+  # `continue-on-error` keeps a new upstream CVE from blocking an unrelated
+  # change. On main (push, the weekly `schedule`, a manual dispatch) a finding
+  # fails the run -- and publish.yml only releases a commit whose run here is
+  # green, so a release cannot ship with an unanswered advisory in the extras'
+  # ranges. The answer is a pin bump, or `--ignore-vuln <ID>` below with a
+  # comment saying why it does not apply. Dependabot security PRs remain the
   # fix path; this job is the visibility the disabled version-update PRs
-  # don't provide (see .github/dependabot.yml).
+  # don't provide (see .github/dependabot.yml). It was green on the runs that
+  # led up to v3.2.0, which is what made it safe to turn into a gate.
   audit:
     needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
     - name: Set up Python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
       with:
         python-version: '3.12'
+    # The extras go into their own venv and only their frozen closure is
+    # audited: auditing the job's environment would also audit pip-audit's own
+    # dependencies, and a CVE in one of those would block a release of a
+    # package that never ships it.
     - name: Install the package with every runtime extra
       run: |
-        python -m pip install --upgrade pip
-        pip install ".[app,mcp,speed]" pip-audit
+        python -m pip install --upgrade pip pip-audit
+        python -m venv "$RUNNER_TEMP/target"
+        "$RUNNER_TEMP/target/bin/pip" install ".[app,mcp,speed]"
+        "$RUNNER_TEMP/target/bin/pip" freeze --exclude PyMemoryEditor > "$RUNNER_TEMP/requirements.txt"
+    # Retried because the advisory service is a network dependency: a
+    # transient API failure must not turn a release gate red. A real finding
+    # fails all three attempts the same way.
     - name: pip-audit
       run: |
-        pip-audit --progress-spinner off
+        for attempt in 1 2 3; do
+          pip-audit --progress-spinner off --no-deps --disable-pip \
+            -r "$RUNNER_TEMP/requirements.txt" && exit 0
+          [ "$attempt" -lt 3 ] && sleep 30
+        done
+        exit 1

@@ -117,6 +117,10 @@ stable = process.compare_pointer_scans(
 )
 ```
 
+Two paths match when they have the same module, module offset, offsets **and**
+pointer width: a path from a 32-bit scan never matches one from a 64-bit scan,
+even with identical numbers, because walking them reads different memory.
+
 Once you're down to one pointer, use it forever:
 
 ```python

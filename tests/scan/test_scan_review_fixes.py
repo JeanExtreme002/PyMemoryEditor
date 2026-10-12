@@ -441,3 +441,126 @@ def test_scan_drivers_accept_a_generator_of_regions():
         )
     )
     assert [address for address, _info in found] == [0x1000, 0x1004]
+
+
+# --------------------------------------------------------------------------- #
+# Variable-width regex across a chunk boundary; overlap past the region end
+# --------------------------------------------------------------------------- #
+
+def test_variable_width_match_straddling_a_chunk_is_reported_once(monkeypatch):
+    """The overlap bytes of chunk 1 are chunk 2's first bytes: chunk 2 used to
+    report the suffix ``BB`` of the ``BBBB`` match chunk 1 already reported."""
+    _small_chunks(monkeypatch, 8)
+    memory = FakeMemory({0x1000: b"......BBBB" + b"." * 10})
+    assert _pattern_hits(memory, rb"B+", byte_length=4) == [0x1006]
+
+
+def test_variable_width_matches_agree_with_one_finditer(monkeypatch):
+    """Chunked non-overlapping results equal a single ``finditer`` over the
+    region whenever no match is longer than ``byte_length``."""
+    rng = random.Random(11)
+    data = bytes(rng.choice(b"AB..") for _ in range(400))
+    pattern = rb"A[AB]{0,3}"
+    expected = [0x1000 + m.start() for m in re.finditer(pattern, data, re.DOTALL)]
+    for chunk in (4, 5, 8, 13):
+        _small_chunks(monkeypatch, chunk)
+        assert _pattern_hits(FakeMemory({0x1000: data}), pattern, byte_length=4) == expected
+
+
+def test_chunk_overlap_never_reads_past_the_region(monkeypatch):
+    """With a width that does not divide the chunk size, the last chunk is
+    shorter than the overlap; reading the full overlap ran past the region
+    into unmapped memory and failed the read."""
+    _small_chunks(monkeypatch, 8)
+    data = b"." * 5 + b"ab@c.de" + b"." * 30  # 42 bytes: last chunk is 2 bytes
+    memory = FakeMemory({0x1000: data})  # nothing mapped after the region
+    email = rb"[a-z]+@[a-z]+\.[a-z]+"
+    assert _pattern_hits(memory, email, byte_length=8) == [0x1005]
+    assert all(addr + size <= 0x1000 + len(data) for addr, size in memory.reads)
+
+    memory = FakeMemory({0x1000: data})
+    found = list(iter_search_results(
+        memory.regions, bytes, 7, b"ab@c.de", ScanTypesEnum.EXACT_VALUE,
+        memory.read_chunk,
+    ))
+    assert found == [0x1005]
+    assert all(addr + size <= 0x1000 + len(data) for addr, size in memory.reads)
+
+
+# --------------------------------------------------------------------------- #
+# progress_callback reports progress with or without hits
+# --------------------------------------------------------------------------- #
+
+def test_search_progress_callback_reaches_one_without_any_hit(monkeypatch):
+    _small_chunks(monkeypatch, 16)
+    memory = FakeMemory({0x1000: bytes(64), 0x9000: bytes(32)})
+    seen = []
+    found = list(iter_search_results(
+        memory.regions, int, 4, struct.pack("<i", 7), ScanTypesEnum.EXACT_VALUE,
+        memory.read_chunk, progress_information=True, progress_callback=seen.append,
+    ))
+    assert found == []
+    assert seen == sorted(seen) and len(seen) == 6
+    assert seen[-1] == 1.0
+
+
+def test_pattern_progress_callback_counts_skipped_chunks(monkeypatch):
+    _small_chunks(monkeypatch, 16)
+    memory = FakeMemory({0x1000: bytes(48)})
+
+    def flaky(address, size):
+        if address == 0x1010:
+            raise OSError(14, "Bad address")
+        return memory.read_chunk(address, size)
+
+    seen = []
+    compiled, length = compile_pattern("90 90")
+    assert list(iter_pattern_results(
+        memory.regions, compiled, length, flaky,
+        transient_error_check=lambda exc: True, progress_callback=seen.append,
+    )) == []
+    assert seen == [pytest.approx(1 / 3), pytest.approx(2 / 3), 1.0]
+
+
+def test_progress_callback_on_an_empty_region_list():
+    seen = []
+    assert list(iter_search_results(
+        [], int, 4, b"\x00" * 4, ScanTypesEnum.EXACT_VALUE,
+        lambda a, s: None, progress_callback=seen.append,
+    )) == []
+    compiled, length = compile_pattern("90")
+    assert list(iter_pattern_results(
+        [], compiled, length, lambda a, s: None, progress_callback=seen.append,
+    )) == []
+    assert seen == [1.0, 1.0]
+
+
+# --------------------------------------------------------------------------- #
+# Eager validation helper for the generator-returning search methods
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    "pytype, width, value",
+    [
+        (int, 4, 2 ** 40),        # does not fit
+        (float, 5, 1.0),          # no 5-byte float
+        (str, 0, ""),             # zero-width target
+        (str, 2, "abc"),          # longer than the width
+        (bool, 2, True),          # wider than c_bool
+        (list, 4, 1),             # unsupported type
+        (int, 4, (1, 2 ** 40)),   # one end of a range does not fit
+    ],
+)
+def test_prepare_search_target_raises_what_the_scan_would(pytype, width, value):
+    from PyMemoryEditor.util import prepare_search_target
+
+    with pytest.raises(ValueError):
+        prepare_search_target(pytype, width, value)
+
+
+def test_prepare_search_target_returns_the_scan_encoding():
+    from PyMemoryEditor.util import prepare_search_target, values_to_bytes
+
+    assert prepare_search_target(int, 4, -1) == b"\xff" * 4
+    assert prepare_search_target(int, 2, (1, 2)) == values_to_bytes(int, 2, (1, 2))
+    assert prepare_search_target(str, 3, "hi") == b"hi\x00"

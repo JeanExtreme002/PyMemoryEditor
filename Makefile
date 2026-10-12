@@ -31,7 +31,7 @@ help:
 	@echo "  $(YELLOW)run-app$(NC)          - Run the PyMemoryEditor App"
 	@echo "  $(YELLOW)install-dev$(NC)      - Install development dependencies"
 	@echo "  $(YELLOW)test$(NC)             - Run the full test suite (incl. live whole-process scans)"
-	@echo "  $(YELLOW)test-fast$(NC)        - Run the fast lane only (-m \"not slow\", ~20 s)"
+	@echo "  $(YELLOW)test-fast$(NC)        - Run the fast lane only (-m \"not slow\", ~20 s; skips the scan property tests)"
 	@echo "  $(YELLOW)test-mcp$(NC)         - Run the MCP server suite"
 	@echo "  $(YELLOW)test-verbose$(NC)     - Run tests with verbose output"
 	@echo "  $(YELLOW)test-coverage$(NC)    - Run tests with coverage report"
@@ -42,7 +42,8 @@ help:
 	@echo "  $(YELLOW)build-wheel$(NC)      - Build wheel package"
 	@echo "  $(YELLOW)build-sdist$(NC)      - Build source distribution"
 	@echo "  $(YELLOW)validate$(NC)         - Validate package"
-	@echo "  $(YELLOW)publish$(NC)          - Publish to PyPI by token (emergency path; releases go through GitHub Releases)"
+	@echo "  $(YELLOW)publish$(NC)          - MANUAL FALLBACK: upload to PyPI by token from a checkout of the release tag"
+	@echo "                     (releases go through GitHub Releases; see CONTRIBUTING.md)"
 	@echo "  $(YELLOW)publish-test$(NC)     - Publish to Test PyPI"
 	@echo "  $(YELLOW)ci$(NC)               - Mirror the CI workflow: lint, type-check, both coverage-gated test runs"
 	@echo "  $(YELLOW)version$(NC)          - Show current version"
@@ -56,6 +57,7 @@ help:
 	@echo "  $(YELLOW)venv$(NC)             - Create virtual environment"
 	@echo "  $(YELLOW)venv-activate$(NC)    - Show command to activate venv"
 	@echo "  $(YELLOW)all$(NC)              - Run full pipeline (install, lint, test, build)"
+	@echo "  $(YELLOW)release$(NC)          - MANUAL FALLBACK: pre-publish checks, then publish (same tag guard)"
 
 # Create virtual environment
 .PHONY: venv
@@ -113,8 +115,11 @@ test:
 	$(PYTHON) -m pytest $(TEST_DIR) -v
 	@echo "$(GREEN)Tests completed!$(NC)"
 
-# Fast lane: unit, property and GUI tests only (~20 s). The markers are
-# defined in pyproject.toml.
+# Fast lane: unit, GUI and MCP tests (~20 s: ~13 s for the library and app,
+# ~5 s for the MCP suite). Everything marked `slow` is left out, which
+# includes the scan property tests in tests/scan/test_scan_properties.py --
+# run `make test` or `pytest tests/scan/test_scan_properties.py` for those.
+# The markers are defined in pyproject.toml.
 .PHONY: test-fast
 test-fast:
 	@echo "$(GREEN)Running the fast test lane (-m \"not slow\")...$(NC)"
@@ -202,15 +207,34 @@ build-sdist: clean
 .PHONY: validate
 validate: build
 	@echo "$(GREEN)Validating package...$(NC)"
-	$(PYTHON) -m twine check $(DIST_DIR)/*
+	$(PYTHON) -m twine check --strict $(DIST_DIR)/*
 	@echo "$(GREEN)Package validation completed!$(NC)"
 
-# Publish to PyPI by API token. This is the emergency path only: releases are
-# cut by publishing a GitHub Release, which .github/workflows/publish.yml
-# uploads to PyPI via trusted publishing (OIDC, no token) and then lists on
-# the MCP Registry. Use this target only if that workflow is unavailable.
+# Refuse to upload anything but a clean checkout of the tag `v<__version__>`.
+# publish.yml checks the tag against the version before its upload; this is
+# the same guard for the manual path, plus a clean tree so the files built are
+# the files tagged. It does not replace the workflow's other gate (a green
+# python-package.yml run on the commit): check that by hand.
+.PHONY: check-release-tag
+check-release-tag:
+	@version=$$($(PYTHON) -c "import $(PACKAGE_NAME); print($(PACKAGE_NAME).__version__)") && \
+	tag="v$$version" ; \
+	found=$$(git tag --points-at HEAD | xargs) ; \
+	if ! git tag --points-at HEAD | grep -qx "$$tag"; then \
+		echo "$(RED)HEAD is not tagged $$tag (found: $${found:-no tag}). Check out the release tag first.$(NC)"; exit 1; \
+	fi; \
+	if [ -n "$$(git status --porcelain --untracked-files=no)" ]; then \
+		echo "$(RED)The working tree has uncommitted changes; publish from a clean checkout of $$tag.$(NC)"; exit 1; \
+	fi; \
+	echo "$(GREEN)HEAD is $$tag, matching __version__ $$version.$(NC)"
+
+# Publish to PyPI by API token. MANUAL FALLBACK only: releases are cut by
+# publishing a GitHub Release, which .github/workflows/publish.yml uploads to
+# PyPI via trusted publishing (OIDC, no token) and then lists on the MCP
+# Registry. Use this target only if that workflow is unavailable, and note it
+# does not list the release on the MCP Registry.
 .PHONY: publish
-publish: validate
+publish: check-release-tag validate
 	@echo "$(YELLOW)Are you sure you want to publish to PyPI? [y/N]$(NC)" && read ans && [ $${ans:-N} = y ]
 	@echo "$(GREEN)Publishing to PyPI...$(NC)"
 	$(PYTHON) -m twine upload $(DIST_DIR)/*
@@ -332,9 +356,10 @@ info:
 	@echo "$(GREEN)Installed packages:$(NC)"
 	@$(PIP) list | grep -E "($(PACKAGE_NAME)|pytest|flake8|mypy|twine|build)"
 
-# Quick release workflow
+# Manual release (fallback for publish.yml; see `publish`). The tag guard runs
+# first so a mismatched checkout fails before the full pre-publish pipeline.
 .PHONY: release
-release: pre-publish publish
+release: check-release-tag pre-publish publish
 	@echo "$(GREEN)Release completed!$(NC)"
 
 .PHONY: release-test

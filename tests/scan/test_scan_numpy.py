@@ -202,3 +202,50 @@ def test_numpy_dtype_has_no_fast_path_for_unusual_combos(size, pytype):
 def test_numpy_dtype_mapping(size, pytype, expected):
     assert scan_numpy.numpy_dtype("little", size, pytype) == expected
     assert scan_numpy.numpy_dtype("big", size, pytype) == expected.replace("<", ">")
+
+
+# --- NOT_EXACT through scan_memory_for_exact_value --------------------------
+
+
+def _scan_exact_kernel(data, target, size, pytype, *, aligned, numpy_enabled):
+    original = scan_numpy.NUMPY_AVAILABLE
+    scan_numpy.NUMPY_AVAILABLE = numpy_enabled
+    try:
+        return list(
+            scan_module.scan_memory_for_exact_value(
+                data, len(data), target, size,
+                ScanTypesEnum.NOT_EXACT_VALUE, pytype, aligned=aligned,
+            )
+        )
+    finally:
+        scan_numpy.NUMPY_AVAILABLE = original
+
+
+@numpy_required
+@pytest.mark.parametrize("size", [1, 2, 4, 8])
+@pytest.mark.parametrize("aligned", [True, False])
+def test_int_not_exact_kernel_equivalence(size, aligned):
+    """Integer NOT_EXACT is routed to the vectorized path when NumPy is
+    present; it must report exactly the pure-Python loop's offsets. The data
+    is mostly the target, so the skips (not just the hits) are exercised, and
+    its length is not a multiple of the width (a ragged tail)."""
+    rng = random.Random(4242 + size)
+    target = struct.pack(_INT_FORMATS[size], -3)
+    pieces = [target if rng.random() < 0.6 else rng.randbytes(size) for _ in range(800)]
+    data = b"".join(pieces) + b"\x01" * (size - 1)
+
+    with_numpy = _scan_exact_kernel(data, target, size, int, aligned=aligned, numpy_enabled=True)
+    without = _scan_exact_kernel(data, target, size, int, aligned=aligned, numpy_enabled=False)
+    assert with_numpy == without
+    assert 0 < len(without) < len(data)
+
+
+@numpy_required
+def test_bool_not_exact_kernel_equivalence():
+    data = bytes(random.Random(5).choice((0, 1, 1, 2)) for _ in range(1000))
+    for aligned in (True, False):
+        assert _scan_exact_kernel(
+            data, b"\x01", 1, bool, aligned=aligned, numpy_enabled=True
+        ) == _scan_exact_kernel(
+            data, b"\x01", 1, bool, aligned=aligned, numpy_enabled=False
+        )

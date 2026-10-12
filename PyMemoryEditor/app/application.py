@@ -602,8 +602,8 @@ def main(argv=None):
                 # Change Process… released that one and attached the window
                 # to another.
                 window.process.close()
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 — exiting anyway; keep the cause
+                _LOG.debug("Closing the process handle on exit failed", exc_info=True)
 
 
 def main_cli(argv=None):

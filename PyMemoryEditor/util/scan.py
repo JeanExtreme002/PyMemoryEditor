@@ -9,6 +9,7 @@ from typing import Callable, Generator, Iterable, Literal, Optional, Sequence, T
 
 from ..enums import ScanTypesEnum
 from . import scan_numpy
+from .convert import _validate_pytype, values_to_bytes
 
 
 # Static alias mypy can narrow to int.from_bytes's expected byte-order parameter.
@@ -191,6 +192,35 @@ def _validate_scan_target(target_value: Union[bytes, Tuple[bytes, ...]], target_
         )
 
 
+def prepare_search_target(
+    pytype: Type,
+    bufflength: int,
+    value: Union[object, Tuple],
+) -> Union[bytes, Tuple[bytes, ...]]:
+    """
+    Validate and encode a value scan's target — a single value, or the
+    ``(start, end)`` tuple of a range scan — exactly as the scan will, and
+    return its byte form.
+
+    The public ``search_by_*`` methods return generators, so a check that
+    lives in the generator body only runs on the first ``next()``: a
+    ``search_by_value(int, value=2**40)`` that is documented to raise
+    ``ValueError`` would instead hand back a generator and fail later, far
+    from the call. A backend calls this *before* creating the generator to
+    raise those errors at the call site.
+
+    :raises ValueError: if ``pytype`` is unsupported, ``bufflength`` is not a
+        valid width for it, an ``int`` value does not fit in ``bufflength``
+        bytes, a ``str`` / ``bytes`` value is longer than ``bufflength``, or the
+        target is empty (zero-width).
+    :raises TypeError: if a value cannot be stored as ``pytype``.
+    """
+    _validate_pytype(pytype)
+    target = values_to_bytes(pytype, bufflength, value)
+    _validate_scan_target(target, bufflength)
+    return target
+
+
 def scan_memory_for_exact_value(
     memory_region_data: Sequence,
     memory_region_data_size: int,
@@ -251,6 +281,28 @@ def scan_memory_for_exact_value(
             target_value_size,
             comparison,
             float,
+            aligned=aligned,
+        )
+        return
+
+    if (
+        comparison is ScanTypesEnum.NOT_EXACT_VALUE
+        and (is_string is int or is_string is bool)
+        and target_value_size in _NATURAL_WIDTHS
+        and scan_numpy.NUMPY_AVAILABLE
+    ):
+        # A NOT_EXACT scan reports nearly every slot, so the Python loop below
+        # is its whole cost. At a natural width an ``int`` / ``bool`` decodes
+        # one-to-one from its bytes, so value inequality is byte inequality
+        # and ``scan_memory``'s vectorized NumPy path yields the same offsets.
+        # (EXACT stays on ``bytes.find``, which is already C speed.)
+        yield from scan_memory(
+            memory_region_data,
+            memory_region_data_size,
+            target_value,
+            target_value_size,
+            comparison,
+            is_string,
             aligned=aligned,
         )
         return

@@ -124,11 +124,19 @@ class _CheatPollWorker(QThread):
         write never blocks a UI thread enqueuing the next edit.
         """
         with QMutexLocker(self._mutex):
-            if not self._pending_writes:
-                return []
-            pending = self._pending_writes
-            self._pending_writes = []
+            pending = self._take_pending_writes()
+        return self._perform_writes(pending)
 
+    def _take_pending_writes(self) -> List[Tuple[int, type, int, Any]]:
+        """Detach the queued writes. The caller holds ``self._mutex``."""
+        pending = self._pending_writes
+        self._pending_writes = []
+        return pending
+
+    def _perform_writes(
+        self, pending: List[Tuple[int, type, int, Any]]
+    ) -> List[Tuple[int, type, int, str]]:
+        """Run the given manual writes; see :meth:`_drain_pending_writes`."""
         failures: List[Tuple[int, type, int, str]] = []
         for address, pytype, length, value in pending:
             if self._stopping():
@@ -146,10 +154,15 @@ class _CheatPollWorker(QThread):
 
     def run(self) -> None:
         while True:
+            # Snapshot and queued writes are taken together, under one lock:
+            # an inline edit on a frozen row publishes the new frozen value and
+            # queues its write back to back, and a snapshot copied before that
+            # pair would re-freeze the old value over the write just drained.
             with QMutexLocker(self._mutex):
                 if self._stop:
                     return
                 snapshot = list(self._snapshot)
+                pending = self._take_pending_writes()
 
             # Never let an exception escape the loop body: a QThread whose
             # run() raises dies silently, and the table would then stop
@@ -158,7 +171,7 @@ class _CheatPollWorker(QThread):
             try:
                 # Apply queued manual writes before reading, so a just-typed
                 # value lands and is read back as the new current value this tick.
-                for failure in self._drain_pending_writes():
+                for failure in self._perform_writes(pending):
                     self.write_failed.emit(failure)
 
                 if snapshot:

@@ -31,9 +31,10 @@ Two gates, both applied on every ``open_process``:
    name or a confused model does not land on ``lsass.exe``.
 
    Independently of the denylist, the server refuses its **own** process and
-   its **parent** — the MCP client that launched it. No flag lifts that: a
-   model writing into the process that enforces its policy, or into the client
-   it is talking through, has no legitimate use.
+   its **ancestors** — the MCP client that launched it, and any launcher in
+   between (``uv`` under ``uvx``). No flag lifts that: a model writing into the
+   process that enforces its policy, or into the client it is talking through,
+   has no legitimate use.
 
 2. **Consent for the target.** A process is opened without asking only if the
    operator pre-approved it (``--allow-process NAME``), it was approved earlier
@@ -55,10 +56,13 @@ who started it, which is why the denylist exists at all: to make the
 """
 
 import os
+import re
 import sys
 import threading
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, List, Sequence, Set, Tuple
+from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
+
+from .procinfo import ancestor_pids, process_identity
 
 
 # Processes never opened unless ``--allow-system-processes`` is passed. Matched
@@ -75,7 +79,8 @@ _SYSTEM_PROCESSES: Dict[str, FrozenSet[str]] = {
             "dwm.exe",
             # Credential agents and password managers.
             "ssh-agent.exe", "gpg-agent.exe", "keepassxc.exe", "1password.exe",
-            "bitwarden.exe",
+            "bitwarden.exe", "keepass.exe", "lastpass.exe", "dashlane.exe",
+            "enpass.exe",
         }
     ),
     "linux": frozenset(
@@ -86,7 +91,7 @@ _SYSTEM_PROCESSES: Dict[str, FrozenSet[str]] = {
             "sudo", "su",
             # Credential agents and password managers.
             "ssh-agent", "gpg-agent", "kwalletd5", "kwalletd6", "keepassxc",
-            "1password", "bitwarden",
+            "1password", "bitwarden", "enpass",
         }
     ),
     "darwin": frozenset(
@@ -97,6 +102,7 @@ _SYSTEM_PROCESSES: Dict[str, FrozenSet[str]] = {
             "sandboxd", "sudo", "su",
             # Credential agents and password managers.
             "ssh-agent", "gpg-agent", "keepassxc", "1password", "bitwarden",
+            "1password 7", "keychain access", "lastpass", "dashlane", "enpass",
         }
     ),
 }
@@ -123,6 +129,57 @@ _SYSTEM_PROCESSES["linux"] = frozenset(
 _SYSTEM_PIDS: FrozenSet[int] = frozenset({0, 1, 4})
 
 
+# Processes that are legitimate targets but routinely hold secrets in memory:
+# web browsers (session cookies, saved passwords) and AI / MCP clients (API
+# keys, conversation history). They are *not* denied — scanning a browser is
+# an ordinary thing to want, and refusing it by default would break that for
+# everyone already doing it. Instead the attach prompt warns about them and
+# ``list_processes`` flags them, so the user approving one knows what it holds.
+# Exact, case-insensitive names, like the denylist.
+_SENSITIVE_PROCESSES: Dict[str, FrozenSet[str]] = {
+    "win32": frozenset(
+        {
+            "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
+            "vivaldi.exe", "iexplore.exe",
+            "claude.exe", "cursor.exe", "windsurf.exe", "code.exe",
+        }
+    ),
+    "linux": frozenset(
+        {
+            "chrome", "chromium", "chromium-browse", "firefox", "firefox-bin",
+            "firefox-esr", "brave", "msedge", "opera", "vivaldi-bin",
+            "claude", "cursor", "windsurf", "code",
+        }
+    ),
+    "darwin": frozenset(
+        {
+            "google chrome", "chromium", "firefox", "safari", "microsoft edge",
+            "brave browser", "opera", "vivaldi", "arc",
+            "claude", "cursor", "windsurf", "code",
+        }
+    ),
+}
+
+#: Interpreters, shells and runtimes: one executable name shared by unrelated
+#: programs. Remembering an approval for ``python3`` *by name* would approve
+#: every Python script on the machine, which is not what anyone ticking
+#: "remember" for one of them meant — so for these names a remembered approval
+#: is scoped to the running instance (pid plus start time) instead. See
+#: :meth:`ProcessPolicy.grant`.
+_SHARED_RUNTIME = re.compile(
+    r"^(?:python(?:w)?(?:\d+(?:\.\d+)*)?t?|pypy\d*(?:\.\d+)*|node(?:js)?|deno|bun"
+    r"|java(?:w)?|ruby\d*(?:\.\d+)*|perl\d*(?:\.\d+)*|php\d*(?:\.\d+)*|dotnet"
+    r"|mono|lua(?:jit)?\d*(?:\.\d+)*|julia|rscript|osascript|pwsh|powershell"
+    r"|cmd|wscript|cscript|bash|sh|zsh|fish|dash|ksh|tcsh|electron"
+    r"|wine(?:64)?(?:-preloader)?)(?:\.exe)?$"
+)
+
+
+def is_shared_runtime(name: str) -> bool:
+    """Whether ``name`` is an interpreter / runtime many programs run as."""
+    return bool(_SHARED_RUNTIME.match((name or "").strip().casefold()))
+
+
 def _platform_key(platform: str) -> str:
     """Map a ``sys.platform`` string onto a key of :data:`_SYSTEM_PROCESSES`."""
     if platform.startswith("linux"):
@@ -133,6 +190,11 @@ def _platform_key(platform: str) -> str:
 def system_process_names(platform: str = sys.platform) -> FrozenSet[str]:
     """The denylisted executable names for ``platform`` (lowercase)."""
     return _SYSTEM_PROCESSES.get(_platform_key(platform), frozenset())
+
+
+def sensitive_process_names(platform: str = sys.platform) -> FrozenSet[str]:
+    """Names that are allowed but warned about: browsers and AI clients."""
+    return _SENSITIVE_PROCESSES.get(_platform_key(platform), frozenset())
 
 
 @dataclass(frozen=True)
@@ -166,12 +228,17 @@ class ProcessPolicy:
     :param allow_system: lift the system denylist.
     :param allow_any: never ask — approve any target the denylist permits. For
         scripted and non-interactive use, where there is nobody to prompt.
-    :param protect_self: refuse this process (the server) and its parent (the
-        MCP client that launched it) whatever the other flags say. On by
-        default and not exposed as a CLI flag: nothing a model does to the
-        process enforcing its own policy, or to the client it speaks through,
-        is a legitimate request. Tests that attach to themselves turn it off.
+    :param protect_self: refuse this process (the server) and every ancestor
+        of it — the MCP client that launched it, and anything in between such
+        as ``uv`` under ``uvx`` — whatever the other flags say. On by default
+        and not exposed as a CLI flag: nothing a model does to the process
+        enforcing its own policy, or to the client it speaks through, is a
+        legitimate request. Tests that attach to themselves turn it off.
     :param platform: overridable for tests; defaults to the host platform.
+    :param identify: ``pid -> start identity`` (``None`` when unknown), used
+        to scope a remembered approval to one running instance. Overridable
+        for tests; defaults to the per-OS lookup in
+        :mod:`~PyMemoryEditor.mcp.procinfo`.
 
     Instances are consulted from the server's tool threads, so the runtime
     grant set is guarded by a lock.
@@ -185,6 +252,7 @@ class ProcessPolicy:
         allow_any: bool = False,
         protect_self: bool = True,
         platform: str = sys.platform,
+        identify: Callable[[int], Optional[int]] = process_identity,
     ) -> None:
         if isinstance(allowed_names, str):
             # A str is a valid Sequence[str], so a scalar was consumed
@@ -207,13 +275,25 @@ class ProcessPolicy:
         self._allow_system = allow_system
         self._allow_any = allow_any
         self._denied = system_process_names(platform)
+        self._sensitive = sensitive_process_names(platform)
+        # The whole ancestor chain, not just getppid(): under `uvx` -- the
+        # launch command the MCP Registry entry uses -- the parent is `uv`,
+        # and the client this protection exists for sits one or two levels
+        # further up. Taken once: the chain that launched the server does not
+        # change while it runs.
         self._protected: FrozenSet[int] = (
-            frozenset({os.getpid(), os.getppid()}) if protect_self else frozenset()
+            frozenset({os.getpid(), os.getppid()}) | ancestor_pids()
+            if protect_self
+            else frozenset()
         )
+        self._identify = identify
         # Only Linux truncates names; applying the rule elsewhere would let a
         # 15-character name stand in for any longer one it happens to prefix.
         self._truncates_names = _platform_key(platform) == "linux"
         self._granted: Set[str] = set()
+        # (pid, start identity, folded name): approvals remembered for one
+        # running instance of a shared runtime. See grant().
+        self._granted_instances: Set[Tuple[int, int, str]] = set()
         self._lock = threading.Lock()
 
     @property
@@ -230,7 +310,7 @@ class ProcessPolicy:
 
     @property
     def protected_pids(self) -> FrozenSet[int]:
-        """The pids refused unconditionally: this process and its parent."""
+        """The pids refused unconditionally: this process and its ancestors."""
         return self._protected
 
     @property
@@ -239,12 +319,34 @@ class ProcessPolicy:
         with self._lock:
             return tuple(sorted(self._granted))
 
-    def grant(self, name: str) -> None:
-        """Remember an approval, so this name stops prompting.
+    @property
+    def granted_instances(self) -> Tuple[Tuple[str, int], ...]:
+        """``(name, pid)`` of the running instances approved and remembered."""
+        with self._lock:
+            return tuple(sorted((name, pid) for pid, _ident, name in self._granted_instances))
+
+    def is_sensitive(self, name: str) -> bool:
+        """Whether ``name`` is a browser or AI client: allowed, but warned about."""
+        return (name or "").strip().casefold() in self._sensitive
+
+    def grant(self, name: str, pid: Optional[int] = None) -> Optional[str]:
+        """Remember an approval, so this target stops prompting.
+
+        :returns: what was remembered — ``"name"``, ``"instance"``, or
+            ``None`` when nothing could be (no name, or an instance whose
+            start time cannot be read).
 
         Name-based rather than pid-based on purpose: "remember this process"
         should survive the target restarting, which is routine when you are
         editing a game between runs.
+
+        Except for a shared runtime (``python3``, ``node``, ``java``, a shell —
+        see :func:`is_shared_runtime`) when the caller says which ``pid`` was
+        approved: that name is shared by every script on the machine, so
+        remembering it would approve all of them. The grant is then scoped to
+        that one running instance, keyed by pid *and* start time so a recycled
+        pid does not inherit it. A caller that passes no ``pid`` gets the name
+        rule it asked for.
 
         Matched **exactly** (case-insensitively), unlike ``allowed_names``.
         That asymmetry is deliberate. An operator typing
@@ -256,9 +358,17 @@ class ProcessPolicy:
         """
         folded = (name or "").casefold()
         if not folded:
-            return
+            return None
+        if pid is not None and is_shared_runtime(folded):
+            identity = self._identify(pid)
+            if identity is None:
+                return None
+            with self._lock:
+                self._granted_instances.add((pid, identity, folded))
+            return "instance"
         with self._lock:
             self._granted.add(folded)
+        return "name"
 
     @property
     def mode(self) -> str:
@@ -287,6 +397,23 @@ class ProcessPolicy:
             and len(folded) == COMM_MAX_LENGTH
             and candidate.startswith(folded)
         )
+
+    def _instance_granted(self, pid: int, folded: str) -> bool:
+        """Whether this running instance was approved and remembered.
+
+        The identity is read only when a grant names this pid and name, so the
+        common case costs nothing; and an unreadable identity never matches.
+        """
+        with self._lock:
+            candidates = [
+                identity
+                for granted_pid, identity, name in self._granted_instances
+                if granted_pid == pid and name == folded
+            ]
+        if not candidates:
+            return False
+        current = self._identify(pid)
+        return current is not None and current in candidates
 
     def _granted_matches(self, folded: str) -> bool:
         """Whether a remembered approval covers ``folded``. Caller holds the lock.
@@ -319,7 +446,8 @@ class ProcessPolicy:
                     pid,
                     "this MCP server's own process"
                     if pid == os.getpid()
-                    else "the MCP client that launched this server",
+                    else "the MCP client that launched this server, or a process "
+                    "between it and this server (such as uv)",
                 ),
             )
 
@@ -340,6 +468,26 @@ class ProcessPolicy:
             with self._lock:
                 if self._granted_matches(folded):  # exact: see grant()
                     return AccessDecision(True)
+            if self._instance_granted(pid, folded):
+                return AccessDecision(True)
+
+        if not folded and not self._allow_system:
+            # A name this user cannot read is a name the denylist above could
+            # not check — `lsass.exe` and a game look the same from here. So it
+            # is never waved through by --allow-any-process: it goes to the
+            # human, who can see more than this server can, and a client that
+            # cannot ask refuses it. --allow-system-processes is the operator
+            # saying the denylist does not matter, so it lifts this too.
+            return AccessDecision(
+                False,
+                "The name of pid %d cannot be read, so this server cannot "
+                "check it against the system-process denylist, and it needs "
+                "the user's approval even with --allow-any-process. Tell the "
+                "user to approve it when prompted, or to restart the server "
+                "with --allow-system-processes if they accept opening "
+                "unidentified processes." % pid,
+                needs_approval=True,
+            )
 
         if self._allow_any:
             return AccessDecision(True)
@@ -377,6 +525,9 @@ class ProcessPolicy:
             "mode_note": _MODE_NOTES[self.mode],
             "preapproved": list(self._allowed_names) or None,
             "approved_this_session": list(self.granted_names) or None,
+            "approved_instances_this_session": [
+                "%s (pid %d)" % (name, pid) for name, pid in self.granted_instances
+            ] or None,
             "system_processes_allowed": self._allow_system,
             "denied_system_process_count": len(self._denied),
             "self_protected": bool(self._protected),
@@ -400,4 +551,11 @@ _MODE_NOTES = {
 }
 
 
-__all__ = ("AccessDecision", "COMM_MAX_LENGTH", "ProcessPolicy", "system_process_names")
+__all__ = (
+    "AccessDecision",
+    "COMM_MAX_LENGTH",
+    "ProcessPolicy",
+    "is_shared_runtime",
+    "sensitive_process_names",
+    "system_process_names",
+)

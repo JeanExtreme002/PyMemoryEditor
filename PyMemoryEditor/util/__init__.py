@@ -20,6 +20,7 @@ from .scan import (
     decode_scan_target,
     iter_region_chunks,
     make_predicate,
+    prepare_search_target,
     scan_memory,
     scan_memory_for_exact_value,
 )

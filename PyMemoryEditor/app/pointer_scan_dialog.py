@@ -24,6 +24,7 @@ so it survives into the freeze/refresh loop.
 """
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -79,6 +80,13 @@ _MONO = MONOSPACE_FAMILY
 # thousands of paths updates the UI smoothly instead of one row at a time.
 _UI_BATCH = 200
 
+# Batches the scan worker may have handed to the UI before it has appended
+# them. Past this the worker waits, so a fast walk with "Unlimited" results
+# can't pile up an unbounded queue of rows behind a busy UI thread. A wait
+# loop rather than a BlockingQueuedConnection: it observes Stop/cancel on its
+# own, so the teardown's plain join never has to pump the event loop.
+_MAX_BATCHES_IN_FLIGHT = 4
+
 
 class _PointerScanCancelled(Exception):
     """Raised from the progress callback to abort a scan mid-map-build."""
@@ -120,9 +128,29 @@ class PointerScanWorker(QThread):
         self._process = process
         self._request = request
         self._cancelled = False
+        self._in_flight = 0
+        self._in_flight_lock = threading.Lock()
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    def batch_consumed(self, *_args) -> None:
+        """Acknowledge one ``rows_ready`` batch; connect it after the slot
+        that appends the rows. Without it the worker stalls after
+        ``_MAX_BATCHES_IN_FLIGHT`` batches, until cancelled."""
+        with self._in_flight_lock:
+            self._in_flight -= 1
+
+    def _hand_over(self, batch: List[_ResultRow]) -> None:
+        """Emit ``batch`` and wait until the UI has room for the next one."""
+        with self._in_flight_lock:
+            self._in_flight += 1
+        self.rows_ready.emit(batch)
+        while not self._cancelled:
+            with self._in_flight_lock:
+                if self._in_flight < _MAX_BATCHES_IN_FLIGHT:
+                    return
+            QThread.msleep(5)
 
     def _on_map_progress(self, fraction: float) -> None:
         # Abort the (uninterruptible-from-outside) map build by raising; the
@@ -168,12 +196,12 @@ class PointerScanWorker(QThread):
                 count += 1
 
                 if len(batch) >= _UI_BATCH:
-                    self.rows_ready.emit(batch)
+                    self._hand_over(batch)
                     batch = []
                     self.status.emit(f"Found {count:,} pointer path(s)…")
 
             if batch:
-                self.rows_ready.emit(batch)
+                self._hand_over(batch)
 
             if self._cancelled:
                 self.status.emit(f"Stopped — {count:,} pointer path(s) found.")
@@ -336,6 +364,8 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         super().__init__(parent)
         self._process = process
         self._worker: Optional[QThread] = None
+        # Set by Stop for the running worker, so its finish reads as stopped.
+        self._stop_requested = False
         self._target_address: Optional[int] = None
 
         self.setWindowTitle(f"Pointer Scan — PID {process.pid}")
@@ -632,15 +662,21 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         worker.progress.connect(lambda p: self._progress.setValue(int(p)))
         worker.status.connect(self._count_label.setText)
         worker.rows_ready.connect(self._append_rows)
+        # After _append_rows, so a batch is acknowledged once it is drawn.
+        batch_consumed = getattr(worker, "batch_consumed", None)
+        if batch_consumed is not None:
+            worker.rows_ready.connect(batch_consumed)
         worker.error.connect(self._on_error)
         worker.finished_ok.connect(self._on_finished_ok)
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
+        self._stop_requested = False
         worker.start()
 
     def _on_stop(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
+            self._stop_requested = True
             self._count_label.setText("Stopping…")
 
     def _set_scanning(self, scanning: bool) -> None:
@@ -738,7 +774,12 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
     def _on_finished_ok(self, count: int) -> None:
         self._progress.setValue(100)
         shown = self._model.rowCount()
-        if count == 0 and shown == 0:
+        if self._stop_requested:
+            # Stopped (possibly while the map was still being built, which
+            # reports 0): "no paths found, try a higher depth" would misread a
+            # scan that never got to look.
+            self._count_label.setText(f"Stopped — {shown:,} pointer path(s) found.")
+        elif count == 0 and shown == 0:
             self._count_label.setText(
                 "No pointer paths found. Try a higher depth or max offset, or "
                 "uncheck “Writable memory only”."
@@ -797,6 +838,21 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         if path is None:
             return None
         try:
+            if path.module is not None and path.module_offset is not None:
+                # Rebase onto the module as loaded *now*. A row from Compare
+                # whose module is not loaded keeps the saved path, and walking
+                # its saved absolute base would read the previous run's
+                # addresses — possibly unrelated memory that happens to map.
+                live = path._rebased_onto(first_module_bases(self._process.get_modules()))
+                if live is None:
+                    QMessageBox.warning(
+                        self,
+                        "Pointer Scan",
+                        f"Could not resolve this path now — its module "
+                        f"{path.module!r} is not loaded in the target.",
+                    )
+                    return None
+                path = live
             return path.resolve(self._process)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(
@@ -993,7 +1049,16 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
 
         rows: List[_ResultRow] = []
         for saved in survivors:
-            live = saved._rebased_onto(module_bases) or saved
+            # Survivors are all module paths (the intersection drops the
+            # rest). One whose module isn't loaded now has no live base: the
+            # rescan drops it, and falling back to its saved absolute base (as
+            # this used to) walked the previous run's addresses and could show
+            # a value read from unrelated memory as if the path resolved. Its
+            # membership is already decided, so it stays, shown unresolved.
+            live = saved._rebased_onto(module_bases)
+            if live is None:
+                rows.append((saved, None, "—", False))
+                continue
             try:
                 resolved = live.resolve(self._process)
                 value = self._process.read_process_memory(resolved, spec.pytype, length)

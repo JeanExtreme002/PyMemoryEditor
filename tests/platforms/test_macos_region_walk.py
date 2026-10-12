@@ -116,3 +116,79 @@ def test_the_failure_counter_resets_on_success(monkeypatch):
 
     assert len(regions) == mac._REGION_MAX_CONSECUTIVE_FAILURES + 5
     assert fake.calls[-1] == KERN_INVALID_ADDRESS
+
+
+def _fake_layout(regions):
+    """
+    ``mach_vm_region`` stand-in that describes ``regions`` — ``(start, size)``
+    pairs — like the kernel: the first region at or after the cursor, then
+    KERN_INVALID_ADDRESS past the last one. Records each queried cursor.
+    """
+    cursors = []
+
+    def fake(task, address_ref, size_ref, flavor, info, count_ref, name_ref):
+        address = ctypes.cast(address_ref, ctypes.POINTER(mac.mach_vm_address_t))
+        size = ctypes.cast(size_ref, ctypes.POINTER(mac.mach_vm_size_t))
+        cursor = address.contents.value
+        cursors.append(cursor)
+        assert len(cursors) < 100, "the walk restarted or never ended"
+        for start, length in regions:
+            if start + max(length, 1) > cursor:
+                address.contents.value = max(start, cursor)
+                size.contents.value = length
+                return KERN_SUCCESS
+        return KERN_INVALID_ADDRESS
+
+    fake.cursors = cursors
+    return fake
+
+
+def test_a_region_reaching_the_top_of_the_address_space_ends_the_walk(monkeypatch):
+    # address + size == 2**64 wrapped the c_uint64 cursor back to 0, and the
+    # walk restarted from the bottom, listing every region again forever.
+    top = 2**64 - 0x4000
+    fake = _fake_layout([(0x1000, 0x1000), (top, 0x4000)])
+    monkeypatch.setattr(mac.libsystem, "mach_vm_region", fake)
+    monkeypatch.setattr(mac, "_region_is_shared", lambda *a: False)
+
+    regions = list(mac.get_memory_regions(_FAKE_TASK))
+
+    assert [(r.address, r.size) for r in regions] == [(0x1000, 0x1000), (top, 0x4000)]
+    assert fake.cursors == [0, 0x2000]
+
+
+def test_an_empty_region_is_stepped_over_instead_of_ending_the_walk(monkeypatch):
+    # A zero-size answer used to stop the walk, dropping every region above.
+    fake = _fake_layout([(0x1000, 0), (0x10000, 0x1000)])
+    monkeypatch.setattr(mac.libsystem, "mach_vm_region", fake)
+    monkeypatch.setattr(mac, "_region_is_shared", lambda *a: False)
+
+    regions = list(mac.get_memory_regions(_FAKE_TASK))
+
+    assert (0x10000, 0x1000) in [(r.address, r.size) for r in regions]
+
+
+def test_endless_empty_regions_are_capped(monkeypatch):
+    calls = []
+
+    def fake(task, address_ref, size_ref, flavor, info, count_ref, name_ref):
+        calls.append(1)
+        size = ctypes.cast(size_ref, ctypes.POINTER(mac.mach_vm_size_t))
+        size.contents.value = 0
+        return KERN_SUCCESS
+
+    monkeypatch.setattr(mac.libsystem, "mach_vm_region", fake)
+    monkeypatch.setattr(mac, "_region_is_shared", lambda *a: False)
+
+    list(mac.get_memory_regions(_FAKE_TASK))
+
+    assert len(calls) == mac._REGION_MAX_CONSECUTIVE_FAILURES + 1
+
+
+def test_a_failed_user_tag_lookup_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr(mac.libsystem, "mach_vm_region", _fake_region([KERN_FAILURE]))
+
+    with caplog.at_level("DEBUG", logger="PyMemoryEditor"):
+        assert mac._region_user_tag(_FAKE_TASK, 0x1000) == 0
+
+    assert "assuming no user tag" in caplog.text

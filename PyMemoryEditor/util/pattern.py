@@ -27,6 +27,7 @@ signature) is scanned for *overlapping* matches, the way a value scan reports
 every offset; see :func:`is_fixed_width`.
 """
 
+import logging
 import re
 from typing import List, Optional, Pattern, Tuple, Union
 
@@ -34,6 +35,9 @@ try:  # The regex parser moved in 3.11; ``sre_parse`` is a deprecated alias ther
     from re import _parser as _regex_parser  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover - Python 3.10
     import sre_parse as _regex_parser
+
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 
 PatternLike = Union[str, bytes, "re.Pattern[bytes]"]
@@ -126,7 +130,13 @@ def is_fixed_width(pattern: "Pattern[bytes]") -> bool:
     """
     try:
         low, high = _regex_parser.parse(pattern.pattern, pattern.flags).getwidth()
-    except Exception:  # noqa: BLE001 — private parser API; degrade, never fail a scan
+    except Exception as exc:  # noqa: BLE001 — private parser API; degrade, never fail a scan
+        _logger.debug(
+            "is_fixed_width: could not analyse pattern %r (%s); scanning it "
+            "for non-overlapping matches.",
+            pattern.pattern,
+            exc,
+        )
         return False
     return bool(low == high)
 

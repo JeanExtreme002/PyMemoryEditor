@@ -68,13 +68,28 @@ dependencies = []
 speed = [
   "numpy>=1.24",
 ]
+# Everything the test suite needs to run, and nothing else (no linters, no
+# build tools -- those are in `dev`). The app and MCP extras are referenced
+# rather than restated so their version ranges live in one place; the suite
+# imports both (tests/app, tests/mcp_server). pytest-xdist is required, not
+# optional: `addopts` below passes `-n auto`.
 tests = [
   "pytest",
   "pytest-xdist",
+  "pytest-cov",
+  "pytest-qt",
+  "hypothesis",
+  "PyMemoryEditor[app,mcp]",
 ]
+# Both ranges stop at the next major, like `mcp` below: psutil 8 is announced
+# with breaking changes to process_iter(attrs=...), which the process picker
+# calls, and Qt majors break API (Qt 6 renamed and removed much of Qt 5's).
+# psutil 7 removed nothing the app uses (Process.name/create_time,
+# pid_exists, process_iter with pid/name/username, and the three exceptions);
+# the app suite passes on 7.2.2.
 app = [
-  "PySide6>=6.5",
-  "psutil>=5.9,<7",
+  "PySide6>=6.5,<7",
+  "psutil>=5.9,<8",
 ]
 # The Model Context Protocol server (PyMemoryEditor.mcp), which lets an AI
 # assistant drive the scan/refine/read loop. Only the protocol layer needs the
@@ -90,23 +105,17 @@ mcp = [
 # (the `speed` extra) is exercised by a dedicated CI job that installs
 # `.[dev,speed]` — see the `build-speed` job in python-package.yml.
 dev = [
-  "pytest",
-  "pytest-xdist",
-  "pytest-cov",
-  "pytest-qt",
-  "hypothesis",
+  # The test suite and what it imports: pytest and its plugins, Hypothesis,
+  # the app's GUI deps (PySide6, psutil) and the MCP SDK -- the toolset tests
+  # run without the SDK, but the server-wiring tests (tool registration,
+  # schemas, the read-only gate) need the real one rather than a mock of it.
+  "PyMemoryEditor[tests]",
   "flake8",
   "mypy",
   "build",
-  "twine",
-  # GUI deps: the app smoke/worker tests import the desktop modules, which use
-  # PySide6 and psutil (the latter only in the app, not the core library).
-  "PySide6>=6.5",
-  "psutil>=5.9,<7",
-  # MCP SDK: the toolset tests run without it, but the server-wiring tests
-  # (tool registration, schemas, the read-only gate) need the real SDK rather
-  # than a mock of it.
-  "mcp>=2,<3",
+  # hatchling writes Metadata-Version 2.5, which `twine check` rejects as
+  # invalid before twine 7 -- so `make validate` failed on an older twine.
+  "twine>=7",
 ]
 
 [project.scripts]
@@ -140,9 +149,10 @@ Funding = "https://github.com/sponsors/JeanExtreme002"
 # another), on identical code.
 exclude = ["PyMemoryEditor/app/"]
 ignore_missing_imports = true
-# Initial pass: surface issues without immediately blocking CI. Tighten this
-# over time as the pre-existing type debt gets paid down.
 warn_unused_ignores = true
+# Bodies of unannotated functions are checked too. Clean as of v3.2.0 for the
+# shared layer under all three --platform values (CI checks each one).
+check_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = ["PyMemoryEditor.app", "PyMemoryEditor.app.*"]
@@ -153,6 +163,12 @@ ignore_errors = true
 # (`ctypes.windll`, `WINFUNCTYPE`, `WinError`, `set_last_error`, etc. on
 # Windows; Mach types on macOS). mypy running on a single OS sees the others
 # as undefined. The shared layer (process/, util/) is still type-checked.
+#
+# Checked on its own platform (`mypy --platform <os>` with this override
+# removed), each backend is close: measured at v3.2.0, macos/ has 2 errors,
+# win32/ 2 and linux/ 4, all in functions.py's typed-read return (a `T`
+# TypeVar returning str/bytes) and, on Linux, two str/int reassignments.
+# Once those are fixed, this override can become a per-platform CI check.
 [[tool.mypy.overrides]]
 module = [
     "PyMemoryEditor.win32.*",
@@ -179,6 +195,7 @@ exclude = [
     "/codecov.yml",
     "/.coveragerc-lib",
     "/.coveragerc-mcp",
+    "/.coveragerc-app",
     "/scripts",
     "/server.json",
 ]
@@ -213,7 +230,8 @@ skip_empty = true
 # ``pytest -n 0`` for serial debugging.
 #
 # Fast vs slow split:
-#   pytest -m "not slow"        # ~30 s — unit/property/GUI tests only.
+#   pytest -m "not slow"        # ~20 s — unit/GUI/MCP tests (the scan
+#                               # property tests are marked slow).
 #   pytest                      # everything, including the live self-process
 #                               # integration suite.
 #

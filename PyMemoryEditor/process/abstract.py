@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import ctypes
 import logging
+import operator
 import sys
 from abc import ABC, abstractmethod
 from typing import (
@@ -41,6 +42,18 @@ T = TypeVar("T")
 # ``load_pointer_paths``.
 _POINTER_SCAN_FORMAT = "pymemoryeditor-pointerscan"
 _POINTER_SCAN_VERSION = 1
+
+# One past the highest address a pointer chain may dereference.
+_ADDRESS_SPACE_END = 1 << 64
+
+
+class _PointerOutOfRangeError(ValueError, OSError):
+    """A pointer chain step landed outside the address space.
+
+    A ``ValueError`` as documented, and also an ``OSError`` because the failed
+    read of the wrapped address it replaces raised one: callers that guard a
+    stale chain with ``except OSError`` keep working.
+    """
 
 
 class AbstractProcess(ABC):
@@ -256,15 +269,18 @@ class AbstractProcess(ABC):
         The ``tid`` field's *meaning* is platform-specific (POSIX TID on
         Linux, DWORD TID on Windows, system-wide thread id on macOS).
 
-        A process that has exited is *not* reported uniformly: Linux and
-        Windows enumerate nothing and yield an empty sequence (their sources —
-        ``/proc/<pid>/task`` and a system-wide thread snapshot filtered by pid —
-        simply come up empty), while macOS raises ``OSError`` because
-        ``task_threads`` fails on a dead task. Don't read "no threads" as "still
-        running": check liveness separately if that distinction matters.
-        Contrast :meth:`get_memory_regions` and :meth:`get_modules`, which do
-        raise :class:`~PyMemoryEditor.ProcessIDNotExistsError` on every
-        platform.
+        A process that has exited is *not* reported uniformly: Linux raises
+        :class:`~PyMemoryEditor.ProcessIDNotExistsError` (the object checks its
+        pidfd before listing), Windows enumerates nothing and yields an empty
+        sequence (its system-wide thread snapshot, filtered by pid, simply comes
+        up empty), and macOS raises ``OSError`` because ``task_threads`` fails
+        on a dead task. Don't read "no threads" as "still running": check
+        liveness separately if that distinction matters. Contrast
+        :meth:`get_memory_regions` and :meth:`get_modules`, which do raise
+        :class:`~PyMemoryEditor.ProcessIDNotExistsError` on every platform.
+
+        The returned generator is bound to this object: resuming it after
+        :meth:`close` raises :class:`~PyMemoryEditor.ClosedProcess`.
 
         A listing that is *denied* is different from one that is empty: on
         Linux and macOS a target owned by another user raises
@@ -642,11 +658,17 @@ class AbstractProcess(ABC):
         return int.from_bytes(raw, sys.byteorder, signed=False)
 
     def _write_unsigned(self, address: int, size: int, value: int) -> int:
+        # The signed helpers reject a float with TypeError (the ctypes integer
+        # setter refuses it); `int(value)` here used to truncate 3.7 to 3 and
+        # report success. `operator.index` accepts exactly what that setter
+        # accepts -- ints, bools, numpy integers -- and raises the same
+        # TypeError for everything else.
+        integer = operator.index(value)
         # Validate up front so an out-of-range value raises the same clear
         # ValueError as the signed path, instead of int.to_bytes' cryptic
         # OverflowError ("int too big to convert" / "can't convert negative").
-        _check_int_fits(value, size, signed=False)
-        raw = int(value).to_bytes(size, sys.byteorder, signed=False)
+        _check_int_fits(integer, size, signed=False)
+        raw = integer.to_bytes(size, sys.byteorder, signed=False)
         self.write_process_memory(address, bytes, size, raw)
         return value
 
@@ -937,6 +959,17 @@ class AbstractProcess(ABC):
 
             hp_addr = process.resolve_pointer_chain(0x14010F4F4, [0x0, 0x158])
             hp = process.read_process_memory(hp_addr, int, 4)
+
+        :raises ValueError: if ``ptr_size`` is not 4 or 8, or if a pointer plus
+            its offset lands outside the 64-bit address space (below zero or at
+            ``2**64`` and above) before it is dereferenced — typically a stale
+            chain whose hop read NULL followed by a negative offset. That error
+            is also an ``OSError``.
+        :raises OSError: if a pointer along the chain cannot be read.
+
+        The returned address (the last offset is added *without* a
+        dereference) is the plain sum and is not range-checked: a stale chain
+        can return a negative number, which no read or write will accept.
         """
         if ptr_size is None:
             ptr_size = self.pointer_size
@@ -954,6 +987,16 @@ class AbstractProcess(ABC):
         byte_order = sys.byteorder
 
         def _read_ptr(addr: int) -> int:
+            # ctypes masks an address argument to 64 bits instead of rejecting
+            # it, so `ptr + offset` below zero or past 2**64 would silently
+            # read a *different*, wrapped address. Refuse it by name instead.
+            if not 0 <= addr < _ADDRESS_SPACE_END:
+                raise _PointerOutOfRangeError(
+                    "pointer chain step produced address %s, outside the "
+                    "64-bit address space; the chain is stale (a hop read "
+                    "NULL or garbage) or an offset is wrong."
+                    % (("-0x%X" % -addr) if addr < 0 else ("0x%X" % addr))
+                )
             raw = self.read_process_memory(addr, bytes, ptr_size)
             return int.from_bytes(raw, byte_order, signed=False)
 

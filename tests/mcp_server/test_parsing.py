@@ -879,3 +879,28 @@ class TestServerConfigProtectsItself:
 
         policy = ServerConfig(allow_any_process=True, protect_self=False).policy()
         assert policy.check(os.getpid(), "python").allowed is True
+
+
+class TestTheBufflengthSentinelAsAString:
+    """``"0"`` is truthy as a str, so it skipped the "use the default" branch."""
+
+    def test_string_zero_means_default_for_numbers(self):
+        for pytype in (int, float, bool):
+            assert parse_bufflength("0", pytype, required=True) is None
+
+    def test_string_zero_on_a_text_read_asks_for_a_width(self):
+        # Not a zero-byte read: the same guidance an integer 0 gets.
+        with pytest.raises(ToolError, match="bufflength is required"):
+            parse_bufflength("0", str, required=True)
+        with pytest.raises(ToolError, match="bufflength is required"):
+            parse_bufflength(" 0 ", bytes, required=True)
+
+    def test_string_zero_lets_a_scan_infer_the_width(self):
+        assert parse_bufflength("0", bytes, required=False) is None
+
+    def test_a_blank_string_still_means_default(self):
+        assert parse_bufflength("", int, required=True) is None
+        assert parse_bufflength("  ", str, required=False) is None
+
+    def test_a_string_width_still_parses(self):
+        assert parse_bufflength("8", int, required=True) == 8

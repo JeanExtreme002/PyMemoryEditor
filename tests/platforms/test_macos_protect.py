@@ -345,3 +345,80 @@ def test_a_failed_elevate_rolls_back_the_regions_already_elevated(monkeypatch):
     finally:
         monkeypatch.undo()
         mac.free_memory(task, address, 2 * page)
+
+
+# --- maximum protection ------------------------------------------------------
+#
+# VM_PROT_COPY adds WRITE to the region's *maximum* protection. The restore
+# used to put back only the current protection, so a page whose maximum never
+# allowed writing (a read-only shared file mapping, a code page) stayed
+# writable-on-request for the rest of the target's life.
+
+MAP_SHARED = 0x0001
+
+
+def _max_protection_at(task, address):
+    from PyMemoryEditor.macos import functions as mac
+
+    found = mac._basic_region_at(task, address)
+    assert found is not None
+    return found[2].max_protection
+
+
+def test_the_flip_restores_a_maximum_protection_without_write(tmp_path):
+    from PyMemoryEditor.macos import functions as mac
+    from PyMemoryEditor.macos.libsystem import mach_task_self_
+    from PyMemoryEditor.macos.types import VM_PROT_WRITE
+
+    page = mac._PAGE_SIZE
+    backing = tmp_path / "readonly.bin"
+    backing.write_bytes(b"\xaa" * page)
+    fd = os.open(str(backing), os.O_RDONLY)
+    try:
+        # A shared mapping of a file opened read-only: the kernel caps its
+        # maximum protection below WRITE.
+        address = _libsystem.mmap(None, page, PROT_READ, MAP_SHARED, fd, 0)
+    finally:
+        os.close(fd)
+    if address in (MAP_FAILED, 0, None):
+        pytest.skip("mmap of the backing file failed")
+
+    task = mach_task_self_.value
+    try:
+        original_max = _max_protection_at(task, address)
+        if original_max & VM_PROT_WRITE:
+            pytest.skip("this kernel already allows WRITE on the mapping")
+
+        payload = ctypes.c_uint32(0x4DEADBEE)
+        mac._mach_write(task, address, ctypes.addressof(payload), 4)
+
+        assert mac.read_process_memory(task, address, bytes, 4) == bytes(payload)
+        assert _protection_at(task, address) == PROT_READ
+        assert _max_protection_at(task, address) == original_max
+        # VM_PROT_COPY made the change private: the file is untouched.
+        assert backing.read_bytes()[:4] == b"\xaa" * 4
+    finally:
+        _libsystem.munmap(address, page)
+
+
+def test_the_maximum_is_left_alone_when_it_already_allowed_write(monkeypatch):
+    from PyMemoryEditor.macos import functions as mac
+
+    task, address, page = _two_page_regions(_R, _R)
+    spy = _ProtectSpy(mac.libsystem.mach_vm_protect)
+    max_calls = []
+
+    def recording(task_, address_, size, set_maximum, protection):
+        if set_maximum:
+            max_calls.append(protection)
+        return spy(task_, address_, size, set_maximum, protection)
+
+    monkeypatch.setattr(mac.libsystem, "mach_vm_protect", recording)
+    try:
+        buffer = ctypes.c_uint32(7)
+        mac._mach_write(task, address, ctypes.addressof(buffer), 4)
+        # mach_vm_allocate'd memory has a maximum of rwx already.
+        assert max_calls == []
+    finally:
+        monkeypatch.undo()
+        mac.free_memory(task, address, 2 * page)

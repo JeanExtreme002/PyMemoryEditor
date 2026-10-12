@@ -215,11 +215,17 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
     Translates the typical I/O failures of ``/proc/<pid>/maps`` into the
     library's own exception hierarchy so callers don't have to special-case
     raw ``FileNotFoundError`` / ``PermissionError`` from the kernel pseudo-fs.
+
+    The file is parsed as bytes: a mapped path is whatever bytes the file
+    system holds, not necessarily UTF-8, and decoding the file as text made
+    one such path abort every listing and scan of that process with
+    ``UnicodeDecodeError``. The raw path bytes go into the struct;
+    ``MemoryRegion.path`` decodes them as UTF-8 with replacement characters.
     """
     mapping_filename = "/proc/{}/maps".format(pid)
 
     try:
-        mapping_file = open(mapping_filename, "r")
+        mapping_file = open(mapping_filename, "rb")
     except FileNotFoundError:
         # Target died between OpenProcess()'s pid_exists() check and now. The
         # caller already accepts ProcessIDNotExistsError from the open path,
@@ -246,12 +252,12 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
                 addressing_range, privileges, offset, device, inode = (
                     region_information[0:5]
                 )
-                path = region_information[5].strip() if len(region_information) >= 6 else ""
+                path = region_information[5].strip() if len(region_information) >= 6 else b""
 
                 start_address, end_address = [
-                    int(addr, 16) for addr in addressing_range.split("-")
+                    int(addr, 16) for addr in addressing_range.split(b"-")
                 ]
-                major_id, minor_id = [int(_id, 16) for _id in device.split(":")]
+                major_id, minor_id = [int(_id, 16) for _id in device.split(b":")]
 
                 offset = int(offset, 16)
                 inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
@@ -270,8 +276,8 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
 
             # Truncate to fit the fixed-size inline byte arrays in the struct.
             # Leave room for a null so attribute reads always terminate cleanly.
-            privileges_bytes = privileges.encode()[: PRIVILEGES_SIZE - 1]
-            path_bytes = path.encode()[: PATH_SIZE - 1]
+            privileges_bytes = privileges[: PRIVILEGES_SIZE - 1]
+            path_bytes = path[: PATH_SIZE - 1]
 
             region = MEMORY_BASIC_INFORMATION(
                 start_address,
@@ -484,7 +490,10 @@ def search_addresses_by_value(
         for region in source_regions
         if default_scan_filter(region, writeable_only=writeable_only)
     ]
-    filtered_regions.sort(key=lambda region: region.address)
+    # Filtering keeps a snapshot's address order, so only other inputs
+    # need sorting.
+    if not isinstance(source_regions, MemoryRegionSnapshot):
+        filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_search_results(
         filtered_regions,
@@ -520,7 +529,10 @@ def search_addresses_by_pattern(
     filtered_regions = [
         region for region in source_regions if default_scan_filter(region)
     ]
-    filtered_regions.sort(key=lambda region: region.address)
+    # Filtering keeps a snapshot's address order, so only other inputs
+    # need sorting.
+    if not isinstance(source_regions, MemoryRegionSnapshot):
+        filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_pattern_results(
         filtered_regions,
@@ -645,7 +657,15 @@ def get_threads(pid: int) -> Generator[ThreadInfo, None, None]:
         state: Optional[str] = None
         priority: Optional[int] = None
         try:
-            with open("{}/{}/stat".format(task_dir, entry), "r") as fh:
+            # `comm` inside the stat line is whatever bytes the thread named
+            # itself (prctl PR_SET_NAME), not necessarily UTF-8; only the
+            # ASCII fields after it are parsed, so decode leniently.
+            with open(
+                "{}/{}/stat".format(task_dir, entry),
+                "r",
+                encoding="utf-8",
+                errors="replace",
+            ) as fh:
                 raw_stat = fh.read()
             # /proc/<pid>/task/<tid>/stat layout (man 5 proc):
             #   pid (comm) state ppid pgrp session tty_nr tpgid flags minflt
@@ -686,6 +706,12 @@ def get_processes() -> Generator[Tuple[int, str], None, None]:
     ``name`` comes from ``/proc/<pid>/comm`` (the kernel truncates it to 15
     characters via ``TASK_COMM_LEN``). Processes that vanish mid-scan are
     skipped silently (logged at DEBUG).
+
+    ``comm`` is raw bytes a process can set to anything (``prctl(PR_SET_NAME)``),
+    so it is decoded as UTF-8 with replacement characters, independent of the
+    locale: one process with a non-UTF-8 name used to raise
+    ``UnicodeDecodeError`` here and break ``OpenProcess(name=...)`` for every
+    other process.
     """
     try:
         entries = os.listdir("/proc")
@@ -699,7 +725,9 @@ def get_processes() -> Generator[Tuple[int, str], None, None]:
         pid = int(entry)
 
         try:
-            with open("/proc/{}/comm".format(entry), "r") as fh:
+            with open(
+                "/proc/{}/comm".format(entry), "r", encoding="utf-8", errors="replace"
+            ) as fh:
                 name = fh.readline().rstrip("\n")
         except OSError as exc:
             # Race (process exited) or permission issue — skip it.

@@ -12,6 +12,7 @@ from PyMemoryEditor.util import (
     convert_from_byte_array,
     value_to_bytes,
     values_to_bytes,
+    prepare_search_target,
     get_c_type_of,
     compile_pattern,
     decode_scan_target,
@@ -61,6 +62,18 @@ from PyMemoryEditor.util import (
 
    Convert either a single value or a tuple of values (for
    ``VALUE_BETWEEN`` / ``NOT_VALUE_BETWEEN``) to the corresponding byte form.
+
+.. py:function:: prepare_search_target(pytype, bufflength, value)
+
+   Validate and encode a scan target — a single value, or a ``(start, end)``
+   tuple for a range — exactly as a value scan does, and return its byte form.
+   The ``search_by_*`` methods return generators, whose body only runs on the
+   first ``next()``; calling this first raises the documented errors at the
+   call site instead.
+
+   :raises ValueError: unsupported ``pytype``, an invalid width, an ``int``
+      that does not fit, a ``str`` / ``bytes`` value longer than
+      ``bufflength``, or an empty target.
 
 .. py:function:: get_c_type_of(pytype, length)
 

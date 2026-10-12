@@ -4,7 +4,9 @@ import warnings
 from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..util.pattern import compile_pattern
 from ..process import AbstractProcess
+from ..process._guard import guard_generator
 from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
@@ -13,6 +15,7 @@ from ..util import (
     UNSET,
     prepare_write,
     resolve_bufflength,
+    prepare_search_target,
     resolve_bufflength_for_value,
 )
 
@@ -32,6 +35,7 @@ from .functions import (
     search_values_by_addresses,
     write_process_memory,
     _detect_task_64bit,
+    _macho_image_size,
 )
 
 
@@ -109,10 +113,14 @@ class MacProcess(AbstractProcess):
         if self.__closed:
             return True
 
-        release_task(self.__task)
+        # Mark closed even when the deallocate fails: the port name cannot be
+        # retried meaningfully, and a later call must not reuse it. Report the
+        # failure through the return value, like the Windows and Linux
+        # backends (``release_task`` has already logged it).
+        released = release_task(self.__task)
         self.__task = 0
         self.__closed = True
-        return True
+        return released
 
     def __del__(self) -> None:
         """
@@ -123,9 +131,9 @@ class MacProcess(AbstractProcess):
         ``OpenProcess`` calls.
 
         ``__del__`` is not guaranteed to run (cyclic GC, interpreter
-        teardown), so this is only a fallback. ``release_task`` itself
-        catches errors via ``mach_port_deallocate`` returning a
-        kern_return_t we never read here.
+        teardown), so this is only a fallback. ``release_task`` never
+        raises: a failed ``mach_port_deallocate`` is logged and reported
+        through ``close()``'s return value.
         """
         # Avoid touching anything if construction failed before __task was set.
         if getattr(self, "_MacProcess__closed", True):
@@ -143,15 +151,19 @@ class MacProcess(AbstractProcess):
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_open()
-        return get_memory_regions(self.__task, self.pid)
+        return guard_generator(
+            get_memory_regions(self.__task, self.pid), self.__require_open
+        )
 
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         self.__require_open()
-        return get_threads(self.__task)
+        return guard_generator(get_threads(self.__task), self.__require_open)
 
     def get_modules(self) -> Generator[ModuleInfo, None, None]:
         self.__require_open()
-        return get_modules(self.__task)
+        return guard_generator(
+            get_modules(self.__task, self.pid), self.__require_open
+        )
 
     def _static_image_ranges(self):
         """
@@ -167,18 +179,23 @@ class MacProcess(AbstractProcess):
         """
         self.__require_open()
         ranges = []
-        for module in get_modules(self.__task):
+        # Modules are listed without their sizes: each size parses the image's
+        # load commands, which get_image_segments parses anyway. The __TEXT
+        # size is only needed as the fallback when no segment came back.
+        for module in get_modules(self.__task, self.pid, image_sizes=False):
             segments = get_image_segments(self.__task, module.base_address)
             if segments:
                 for start, size in segments:
                     ranges.append(
                         (start, start + size, module.name, module.base_address)
                     )
-            elif module.size > 0:
+                continue
+            text_size = _macho_image_size(self.__task, module.base_address)
+            if text_size > 0:
                 ranges.append(
                     (
                         module.base_address,
-                        module.base_address + module.size,
+                        module.base_address + text_size,
                         module.name,
                         module.base_address,
                     )
@@ -197,7 +214,7 @@ class MacProcess(AbstractProcess):
         self.__require_open()
         if addresses is UNSET:
             raise TypeError("addresses is required.")
-        return search_values_by_addresses(
+        scan = search_values_by_addresses(
             self.__task,
             pytype,
             resolve_bufflength(pytype, bufflength),
@@ -206,6 +223,7 @@ class MacProcess(AbstractProcess):
             raise_error=raise_error,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_value(
         self,
@@ -226,10 +244,14 @@ class MacProcess(AbstractProcess):
                 "Use the method search_by_value_between(...) to search within a range of values."
             )
 
-        return search_addresses_by_value(
+        width = resolve_bufflength_for_value(pytype, bufflength, value)
+        # Validate now: the scan is a generator, so its own checks would
+        # only raise on the first next(), far from this call.
+        prepare_search_target(pytype, width, value)
+        scan = search_addresses_by_value(
             self.__task,
             pytype,
-            resolve_bufflength_for_value(pytype, bufflength, value),
+            width,
             value,
             scan_type,
             progress_information,
@@ -238,6 +260,7 @@ class MacProcess(AbstractProcess):
             aligned=aligned,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_pattern(
         self,
@@ -248,7 +271,10 @@ class MacProcess(AbstractProcess):
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_open()
-        return search_addresses_by_pattern(
+        # Compile now so a malformed pattern raises at the call, not on the
+        # first next() of the returned generator.
+        compile_pattern(pattern, byte_length=byte_length)
+        scan = search_addresses_by_pattern(
             self.__task,
             pattern,
             byte_length=byte_length,
@@ -256,6 +282,7 @@ class MacProcess(AbstractProcess):
             memory_regions=memory_regions,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_value_between(
         self,
@@ -277,10 +304,14 @@ class MacProcess(AbstractProcess):
             if not_between
             else ScanTypesEnum.VALUE_BETWEEN
         )
-        return search_addresses_by_value(
+        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
+        # Validate now: the scan is a generator, so its own checks would
+        # only raise on the first next(), far from this call.
+        prepare_search_target(pytype, width, (start, end))
+        scan = search_addresses_by_value(
             self.__task,
             pytype,
-            resolve_bufflength_for_value(pytype, bufflength, start, end),
+            width,
             (start, end),
             scan_type,
             progress_information,
@@ -289,6 +320,7 @@ class MacProcess(AbstractProcess):
             aligned=aligned,
             pid=self.pid,
         )
+        return guard_generator(scan, self.__require_open)
 
     def read_process_memory(
         self,

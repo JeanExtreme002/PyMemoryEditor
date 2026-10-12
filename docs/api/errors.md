@@ -47,7 +47,10 @@ Base class for every PyMemoryEditor-specific exception. Catch it to handle
 ```
 
 Raised when you call any method on a process whose handle has already been
-closed (manually or by leaving the `with` block).
+closed (manually or by leaving the `with` block). A generator returned by a
+listing or scan method (`get_memory_regions`, `get_modules`, `get_threads`,
+`search_by_*`) raises it too when it is resumed after `close()`, instead of
+going on with the released handle.
 
 ```python
 with OpenProcess(pid=1234) as process:
@@ -154,6 +157,20 @@ except BitnessDetectionError as exc:
 <tr><td><code>NotImplementedError</code></td><td><code>allocate_memory</code> / <code>free_memory</code> on Linux.</td></tr>
 <tr><td><code>UserWarning</code></td><td><code>permission=</code> passed on a non-Windows platform (ignored, with this warning emitted).</td></tr>
 <tr><td><code>ResourceWarning</code></td><td>macOS: <code>mach_vm_protect</code> failed to restore a page's original protection after a write.</td></tr>
+</table>
+
+## Read and write failures
+
+A failed memory read or write is an `OSError`, **not** a
+`PyMemoryEditorError`, so `except PyMemoryEditorError` does not catch it.
+Catch `OSError` (or `PermissionError` for access denials). The attributes
+depend on the platform:
+
+<table>
+<tr><th>Platform</th><th>Exception</th><th>Details</th></tr>
+<tr><td>Windows</td><td><code>OSError</code> / <code>PermissionError</code></td><td><code>winerror</code> holds the Win32 error code. A short read or write is an <code>OSError</code> without a code.</td></tr>
+<tr><td>Linux</td><td><code>OSError</code> / <code>PermissionError</code> / <code>ProcessLookupError</code></td><td><code>errno</code> holds the <code>process_vm_readv</code> / <code>process_vm_writev</code> error. A short transfer is an <code>OSError</code> subclass carrying <code>address</code>, <code>bytes_done</code> and <code>length</code>.</td></tr>
+<tr><td>macOS</td><td><code>OSError</code> (reads: <code>MachReadError</code>)</td><td>A read failure is a <code>MachReadError</code> whose <code>kr</code> holds the <code>kern_return_t</code>; a short read is its subclass <code>MachPartialReadError</code>. Write failures are plain <code>OSError</code>s with the code in the message.</td></tr>
 </table>
 
 ## Catching robustly

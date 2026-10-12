@@ -94,3 +94,15 @@ def test_ambiguous_error_has_args_and_str():
     assert err.args  # must not be empty
     assert "python" in str(err)
     assert "100" in str(err)
+
+
+@pytest.mark.parametrize("pid", [True, False])
+def test_bool_pid_is_rejected(pid):
+    """``bool`` is an ``int`` subclass: ``OpenProcess(pid=True)`` used to open
+    pid 1 (launchd / init) instead of failing."""
+    from PyMemoryEditor.process.info import ProcessInfo
+
+    info = ProcessInfo()
+    with pytest.raises(ValueError, match="must be an integer"):
+        info.pid = pid
+    assert info.pid == -1
