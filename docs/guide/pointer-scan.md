@@ -43,8 +43,8 @@ It carries everything you need to reconstruct the chain in another run.
       (default — faster and usually correct).
    :param static_ranges: explicit ``(start, size)`` ranges to treat as valid
       chain bases. Defaults to the image range of every loaded module.
-   :param int max_results: stop after yielding this many paths.
-      Recommended for shallow exploration.
+   :param int max_results: stop after yielding this many paths (at least 1;
+      ``None`` for no cap). Recommended for shallow exploration.
    :param memory_regions: optional snapshot from
       :py:meth:`snapshot_memory_regions`.
    :param progress_callback: a callable ``callback(fraction)`` invoked as the
@@ -55,6 +55,12 @@ It carries everything you need to reconstruct the chain in another run.
       yielded. The search can run a long time between two paths, so this is
       how a deadline or a cancel button bounds it.
    :returns: a generator of :py:class:`PointerPath`.
+   :raises ValueError: ``ptr_size`` other than 4 or 8, ``max_depth`` or
+      ``max_results`` below 1, or a negative ``max_offset``.
+   :raises ClosedProcess: the process was closed.
+
+   Arguments are checked when you call the method; the pointer map is built
+   and walked lazily, as you iterate.
 ```
 
 ## Tuning the scan

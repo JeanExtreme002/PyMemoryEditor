@@ -251,6 +251,8 @@ _PROCESSOR_ARCHITECTURE_64BIT = (6, 9, 12)
 _OS_IS_64BIT = (
     _native_system_information.wProcessorArchitecture in _PROCESSOR_ARCHITECTURE_64BIT
 )
+# The running Python's bitness: the fallback guess when a target's can't be read.
+_HOST_IS_64BIT = ctypes.sizeof(ctypes.c_void_p) == 8
 
 
 def mbi_class_for_handle(process_handle: int):
@@ -318,12 +320,13 @@ def IsProcess64Bit(process_handle: int) -> bool:
         return detected
 
     _logger.warning(
-        "IsWow64Process failed (err=%d); assuming the target is 64-bit "
-        "(host bitness). Pointer-width detection may be wrong if the target "
-        "is actually a 32-bit (WOW64) process.",
+        "IsWow64Process failed (err=%d); assuming the target matches the "
+        "host bitness (%d-bit). Pointer-width detection may be wrong if it "
+        "does not.",
         ctypes.get_last_error(),
+        64 if _HOST_IS_64BIT else 32,
     )
-    return True
+    return _HOST_IS_64BIT
 
 
 T = TypeVar("T")

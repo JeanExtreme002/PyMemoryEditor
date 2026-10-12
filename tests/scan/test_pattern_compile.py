@@ -124,6 +124,13 @@ def test_compiled_pattern_requires_explicit_length():
         compile_pattern(precompiled)
 
 
+def test_compiled_str_pattern_is_rejected():
+    """A str regex can never match process memory: refuse it up front instead
+    of failing later, inside the scan."""
+    with pytest.raises(TypeError, match="bytes regex"):
+        compile_pattern(re.compile("abc"), byte_length=3)
+
+
 def test_rejects_unsupported_input_type():
     with pytest.raises(TypeError, match="Pattern must be"):
         compile_pattern(12345)  # type: ignore[arg-type]

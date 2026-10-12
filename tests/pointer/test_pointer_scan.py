@@ -267,10 +267,10 @@ def test_scan_pointer_paths_rediscovers_planted_chain(process):
     ), [str(p) for p in resolving]
 
 
-@pytest.mark.slow
 def test_scan_pointer_paths_rejects_bad_ptr_size(process):
+    # Raised by the call itself, not deferred to the first next().
     with pytest.raises(ValueError, match="ptr_size"):
-        list(process.scan_pointer_paths(0x1000, ptr_size=5))
+        process.scan_pointer_paths(0x1000, ptr_size=5)
 
 
 @pytest.mark.slow
@@ -505,6 +505,47 @@ def test_rescan_pointer_paths_propagates_a_closed_process():
     path = PointerPath(0x1000, (0x10,), ptr_size=ctypes.sizeof(ctypes.c_void_p))
     with pytest.raises(ClosedProcess):
         handle.rescan_pointer_paths([path], 0x2000)
+
+
+def test_scan_pointer_paths_refuses_a_closed_process():
+    """Like every search_* method, the call raises on a closed handle instead
+    of handing back a generator that would use it."""
+    handle = OpenProcess(pid=os.getpid())
+    handle.close()
+    with pytest.raises(ClosedProcess):
+        handle.scan_pointer_paths(0x1000)
+
+
+def test_scan_pointer_paths_stops_once_the_process_is_closed(monkeypatch):
+    """A generator kept past close() must not go on using the handle."""
+    path = PointerPath(0x1000, (0x0,), ptr_size=8)
+    # Stub both phases: this is about the guard, not about reading memory.
+    monkeypatch.setattr(pointer_scan, "build_pointer_map", lambda *a, **k: ((), ()))
+    monkeypatch.setattr(pointer_scan, "find_pointer_paths", lambda *a, **k: iter([path, path]))
+
+    handle = OpenProcess(pid=os.getpid())
+    try:
+        walk = handle.scan_pointer_paths(0x1000, max_depth=1, memory_regions=[])
+        assert next(walk) == path
+    finally:
+        handle.close()
+    with pytest.raises(ClosedProcess):
+        next(walk)
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"max_depth": 0}, "max_depth"),
+        ({"max_offset": -8}, "max_offset"),
+        ({"max_results": 0}, "max_results"),
+    ],
+)
+def test_scan_pointer_paths_rejects_bad_limits_at_the_call(process, kwargs, message):
+    """Out-of-range limits used to build the whole pointer map on the first
+    next() and then silently yield nothing."""
+    with pytest.raises(ValueError, match=message):
+        process.scan_pointer_paths(0x1000, **kwargs)
 
 
 def _one_writable_region(process):
