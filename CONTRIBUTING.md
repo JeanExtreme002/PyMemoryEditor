@@ -164,10 +164,12 @@ the release notes.
 Releases are cut by publishing a GitHub Release; nothing is uploaded from a
 laptop.
 
-1. Open a `chore: bump version to X.Y.Z` PR that sets `__version__` in
-   `PyMemoryEditor/__init__.py` and `version` (both places) in `server.json`.
-   `tests/mcp_server/test_registry.py`
-   fails if the package and `server.json` disagree.
+1. Open a `chore: bump version to X.Y.Z` PR that sets the version in five
+   places: `__version__` in `PyMemoryEditor/__init__.py`, the fallback
+   `release` in `docs/conf.py`, and in `server.json` both `version` fields
+   plus the `PyMemoryEditor[mcp]==X.Y.Z` pin in the package arguments.
+   `tests/mcp_server/test_registry.py` fails if the package and `server.json`
+   disagree.
 2. Merge it and wait for the `Python Package` run on `main` to go green.
 3. Publish a GitHub Release with the tag `vX.Y.Z` on that commit; its notes
    are the changelog for the version.
