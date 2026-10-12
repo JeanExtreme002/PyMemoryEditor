@@ -712,10 +712,17 @@ class TestBuildServerConsistency:
 class TestRememberingANamelessTarget:
     """A process whose name cannot be read has nothing to remember it by."""
 
-    def test_remember_reports_that_it_could_not_be_honoured(self, fake_process):
+    def test_remember_reports_that_it_could_not_be_honoured(
+        self, fake_process, monkeypatch
+    ):
         # Grants are matched by name so they survive a restart; with no name
         # there is nothing to store. Silently dropping the tick left the user
         # believing it worked and being asked again next time.
+        from PyMemoryEditor.mcp import session as session_module
+
+        # An empty name for a pid that is not running reads as "no such
+        # process"; the fake's pid is not a real one.
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
         fake_process.name = ""
         toolset = _toolset_for(fake_process, ServerConfig())
         toolset._name_for_pid = lambda pid: ""
@@ -876,3 +883,252 @@ class TestAmbiguousNameOverTheProtocol:
         assert payload == toolset.open_process(name="game")
         assert [c["pid"] for c in payload["candidates"]] == [9001, 9002]
         assert payload["hidden_by_policy"] == 1
+
+
+class TestConfirmWrites:
+    """``--confirm-writes``: the server asks before every write, on any client
+    that supports elicitation, and refuses writes on one that does not."""
+
+    def _run(self, server_config, answerer, value="77"):
+        process = FakeProcess()
+        address = process.poke(WRITABLE_BASE + 0x40, int, 5)
+        toolset = _toolset_for(process, server_config)
+        server, _toolset = build_server(server_config, toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                opened = json.loads(
+                    (await session.call_tool("open_process", {"pid": 4242}))
+                    .content[0].text
+                )
+                return await session.call_tool(
+                    "write_value",
+                    {
+                        "session_id": opened["session_id"],
+                        "address": "0x%X" % address,
+                        "value_type": "int",
+                        "value": value,
+                        "bufflength": 4,
+                    },
+                )
+
+        result = asyncio.run(run())
+        return result, process.read_process_memory(address, int, 4), address
+
+    def test_off_by_default_the_server_does_not_ask(self):
+        # The default leaves confirmation to the client (the hint), so a
+        # client that honours it is not asked twice.
+        answerer = Answerer("decline")
+        result, value, _address = self._run(config(), answerer)
+        assert result.is_error is False
+        assert value == 77
+        assert answerer.asked is False
+
+    def test_the_prompt_describes_the_write_and_approval_writes(self):
+        answerer = Answerer("accept")
+        result, value, address = self._run(config(confirm_writes=True), answerer)
+        assert result.is_error is False
+        assert value == 77
+        prompt = answerer.prompts[-1]
+        assert "faketarget" in prompt and "4242" in prompt
+        assert "0x%X" % address in prompt
+        assert "77" in prompt and "Current value: 5" in prompt
+        assert _payload(result)["previous_value"] == 5
+
+    def test_declining_does_not_write(self):
+        answerer = Answerer("decline")
+        result, value, _address = self._run(config(confirm_writes=True), answerer)
+        assert result.is_error is True
+        assert "did not approve" in result.content[0].text
+        assert value == 5
+
+    def test_a_client_that_cannot_ask_gets_no_write(self):
+        result, value, _address = self._run(config(confirm_writes=True), None)
+        assert result.is_error is True
+        assert "--confirm-writes" in result.content[0].text
+        assert value == 5
+
+    def test_a_malformed_write_fails_before_anyone_is_asked(self):
+        answerer = Answerer("accept")
+        result, value, _address = self._run(
+            config(confirm_writes=True), answerer, value="not a number"
+        )
+        assert result.is_error is True
+        assert answerer.asked is False
+        assert value == 5
+
+    def test_the_schema_matches_the_unconfirmed_tool(self, fake_process):
+        def schema(server_config):
+            toolset = _toolset_for(fake_process, server_config)
+            server, _toolset = build_server(server_config, toolset=toolset)
+            tools = {tool.name: tool for tool in _run(server.list_tools())}
+            tool = tools["write_value"]
+            return tool.input_schema, tool.output_schema
+
+        confirmed, plain = schema(config(confirm_writes=True)), schema(config())
+        assert confirmed == plain
+        # The output schema comes from the return annotation; a wrapper typed
+        # `-> Any` silently dropped structured output under the flag.
+        assert plain[1] is not None
+
+    def test_server_info_says_who_confirms(self, fake_process):
+        assert _toolset_for(fake_process, config()).server_info()[
+            "write_confirmation"
+        ] == "client"
+        info = _toolset_for(fake_process, config(confirm_writes=True)).server_info()
+        assert info["write_confirmation"] == "server"
+        assert "--confirm-writes" in info["write_note"]
+
+    def test_the_flag_parses(self):
+        from PyMemoryEditor.mcp.config import parse_args
+
+        assert parse_args(["--confirm-writes"])[0].confirm_writes is True
+        assert parse_args([])[0].confirm_writes is False
+
+
+class TestApprovalPromptNotes:
+    def _open(self, process, answerer):
+        toolset = _toolset_for(process, ServerConfig())
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        return _payload(asyncio.run(run())), toolset
+
+    def test_a_shared_runtime_is_remembered_as_one_instance(self):
+        process = FakeProcess(name="python3")
+        answerer = Answerer("accept", remember=True)
+        toolset = _toolset_for(process, ServerConfig())
+        toolset.policy._identify = {4242: 12345}.get
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        payload = _payload(asyncio.run(run()))
+        assert "shared runtime" in answerer.prompts[0]
+        assert payload["approval_remembered"] is True
+        assert payload["approval_scope"] == "instance"
+        assert toolset.policy.granted_names == ()
+        assert toolset.policy.check(4243, "python3").needs_approval is True
+
+    def test_a_pid_reused_while_the_prompt_is_open_is_not_attached(self):
+        # The prompt showed one python3; by the time the user said yes, the
+        # pid belonged to another python3. attach() only re-checks the name,
+        # so the start identity must be compared -- and nothing remembered.
+        process = FakeProcess(name="python3")
+        answerer = Answerer("accept", remember=True)
+        toolset = _toolset_for(process, ServerConfig())
+        identities = iter([12345, 99999, 99999])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        assert result.is_error
+        assert "reused" in result.content[0].text
+        assert toolset.store.sessions == ()
+        assert toolset.policy.granted_instances == ()
+
+    def test_a_remembered_instance_whose_pid_was_reused_is_not_attached(self):
+        # Remembered as python3 pid 4242 started at 12345. By the time attach
+        # pinned the pid, a different python3 (another start time) held it.
+        process = FakeProcess(name="python3")
+        toolset = _toolset_for(process, ServerConfig())
+        toolset.policy._identify = {4242: 12345}.get
+        assert toolset.policy.grant("python3", pid=4242) == "instance"
+        identities = iter([12345, 99999, 99999])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        assert result.is_error
+        assert "pid was reused" in result.content[0].text
+        assert toolset.store.sessions == ()
+
+    def test_an_unreadable_identity_on_the_recheck_is_not_called_a_reused_pid(self):
+        # A start time that fails to read is not evidence of reuse: the
+        # message must say what actually happened.
+        process = FakeProcess(name="python3")
+        toolset = _toolset_for(process, ServerConfig())
+        toolset.policy._identify = {4242: 12345}.get
+        assert toolset.policy.grant("python3", pid=4242) == "instance"
+        identities = iter([12345, None, None])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        assert result.is_error
+        assert "could not be read" in result.content[0].text
+        assert "reused" not in result.content[0].text
+        assert toolset.store.sessions == ()
+
+    def test_a_shared_runtime_shown_without_a_start_time_is_not_remembered(self):
+        # Nothing ties the approval to the instance in the prompt, so reading
+        # the start time afterwards could remember a process nobody saw.
+        process = FakeProcess(name="python3")
+        answerer = Answerer("accept", remember=True)
+        toolset = _toolset_for(process, ServerConfig())
+        identities = iter([None, 777])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        payload = _payload(asyncio.run(run()))
+        assert payload["opened"] is True
+        assert payload["approval_remembered"] is False
+        assert "start time could not be read" in payload["approval_note"]
+        assert toolset.policy.granted_instances == ()
+
+    def test_an_ordinary_name_reports_a_name_scope(self):
+        payload, _toolset = self._open(FakeProcess(), Answerer("accept", remember=True))
+        assert payload["approval_scope"] == "name"
+
+    def test_a_browser_carries_a_caution(self):
+        answerer = Answerer("accept")
+        process = FakeProcess(name="firefox")
+        toolset = _toolset_for(process, ServerConfig())
+        toolset.policy._sensitive = frozenset({"firefox"})
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        asyncio.run(run())
+        assert "browser or AI client" in answerer.prompts[0]
+
+    def test_an_unreadable_name_asks_even_under_allow_any(self, monkeypatch):
+        from PyMemoryEditor.mcp import session as session_module
+
+        monkeypatch.setattr(session_module, "pid_exists", lambda pid: True)
+        process = FakeProcess(name="")
+        toolset = _toolset_for(process, ServerConfig(allow_any_process=True))
+        server, _toolset = build_server(toolset=toolset)
+        answerer = Answerer("accept")
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        assert answerer.asked
+        assert "cannot be read" in answerer.prompts[0]
+        assert _payload(result)["opened"] is True

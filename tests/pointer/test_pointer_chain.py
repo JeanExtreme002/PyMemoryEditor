@@ -164,3 +164,32 @@ def test_resolve_unsigned_pointer_decoding(process):
     # If sign-extension leaked through, ``resolved`` would be negative.
     assert resolved == 0xFFFFFFFF
     assert resolved > 0
+
+
+@pytest.mark.parametrize("offset", [-0x100, 1 << 64])
+def test_hop_outside_the_address_space_raises_value_error(process, offset):
+    """``pointer + offset`` below zero or past 2**64 used to be masked to 64
+    bits by ctypes and read a different, wrapped address."""
+    holder = ctypes.c_uint64(0x10)  # a "pointer" that read near-NULL
+    with pytest.raises(ValueError, match="outside the 64-bit address space"):
+        process.resolve_pointer_chain(ctypes.addressof(holder), [offset, 0])
+
+
+def test_out_of_range_hop_is_still_an_os_error(process):
+    """Before the range check the wrapped read failed with ``OSError``;
+    callers guarding a stale chain with ``except OSError`` must still catch it."""
+    holder = ctypes.c_uint64(0x10)
+    with pytest.raises(OSError, match="outside the 64-bit address space"):
+        process.resolve_pointer_chain(ctypes.addressof(holder), [-0x100, 0])
+
+
+def test_base_outside_the_address_space_raises_value_error(process):
+    with pytest.raises(ValueError, match="outside the 64-bit address space"):
+        process.resolve_pointer_chain(-8, [])
+
+
+def test_final_address_is_returned_unchecked(process):
+    """The last offset is added without a dereference: the sum is returned
+    as is (the MCP server builds its own message from a negative result)."""
+    holder = ctypes.c_uint64(0x10)
+    assert process.resolve_pointer_chain(ctypes.addressof(holder), [-0x20]) == -0x10

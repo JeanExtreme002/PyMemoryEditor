@@ -110,6 +110,8 @@ def test_a_zero_width_entry_is_floored_at_the_table_door():
     assert entry.length == 0  # the row really is zero-width on disk
 
     table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
+    # add_entry delegates to the batched merge every promotion goes through.
+    table._add_entries = lambda entries: CheatTable._add_entries(table, entries)
     CheatTable.add_entry(table, entry)
     assert table._entries[0].length == 1
 
@@ -407,6 +409,8 @@ def test_re_promoting_an_address_forgets_the_value_its_old_type_read():
     existing.frozen_value = "hello"
 
     table = SimpleNamespace(_entries=[existing], _rebuild=lambda: None)
+    # add_entry delegates to the batched merge every promotion goes through.
+    table._add_entries = lambda entries: CheatTable._add_entries(table, entries)
     CheatTable.add_entry(
         table,
         CheatEntry(
@@ -510,6 +514,8 @@ def test_add_entry_caps_the_width_at_max_entry_length():
         {"address": "0x1000", "spec_label": "String (UTF-8)", "length": 10**9}
     )
     table = SimpleNamespace(_entries=[], _rebuild=lambda: None)
+    # add_entry delegates to the batched merge every promotion goes through.
+    table._add_entries = lambda entries: CheatTable._add_entries(table, entries)
     with pytest.raises(ValueError, match=str(MAX_ENTRY_LENGTH)):
         CheatTable.add_entry(table, entry)
     assert table._entries == []
@@ -584,5 +590,140 @@ def test_bulk_edit_writes_go_through_the_poll_worker(qapp, monkeypatch):
         assert queued == [(0x1000, 7), (0x2000, 7)]
         assert process.writes == []  # nothing ran on the UI thread
         assert [e.last_value for e in table._entries] == [7, 7]
+    finally:
+        table.shutdown()
+
+
+class _IdleProcess:
+    """A target whose reads return 0 and whose writes are recorded."""
+
+    pid = 1
+
+    def __init__(self):
+        self.writes = []
+
+    def read_process_memory(self, *args):
+        return 0
+
+    def write_process_memory(self, address, pytype, length, value):
+        self.writes.append((address, value))
+        return value
+
+    def search_by_addresses(self, *args):
+        return iter(())
+
+
+def test_bulk_promotion_merges_duplicates_and_rebuilds_once(qapp):
+    """
+    ``add_addresses`` used to call ``add_entry`` per address, each doing a
+    linear duplicate scan and a full table rebuild — quadratic in the
+    selection. It is now one merge and one rebuild, with the same dedup rules.
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import CheatTable
+    from PyMemoryEditor.app.value_types import find_spec
+
+    table = CheatTable(_IdleProcess())
+    try:
+        table.add_entry(
+            CheatEntry(description="hp", address=0x2000, spec_label="4 Bytes (Int32)", length=4)
+        )
+        rebuilds = []
+        original = table._rebuild
+        table._rebuild = lambda: (rebuilds.append(1), original())
+
+        table.add_addresses(
+            [0x1000, 0x2000, 0x1000, 0x3000], find_spec("2 Bytes (Int16)"), 2
+        )
+
+        assert rebuilds == [1]
+        assert [e.address for e in table._entries] == [0x2000, 0x1000, 0x3000]
+        # The address already present was retyped in place, keeping its description.
+        assert table._entries[0].spec_label == "2 Bytes (Int16)"
+        assert table._entries[0].description == "hp"
+        assert table._table.rowCount() == 3
+    finally:
+        # The patch closes over the table (a cycle): left in place, the
+        # widget is freed by the cyclic GC -- on whatever thread it runs on,
+        # which for a Qt object off the GUI thread is a segfault.
+        table.__dict__.pop("_rebuild", None)
+        table.shutdown()
+
+
+def test_an_inline_edit_against_a_gone_target_reverts_and_says_so(qapp, monkeypatch):
+    """
+    With the poller paused (target exited) an inline edit used to return
+    quietly, leaving the typed text in the cell as if it had been written. It
+    now restores the cell and warns, as the bulk edit already reported.
+    """
+    pytest.importorskip("PySide6")
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import CheatTable
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2])
+    )
+    table = CheatTable(_IdleProcess())
+    try:
+        entry = CheatEntry(description="", address=0x1000, spec_label="4 Bytes (Int32)", length=4)
+        table.add_entry(entry)
+        entry.last_value = 5
+        table._rebuild()
+        table.set_polling_paused(True)
+
+        item = table._table.item(0, table.COL_VALUE)
+        item.setText("42")
+
+        assert item.text() == "5"
+        assert entry.last_value == 5
+        assert table._poller._pending_writes == []
+        assert len(warnings) == 1 and "0x1000" in warnings[0]
+    finally:
+        table.shutdown()
+
+
+def test_an_inline_edit_on_a_frozen_row_publishes_the_new_freeze_first(
+    qapp, monkeypatch
+):
+    """
+    The frozen value only reached the poller on the next publish tick, so the
+    tick that drained the edit's write still held the old frozen value and
+    wrote it straight back over the edit. The snapshot now goes out before
+    the write is queued (and the poller takes both under one lock).
+    """
+    pytest.importorskip("PySide6")
+
+    from PyMemoryEditor.app.cheat_entry import CheatEntry
+    from PyMemoryEditor.app.cheat_table import CheatTable
+
+    table = CheatTable(_IdleProcess())
+    try:
+        entry = CheatEntry(description="", address=0x1000, spec_label="4 Bytes (Int32)", length=4)
+        entry.frozen = True
+        entry.frozen_value = 5
+        table.add_entry(entry)
+
+        calls = []
+        monkeypatch.setattr(
+            table._poller,
+            "update_snapshot",
+            lambda snapshot: calls.append(("snapshot", [row[3] for row in snapshot])),
+        )
+        monkeypatch.setattr(
+            table._poller,
+            "request_write",
+            lambda address, pytype, length, value: calls.append(("write", value)),
+        )
+
+        table._table.item(0, table.COL_VALUE).setText("9")
+
+        assert calls[:2] == [("snapshot", [9]), ("write", 9)]
+        assert entry.frozen_value == 9
     finally:
         table.shutdown()

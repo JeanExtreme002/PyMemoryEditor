@@ -24,6 +24,7 @@ session keeps its most recent :data:`MAX_SCANS_PER_SESSION` result sets
 will ask for again), and each result set is capped at scan time.
 """
 
+import dataclasses
 import logging
 import sys
 import threading
@@ -544,12 +545,13 @@ class SessionStore:
         Scan ids are unique across the store, so the model only has to carry
         the one handle through a refine chain.
         """
+        # Under the store lock, which `new_scan` adds (and evicts) under: the
+        # membership test and the lookup used to run outside it, so an
+        # eviction between the two turned a found id into "Unknown scan id".
         with self._lock:
-            sessions = list(self._sessions.values())
-
-        for session in sessions:
-            if scan_id in session.scan_ids:
-                return session, session.get_scan(scan_id)
+            for session in self._sessions.values():
+                if scan_id in session.scan_ids:
+                    return session, session.get_scan(scan_id)
 
         raise SessionError(
             'Unknown scan id "%s". Run a scan (scan_value / scan_pattern) to '
@@ -670,6 +672,57 @@ def batch_regions(
     return batches
 
 
+#: Pieces :func:`split_regions` cuts are a multiple of this, so a value at its
+#: natural alignment (and a pointer-sized slot) never straddles a seam.
+SPLIT_ALIGNMENT = 4096
+
+#: Smallest piece :func:`split_regions` cuts, whatever the batch size. Splitting
+#: exists to bound one *huge* region; with a tiny ``--scan-batch-bytes`` it
+#: would otherwise turn a desktop target into millions of 4 KiB scans.
+MIN_SPLIT_BYTES = 1024 * 1024
+
+
+def split_regions(
+    regions: Sequence[MemoryRegion],
+    piece_bytes: int,
+    *,
+    overlap: int = 0,
+) -> List[MemoryRegion]:
+    """Cut every region larger than one piece into consecutive pieces.
+
+    :func:`batch_regions` cannot split a region, so before this a single
+    multi-gigabyte heap was one batch: the scan deadline was not checked until
+    it had been read end to end, and a pointer map was built over all of it in
+    one go. Pieces restore the bound.
+
+    :param piece_bytes: target piece size; rounded down to
+        :data:`SPLIT_ALIGNMENT` and floored at :data:`MIN_SPLIT_BYTES`.
+    :param overlap: bytes each piece (but the last of a region) extends past
+        its seam. A scan that can match at any byte offset needs
+        ``width - 1``: a match straddling the seam then lies wholly inside the
+        piece before it, while a match *starting* in the overlap cannot fit in
+        it, so nothing is found twice. ``0`` for scans stepped at a natural
+        alignment, which the aligned seams never cut.
+
+    Pieces keep every attribute of their region but the address and size.
+    """
+    piece = max(MIN_SPLIT_BYTES, piece_bytes - piece_bytes % SPLIT_ALIGNMENT)
+    pieces: List[MemoryRegion] = []
+
+    for region in regions:
+        if region.size <= piece:
+            pieces.append(region)
+            continue
+        end = region.address + region.size
+        start = region.address
+        while start < end:
+            stop = min(start + piece + overlap, end)
+            pieces.append(dataclasses.replace(region, address=start, size=stop - start))
+            start += piece
+
+    return pieces
+
+
 def region_to_dict(region: MemoryRegion) -> Dict[str, object]:
     """Render a region as JSON for a tool result.
 
@@ -711,4 +764,5 @@ __all__ = (
     "batch_regions",
     "host_platform",
     "region_to_dict",
+    "split_regions",
 )

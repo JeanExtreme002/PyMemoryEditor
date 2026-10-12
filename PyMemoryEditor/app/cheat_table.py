@@ -230,27 +230,47 @@ class CheatTable(QWidget):
         delete_shortcut.activated.connect(self._on_remove_selected)
 
     def add_entry(self, entry: CheatEntry) -> None:
-        # Every entry enters here, whichever way it was created — promoted from
-        # a scan, from a pointer dialog, added by hand, or loaded from JSON. A
-        # zero-width buffer reads back empty on every poll tick and can't be
-        # spotted from the table, so the floor is enforced once, at the door,
-        # rather than at each of those call sites. (The AOB pattern spec is the
-        # one whose declared length is 0 — the scanner derives its real width
-        # from the pattern.) The ceiling is the same one every other width
-        # field enforces (MAX_ENTRY_LENGTH); only a JSON import can carry more,
-        # and silently resizing its entry would alter what the user exports
-        # next, so that is refused -- the import loop reports and skips it.
-        length = int(entry.length)
-        if length > MAX_ENTRY_LENGTH:
-            raise ValueError(
-                "entry at 0x%X has length %d, over the %d-byte maximum"
-                % (entry.address, length, MAX_ENTRY_LENGTH)
-            )
-        entry.length = max(1, length)
+        self._add_entries([entry])
 
-        # If the address already exists, just refresh its description/type.
+    def _add_entries(self, new_entries: List[CheatEntry]) -> None:
+        """Merge ``new_entries`` into the table and rebuild it once.
+
+        Every entry enters here, whichever way it was created — promoted from
+        a scan, from a pointer dialog, added by hand, or loaded from JSON. A
+        zero-width buffer reads back empty on every poll tick and can't be
+        spotted from the table, so the floor is enforced once, at the door,
+        rather than at each of those call sites. (The AOB pattern spec is the
+        one whose declared length is 0 — the scanner derives its real width
+        from the pattern.) The ceiling is the same one every other width
+        field enforces (MAX_ENTRY_LENGTH); only a JSON import can carry more,
+        and silently resizing its entry would alter what the user exports
+        next, so that is refused -- the import loop reports and skips it.
+
+        Batched so a bulk promotion costs one address lookup per row and one
+        rebuild in total: one ``add_entry`` per row did a linear duplicate
+        scan plus a full table rebuild each, quadratic in the selection.
+
+        :raises ValueError: if an entry's length is over ``MAX_ENTRY_LENGTH``;
+            checked for every entry before any is added.
+        """
+        for entry in new_entries:
+            length = int(entry.length)
+            if length > MAX_ENTRY_LENGTH:
+                raise ValueError(
+                    "entry at 0x%X has length %d, over the %d-byte maximum"
+                    % (entry.address, length, MAX_ENTRY_LENGTH)
+                )
+
+        # First entry per address, as the linear scan used to find.
+        by_address: Dict[int, CheatEntry] = {}
         for existing in self._entries:
-            if existing.address == entry.address:
+            by_address.setdefault(existing.address, existing)
+
+        for entry in new_entries:
+            entry.length = max(1, int(entry.length))
+            # If the address already exists, just refresh its description/type.
+            existing = by_address.get(entry.address)
+            if existing is not None:
                 existing.description = entry.description or existing.description
                 # Re-promoting an address that is already in the table is the
                 # third place a spec_label changes, and the cached value has to
@@ -260,10 +280,10 @@ class CheatTable(QWidget):
                     _forget_value_read_as_another_type(existing)
                 existing.spec_label = entry.spec_label
                 existing.length = entry.length
-                self._rebuild()
-                return
+                continue
+            self._entries.append(entry)
+            by_address[entry.address] = entry
 
-        self._entries.append(entry)
         self._rebuild()
 
     def add_addresses(
@@ -283,15 +303,17 @@ class CheatTable(QWidget):
                 "length %d is over the %d-byte maximum for a cheat-table entry"
                 % (int(length), MAX_ENTRY_LENGTH)
             )
-        for addr in addresses:
-            self.add_entry(
+        self._add_entries(
+            [
                 CheatEntry(
                     description=description,
                     address=int(addr),
                     spec_label=spec.label,
                     length=int(length),
                 )
-            )
+                for addr in addresses
+            ]
+        )
 
     def entries(self) -> List[CheatEntry]:
         return list(self._entries)
@@ -405,14 +427,30 @@ class CheatTable(QWidget):
             # Nothing to route it to once shutdown() handed the worker over,
             # and nothing to write to while the target is known to be gone.
             if self._poller_stopped or self._paused:
+                # Put the cell back and say so, as the bulk edit does —
+                # returning quietly left the typed text on screen as if it had
+                # been written.
+                self._suspend_signals = True
+                item.setText(self._value_text_for(entry))
+                self._suspend_signals = False
+                QMessageBox.warning(
+                    self,
+                    "Write value",
+                    f"0x{entry.address:X}: the target process is no longer available.",
+                )
                 return
-            self._poller.request_write(
-                entry.address, entry.spec.pytype, entry.length, value
-            )
 
             entry.last_value = value
             if entry.frozen:
                 entry.frozen_value = value
+                # Hand the worker the new frozen value *before* queuing the
+                # write: its snapshot otherwise still holds the old one until
+                # the next publish tick, and the freeze loop would write that
+                # stale value straight over the edit.
+                self._publish_snapshot_to_worker()
+            self._poller.request_write(
+                entry.address, entry.spec.pytype, entry.length, value
+            )
 
     def _publish_snapshot_to_worker(self) -> None:
         """Hand the worker a fresh immutable snapshot of every entry."""

@@ -89,6 +89,12 @@ matches. Restarting one byte later would re-report every suffix of a long match
 (`ohn@example.com` right after `john@example.com`). To get every start offset
 anyway, wrap the regex in a lookahead: `rb"(?=PLAYER_\d+)"`.
 
+Large regions are scanned in chunks, and the results are the same as one
+`finditer` over the whole region: a match that spans a chunk boundary is
+reported once, not once plus its suffix. A match longer than `byte_length`
+can be cut at a boundary, so size `byte_length` for the longest match you
+expect.
+
 ## Method signature
 
 ```{eval-rst}

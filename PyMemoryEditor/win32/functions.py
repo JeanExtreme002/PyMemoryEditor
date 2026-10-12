@@ -9,6 +9,7 @@
 import ctypes
 import ctypes.wintypes
 import logging
+import time
 from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
@@ -232,16 +233,11 @@ psapi.GetMappedFileNameW.argtypes = (
 )
 psapi.GetMappedFileNameW.restype = ctypes.wintypes.DWORD
 
+# Initial GetMappedFileNameW buffer, in WCHARs. A name that fills it may have
+# been truncated, so the call is retried with a larger buffer up to the
+# longest NT path (UNICODE_STRING.MaximumLength is a USHORT of bytes).
 _MAPPED_FILENAME_BUF_SIZE = 512
-
-
-system_information = SYSTEM_INFO()
-kernel32.GetSystemInfo(ctypes.byref(system_information))
-
-
-# True when the running Python is a 64-bit build (and therefore the host OS is
-# at least 64-bit too).
-_HOST_IS_64BIT = ctypes.sizeof(ctypes.c_void_p) == 8
+_MAPPED_FILENAME_MAX_SIZE = 32768
 
 
 # Native OS bitness, independent of how Python was built. GetNativeSystemInfo
@@ -336,6 +332,7 @@ T = TypeVar("T")
 # Win32 error codes this module reasons about.
 _ERROR_ACCESS_DENIED = 5
 _ERROR_INVALID_HANDLE = 6
+_ERROR_BAD_LENGTH = 24
 _ERROR_INVALID_PARAMETER = 87
 # GetExitCodeProcess reports this while the process is still running.
 _STILL_ACTIVE = 259
@@ -351,6 +348,17 @@ _HANDLE_LEVEL_ERRORS = frozenset((_ERROR_ACCESS_DENIED, _ERROR_INVALID_HANDLE))
 # every address, and without this ceiling the walk would step one page at a
 # time across the whole user address space (~2^47 / 4 KiB calls).
 _REGION_MAX_CONSECUTIVE_FAILURES = 64
+
+# How many times a module snapshot is retried while it fails with
+# ERROR_BAD_LENGTH (the target's module list changed mid-snapshot). The
+# documentation says to retry until it succeeds; a ceiling keeps a target that
+# loads DLLs in a tight loop from hanging the caller.
+_SNAPSHOT_BAD_LENGTH_RETRIES = 16
+
+# Pause between those retries. Back-to-back attempts land inside the same
+# loader transition and fail alike; a few milliseconds lets it finish, and the
+# worst case stays well under a tenth of a second.
+_SNAPSHOT_BAD_LENGTH_DELAY = 0.005
 
 
 # Message for OpenProcess failing with ERROR_ACCESS_DENIED. The library never
@@ -449,13 +457,18 @@ def _get_mapped_filename(process_handle: int, address: int) -> str:
     (``C:\\...``) would require ``QueryDosDevice`` for each volume, which is
     costly and unnecessary for display purposes.
     """
-    buf = ctypes.create_unicode_buffer(_MAPPED_FILENAME_BUF_SIZE)
-    length = psapi.GetMappedFileNameW(
-        process_handle, address, buf, _MAPPED_FILENAME_BUF_SIZE
-    )
-    if length == 0:
-        return ""
-    return buf.value
+    size = _MAPPED_FILENAME_BUF_SIZE
+    while True:
+        buf = ctypes.create_unicode_buffer(size)
+        length = psapi.GetMappedFileNameW(process_handle, address, buf, size)
+        if length == 0:
+            return ""
+        # A name that fills the buffer was truncated (the call returns the
+        # truncated length, and on older Windows without a terminating NUL):
+        # retry with a larger buffer instead of reporting a clipped path.
+        if length < size - 1 or size >= _MAPPED_FILENAME_MAX_SIZE:
+            return buf[:min(length, size)].split("\x00", 1)[0]
+        size *= 2
 
 
 def GetMemoryRegions(process_handle: int, pid: int = 0) -> Generator[MemoryRegion, None, None]:
@@ -697,7 +710,7 @@ def _read_region(process_handle: int, address: int, size: int):
 
     Returns the byte buffer, or ``None`` when the failure is one the scan may
     skip (``ERROR_PARTIAL_COPY`` / ``ERROR_NOACCESS`` for a page unmapped or
-    re-protected mid-scan, a zero-byte read). Raises
+    re-protected mid-scan, a short read). Raises
     :class:`_Win32FatalReadError` when the failure describes the handle or the
     target instead of the page — ``ERROR_ACCESS_DENIED``,
     ``ERROR_INVALID_HANDLE``, or a target that has exited — because skipping
@@ -728,7 +741,15 @@ def _read_region(process_handle: int, address: int, size: int):
         if _process_has_exited(process_handle):
             raise _Win32FatalReadError(address, size, err, "the target process has exited")
         return None
-    if bytes_read.value == 0:
+    if bytes_read.value != size:
+        # A short read leaves the tail of the buffer zero-filled, and the scan
+        # kernels search the whole requested size: an exact scan for 0 would
+        # "match" bytes that were never read. Skip the chunk, as the Linux and
+        # macOS backends do with a partial read.
+        _logger.debug(
+            "_read_region: partial read at 0x%X: %d of %d bytes; chunk skipped",
+            address, bytes_read.value, size,
+        )
         return None
     return region_data
 
@@ -950,7 +971,9 @@ def GetThreads(pid: int) -> Generator[ThreadInfo, None, None]:
         kernel32.CloseHandle(snapshot)
 
 
-def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
+def GetModules(
+    pid: int, *, process_handle: Optional[int] = None
+) -> Generator[ModuleInfo, None, None]:
     """
     Yield a :class:`ModuleInfo` for every module loaded in the target process.
 
@@ -962,14 +985,38 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
     32-bit modules of a WOW64 target.
 
     Module enumeration needs no ``PROCESS_*`` right on the handle — the caller
-    only supplies the pid here.
+    only supplies the pid here. ``process_handle``, when given, is used only to
+    tell a target that has exited (the snapshot fails or comes back empty)
+    apart from a live one: that case raises
+    :class:`~PyMemoryEditor.ProcessIDNotExistsError`, the contract
+    ``AbstractProcess.get_modules`` documents. Without it, a pid probe answers
+    the same question for a target that is gone entirely.
+
+    The module snapshot fails with ``ERROR_BAD_LENGTH`` while the target's
+    loader is changing its module list (a DLL loading or unloading); per the
+    documentation the call is retried, a bounded number of times.
     """
-    snapshot = kernel32.CreateToolhelp32Snapshot(
-        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid
-    )
-    # CreateToolhelp32Snapshot returns INVALID_HANDLE_VALUE (-1 cast to HANDLE)
-    # on failure — same check the thread snapshot uses.
+    for _attempt in range(_SNAPSHOT_BAD_LENGTH_RETRIES):
+        ctypes.set_last_error(0)
+        snapshot = kernel32.CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid
+        )
+        # CreateToolhelp32Snapshot returns INVALID_HANDLE_VALUE (-1 cast to
+        # HANDLE) on failure — same check the thread snapshot uses.
+        if snapshot and snapshot != ctypes.wintypes.HANDLE(-1).value:
+            break
+        if ctypes.get_last_error() != _ERROR_BAD_LENGTH:
+            break
+        if _attempt + 1 < _SNAPSHOT_BAD_LENGTH_RETRIES:
+            time.sleep(_SNAPSHOT_BAD_LENGTH_DELAY)
+    else:
+        snapshot = None
+
     if not snapshot or snapshot == ctypes.wintypes.HANDLE(-1).value:
+        code = ctypes.get_last_error()
+        if _target_is_gone(pid, process_handle):
+            raise ProcessIDNotExistsError(pid)
+        ctypes.set_last_error(code)
         _raise_last_error("CreateToolhelp32Snapshot")
 
     entry = MODULEENTRY32W()
@@ -977,7 +1024,10 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
 
     try:
         if not kernel32.Module32FirstW(snapshot, ctypes.byref(entry)):
-            # Empty snapshot is legal (target exited / not yet initialized).
+            # An empty snapshot of a live target is legal (not yet
+            # initialized); of an exited one it is the documented error.
+            if _target_is_gone(pid, process_handle):
+                raise ProcessIDNotExistsError(pid)
             _logger.debug(
                 "GetModules: Module32FirstW returned 0 (snapshot empty for pid=%d)",
                 pid,
@@ -1003,6 +1053,20 @@ def GetModules(pid: int) -> Generator[ModuleInfo, None, None]:
                 break
     finally:
         kernel32.CloseHandle(snapshot)
+
+
+def _target_is_gone(pid: int, process_handle: Optional[int]) -> bool:
+    """
+    Whether the target has exited, for the Toolhelp walks. An open handle
+    keeps the pid reserved after the process exits, so it is asked directly
+    (``GetExitCodeProcess``); without one — or when it lacks the query right —
+    the pid probe answers.
+    """
+    if process_handle:
+        exited = _process_has_exited(process_handle)
+        if exited is not None:
+            return exited
+    return not ProcessExists(pid)
 
 
 def GetProcesses() -> Generator[Tuple[int, str], None, None]:

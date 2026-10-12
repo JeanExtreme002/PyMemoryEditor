@@ -130,6 +130,11 @@ for address, info in process.search_by_value(int, 4, target, progress_informatio
 
 The `info` dict has at least a `progress` key (a float in `[0, 1]`).
 
+Progress arrives **with each match** — it is the position of that match in the
+scan. A scan with few hits updates the bar rarely, and one with no hits never
+updates it: when the loop ends, treat the scan as complete (100%) regardless of
+the last `progress` you saw.
+
 ## Search by range
 
 For value ranges (e.g. "find every address holding 100..200"):

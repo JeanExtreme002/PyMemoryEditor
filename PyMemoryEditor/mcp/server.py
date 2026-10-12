@@ -23,7 +23,7 @@ import functools
 import inspect
 import logging
 import sys
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .. import __version__
 from .config import ServerConfig, parse_args
@@ -204,6 +204,8 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
     from mcp.types import ToolAnnotations
     from pydantic import BaseModel, Field
 
+    from .policy import is_shared_runtime
+
     class AttachApproval(BaseModel):
         """The form shown to the user when a new target needs approval."""
 
@@ -212,6 +214,18 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
             description=(
                 "Stop asking for this process for the rest of this server's "
                 "life (it also covers the target restarting)."
+            ),
+        )
+
+    class InstanceApproval(BaseModel):
+        """The same form for a shared runtime, whose name is not an identity."""
+
+        remember: bool = Field(
+            default=False,
+            description=(
+                "Stop asking for this running process for the rest of this "
+                "server's life. Other processes with the same name, and this "
+                "one after a restart, will still ask."
             ),
         )
 
@@ -232,7 +246,29 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
         decision = target["decision"]
 
         if decision.allowed:
-            return await _off_loop(toolset.attach, found_pid, found_name)
+            result = await _off_loop(toolset.attach, found_pid, found_name)
+            # A remembered approval for one instance of a shared runtime is
+            # keyed by pid and start time, and attach() re-checks only the
+            # name: if the approved script exited and another of the same name
+            # took its pid in between, the policy no longer allows it. Asking
+            # again now that the handle pins the pid closes that window; for
+            # name and allowlist approvals the verdict cannot have changed.
+            recheck = await _off_loop(toolset.policy.check, found_pid, found_name)
+            if not recheck.allowed:
+                await _off_loop(toolset.close_process, result["session_id"])
+                if await _off_loop(toolset.policy.identify, found_pid) is None:
+                    why = (
+                        "its start time could not be read, so it cannot be "
+                        "confirmed to be the process that was approved"
+                    )
+                else:
+                    why = "it exited and the pid was reused"
+                raise SdkToolError(
+                    'pid %d is not confirmed as the "%s" process that was '
+                    "approved: %s. Nothing was attached; call open_process "
+                    "again so the user is asked." % (found_pid, found_name, why)
+                )
+            return result
 
         if not decision.needs_approval:
             raise SdkToolError(decision.reason)
@@ -256,12 +292,41 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
                 % (found_name or "unknown", found_pid, refusal)
             )
 
+        shared = is_shared_runtime(found_name)
+        # The instance the prompt is about. Read before asking: a shared
+        # runtime's pid can be reused by another script of the same name
+        # while the user reads, and attach() only re-checks the name.
+        shown_identity = (
+            await _off_loop(toolset.policy.identify, found_pid) if shared else None
+        )
+        notes = ""
+        if toolset.policy.is_sensitive(found_name):
+            # Allowed, not denied -- scanning a browser is a legitimate thing
+            # to want -- but the person approving should know what it holds.
+            notes += (
+                "\n\nCaution: this looks like a web browser or AI client. "
+                "Those keep session cookies, saved passwords, tokens or API "
+                "keys in memory; approve only if it really is the target."
+            )
+        if not found_name:
+            notes += (
+                "\n\nIts name cannot be read, so the server could not check it "
+                "against the system-process denylist. Approve only if you know "
+                "what pid %d is." % found_pid
+            )
+        elif shared:
+            notes += (
+                '\n\n"%s" is a shared runtime: remembering this approval '
+                "covers only this running process, not every %s process."
+                % (found_name, found_name)
+            )
+
         try:
             answer = await ctx.elicit(
                 message=(
                     'Allow PyMemoryEditor to attach to "%s" (pid %d)?\n\n'
                     "This gives the assistant read access to that process's "
-                    "memory.%s"
+                    "memory.%s%s"
                     % (
                         found_name or "unknown",
                         found_pid,
@@ -272,9 +337,10 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
                             else "\nThis server is read-only; it cannot change "
                             "the process."
                         ),
+                        notes,
                     )
                 ),
-                schema=AttachApproval,
+                schema=InstanceApproval if shared else AttachApproval,
             )
         except Exception as error:  # noqa: BLE001 — a client that cannot answer
             _logger.warning("Attach approval could not be requested: %s", error)
@@ -292,20 +358,43 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
             )
 
         remember = bool(getattr(answer.data, "remember", False))
-        remembered = False
-
-        if remember and found_name:
-            toolset.policy.grant(found_name)
-            remembered = True
-            _logger.info("Approved and remembered target %r", found_name)
-        else:
-            _logger.info("Approved target %r (this attach only)", found_name)
+        scope = None
 
         # attach -> SessionStore.open re-checks the cap: a slot may have been
         # taken while the user read the prompt.
         result = await _off_loop(toolset.attach, found_pid, found_name)
 
-        if remember and not remembered:
+        if shown_identity is not None:
+            # The handle now pins the pid; make sure it is still the instance
+            # the user approved, not a same-named process that reused the pid.
+            current = await _off_loop(toolset.policy.identify, found_pid)
+            if current != shown_identity:
+                await _off_loop(toolset.close_process, result["session_id"])
+                raise SdkToolError(
+                    'pid %d is no longer the "%s" process the user approved: it '
+                    "exited and the pid was reused while the prompt was open. "
+                    "Nothing was attached; ask the user before opening it again."
+                    % (found_pid, found_name)
+                )
+
+        if remember and found_name and shared and shown_identity is None:
+            # Nothing ties the approval to the instance that was shown: reading
+            # the start time now could name a process that took the pid while
+            # the prompt was open. Not remembered; the note below says so.
+            _logger.info("Approved target %r (start time unreadable, not remembered)", found_name)
+        elif remember and found_name:
+            # With the pid, so a shared runtime (python3, node) is remembered
+            # as this one running instance rather than as a name every script
+            # on the machine shares -- the instance that was shown, not
+            # whatever holds the pid now. See ProcessPolicy.grant.
+            scope = toolset.policy.grant(
+                found_name, pid=found_pid, identity=shown_identity
+            )
+            _logger.info("Approved and remembered target %r (%s)", found_name, scope)
+        else:
+            _logger.info("Approved target %r (this attach only)", found_name)
+
+        if remember and scope is None:
             # A process whose name this user cannot read has nothing to
             # remember it by, and grants are name-based so the target survives
             # a restart. Say so instead of letting the user believe their tick
@@ -315,9 +404,22 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
                 "The user asked to remember this target, but its name could not "
                 "be read, and approvals are matched by name. Attaching to it "
                 "will prompt again — mention this so they are not surprised."
+                if not found_name
+                else "The user asked to remember this target, but it is a "
+                "shared runtime and its start time could not be read, so there "
+                "is nothing to tie the approval to. Attaching to it will "
+                "prompt again — mention this so they are not surprised."
             )
         elif remember:
             result["approval_remembered"] = True
+            result["approval_scope"] = scope
+            if scope == "instance":
+                result["approval_note"] = (
+                    '"%s" is a shared runtime, so the approval covers only this '
+                    "running process (pid %d). Other %s processes, and this one "
+                    "after a restart, will prompt again."
+                    % (found_name, found_pid, found_name)
+                )
 
         return result
 
@@ -338,6 +440,103 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
         ),
         meta=dict(_ALWAYS_ASK),
     )(_surface_errors(open_process))
+
+
+def _confirmed_write_value(toolset: MemoryToolset) -> Callable[..., Any]:
+    """``write_value`` with the user asked first, for ``--confirm-writes``.
+
+    The default build only *tags* the write tool with
+    ``anthropic/requiresUserInteraction``, which is an Anthropic extension: a
+    client that does not know the key runs writes unprompted. This is the
+    standard-MCP way to get the same guarantee everywhere — the server asks
+    through elicitation, the channel ``open_process`` already uses.
+
+    Opt-in rather than automatic, because there is no way to tell from here
+    whether the client honours the hint: Claude Code both honours it *and*
+    supports elicitation, so eliciting by default would ask its users twice
+    for every write and teach them to click through both.
+
+    Fails closed like the attach prompt: with no way to ask, the write is
+    refused, never run unconfirmed.
+    """
+    from mcp.server.elicitation import AcceptedElicitation
+    from mcp.server.mcpserver import Context
+    from mcp.server.mcpserver.exceptions import ToolError as SdkToolError
+    from pydantic import BaseModel
+
+    from .toolset import _caption_value
+
+    class WriteApproval(BaseModel):
+        """Nothing to fill in: the answer is the accept / decline itself."""
+
+    async def write_value(
+        session_id: str,
+        address: str,
+        value_type: str,
+        value: str,
+        bufflength: int = 0,
+        *,
+        ctx: Context,
+    ) -> Dict[str, Any]:
+        # Same return annotation as MemoryToolset.write_value: the SDK derives
+        # the tool's output schema from it, and the flag must not change it.
+        arguments = dict(
+            session_id=session_id, address=address, value_type=value_type,
+            value=value, bufflength=bufflength,
+        )
+        # Validated before asking, so a malformed call is an error the model
+        # can fix rather than a prompt the user has to read.
+        preview = await _off_loop(toolset.preview_write, **arguments)
+
+        if not _can_elicit(ctx):
+            raise SdkToolError(
+                "This server was started with --confirm-writes, so every write "
+                "needs the user's confirmation, and this client cannot show "
+                "the prompt. Nothing was written. Tell the user; the operator "
+                "can drop --confirm-writes if the client confirms tool calls "
+                "itself."
+            )
+
+        current = preview["current_value"]
+        try:
+            answer = await ctx.elicit(
+                message=(
+                    'Allow PyMemoryEditor to write to "%s" (pid %d)?\n\n'
+                    "Address: %s\nType: %s (%d byte%s)\nNew value: %s\n"
+                    "Current value: %s\n\nThe current value is returned so "
+                    "the change can be undone."
+                    % (
+                        preview["name"] or "unknown",
+                        preview["pid"],
+                        preview["address"],
+                        preview["value_type"],
+                        preview["bytes"],
+                        "" if preview["bytes"] == 1 else "s",
+                        _caption_value(preview["value"]),
+                        "unreadable" if current is None else _caption_value(current),
+                    )
+                ),
+                schema=WriteApproval,
+            )
+        except Exception as error:  # noqa: BLE001 — a client that cannot answer
+            _logger.warning("Write confirmation could not be requested: %s", error)
+            raise SdkToolError(
+                "Could not ask the user to confirm the write to %s: %s. "
+                "Nothing was written." % (preview["address"], error)
+            ) from None
+
+        if not isinstance(answer, AcceptedElicitation):
+            raise SdkToolError(
+                "The user did not approve writing to %s. Nothing was written. "
+                "Do not retry it or write somewhere else instead — report the "
+                "refusal and ask what they would like." % preview["address"]
+            )
+
+        return await _off_loop(toolset.write_value, **arguments)
+
+    # As for open_process: only the docstring, so the SDK still sees `ctx`.
+    write_value.__doc__ = toolset.write_value.__doc__
+    return write_value
 
 
 async def _off_loop(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -476,7 +675,13 @@ def build_server(
             # Changing another process's memory is never something to
             # auto-approve, whatever mode the client is running in.
             meta=dict(_ALWAYS_ASK),
-        )(_surface_errors(toolset.write_value))
+        )(
+            _surface_errors(
+                _confirmed_write_value(toolset)
+                if config.confirm_writes
+                else toolset.write_value
+            )
+        )
 
     return server, toolset
 
@@ -515,8 +720,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if transport != "stdio":
         _logger.warning(
-            "Serving over %s: anyone who can reach the port gets %s access to "
-            "this machine's process memory. There is no authentication.",
+            "Serving over %s on 127.0.0.1: any local process, or anyone the "
+            "port is forwarded to, gets %s access to this machine's process "
+            "memory and answers the attach prompt itself. There is no "
+            "authentication.",
             transport,
             "read AND WRITE" if config.allow_write else "read",
         )

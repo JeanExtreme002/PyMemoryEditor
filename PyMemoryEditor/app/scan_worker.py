@@ -208,9 +208,17 @@ class _BaseWorker(QThread):
         super().__init__(parent)
         self._process = process
         self._cancelled = False
+        # Set by run() once the scan went through to the end: not cancelled,
+        # no error. ``finished_ok`` alone can't say so — a cancelled scan
+        # still emits it with the partial count.
+        self._completed = False
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    def completed(self) -> bool:
+        """Whether the last run finished without being cancelled or failing."""
+        return self._completed
 
 
 class FirstScanWorker(_BaseWorker):
@@ -312,6 +320,7 @@ class FirstScanWorker(_BaseWorker):
                 self.chunk_ready.emit(chunk)
 
             self.progress.emit(100.0)
+            self._completed = not self._cancelled
             self.finished_ok.emit(count)
         except Exception as exc:  # noqa: BLE001 — surface every backend error to the UI
             _LOG.warning("First scan failed: %s: %s", type(exc).__name__, exc)
@@ -442,6 +451,7 @@ class RefineScanWorker(_BaseWorker):
             if not self._cancelled:
                 self.status.emit(f"Checked {seen:,}/{total:,}, kept {kept:,}…")
             self.progress.emit(100.0)
+            self._completed = not self._cancelled
             self.finished_ok.emit(kept)
         except Exception as exc:  # noqa: BLE001 — surface every backend error to the UI
             _LOG.warning("Refine scan failed: %s: %s", type(exc).__name__, exc)

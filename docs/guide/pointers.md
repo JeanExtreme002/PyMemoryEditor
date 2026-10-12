@@ -56,7 +56,15 @@ hp = process.read_int(hp_address)
    :param int ptr_size: pointer width — ``8`` for 64-bit targets, ``4`` for
       32-bit. Leave ``None`` (the default) to use the target's
       ``pointer_size``, detected automatically.
-   :returns: the final address (an ``int``).
+   :returns: the final address (an ``int``). The last offset is added
+      without a dereference and the sum is not range-checked, so a stale chain
+      can return a negative number.
+   :raises ValueError: if ``ptr_size`` is not 4 or 8, or if a pointer plus its
+      offset lands outside the 64-bit address space before it is dereferenced
+      — typically a hop that read NULL followed by a negative offset. The
+      error is also an ``OSError``, so ``except OSError`` around a stale chain
+      catches it too.
+   :raises OSError: if a pointer along the chain cannot be read.
 ```
 
 ```{admonition} 32-bit vs 64-bit

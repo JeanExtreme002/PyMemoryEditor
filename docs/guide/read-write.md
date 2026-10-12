@@ -262,6 +262,16 @@ process.read_process_memory_into(0x7FF40010, frame)
   silently truncated — widen `bufflength` to write a larger value. The unsigned
   typed shortcuts (`write_uchar`, `write_uint`, …) likewise reject **negative**
   values with the same `ValueError`.
+- **`TypeError`** — a non-integer value (e.g. `3.7`) passed to an integer
+  write. Signed and unsigned shortcuts alike refuse it rather than truncate;
+  `bool` and integer-like objects such as NumPy integers are accepted.
+
+```{note}
+A `float` written with `bufflength=4` is narrowed to single precision, the way
+a C `float` would be: `0.1` is stored as `0.10000000149011612`, and a value
+beyond the single-precision range (about `3.4e38`) is stored as `inf` /
+`-inf`. Use the default 8-byte width when the target field is a `double`.
+```
 
 ## Reading many addresses efficiently
 

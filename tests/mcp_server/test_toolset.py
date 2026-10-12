@@ -667,6 +667,24 @@ class TestPointers:
                 session["session_id"], hex(WRITABLE_BASE + 0x830), ["0x0", "0x8"]
             )
 
+    def test_an_out_of_range_hop_is_reported_as_a_stale_chain(
+        self, toolset, session, fake_process, monkeypatch
+    ):
+        # The library's range error is both a ValueError and an OSError; it
+        # must read as a stale chain, not as a malformed argument.
+        from PyMemoryEditor.process.abstract import _PointerOutOfRangeError
+
+        def resolve(*args, **kwargs):
+            raise _PointerOutOfRangeError("pointer chain step produced address -0x100")
+
+        monkeypatch.setattr(fake_process, "resolve_pointer_chain", resolve)
+        with pytest.raises(ToolError) as caught:
+            toolset.resolve_pointer_chain(
+                session["session_id"], hex(WRITABLE_BASE + 0x830), ["-0x100", "0x0"]
+            )
+        assert "rejected an argument" not in str(caught.value)
+        assert "stale" in str(caught.value)
+
     def test_no_paths_found_suggests_a_deeper_scan(self, toolset, session):
         found = toolset.find_pointer_paths(session["session_id"], hex(WRITABLE_BASE))
         assert found["count"] == 0
@@ -2529,3 +2547,129 @@ class TestClosingABusySession:
         closed = toolset.close_process(session["session_id"])
         assert fake_process.closed
         assert "note" not in closed
+
+
+class TestValueTypeIsEchoedCanonically:
+    """`" INT "` parses, and used to be repeated verbatim into undo_hint."""
+
+    def test_read_value(self, toolset, session, fake_process):
+        address = fake_process.poke(WRITABLE_BASE + 0x700, int, 3)
+        read = toolset.read_value(session["session_id"], hex(address), " INT ", 4)
+        assert read["value_type"] == "int"
+
+    def test_write_value_and_its_undo_hint(self, toolset, session, fake_process):
+        address = fake_process.poke(WRITABLE_BASE + 0x710, int, 3)
+        written = toolset.write_value(
+            session["session_id"], hex(address), " INT ", "4", 4
+        )
+        assert written["value_type"] == "int"
+        assert written["previous_value_type"] == "int"
+        assert "value_type='int'" in written["undo_hint"]
+
+
+class TestResponsesAreBounded:
+    """Text read from the target is attacker-controlled and was unbounded per
+    page: 100 rows x 64 KiB in one result."""
+
+    def test_a_page_cuts_text_past_its_budget(self, toolset, session, monkeypatch):
+        monkeypatch.setattr(toolset_module, "MAX_PAGE_VALUE_CHARS", 10)
+        scan = toolset.scan_value(session["session_id"], "bytes", "0000")
+        listed = toolset.list_scan_results(scan["scan_id"], limit=5)
+
+        values = [row["value"] for row in listed["results"]]
+        assert values == ["0000", "0000", "00", "", ""]
+        assert [row.get("value_truncated", False) for row in listed["results"]] == [
+            False, False, True, True, True
+        ]
+        assert listed["values_truncated"] is True
+        assert "read_value" in listed["values_note"]
+
+    def test_an_untouched_page_keeps_its_shape(self, toolset, session, fake_process):
+        fake_process.poke(WRITABLE_BASE + 0x720, int, 6061)
+        scan = toolset.scan_value(session["session_id"], "int", "6061", bufflength=4)
+        listed = toolset.list_scan_results(scan["scan_id"])
+        assert "values_truncated" not in listed
+        assert set(listed["results"][0]) == {"address", "value", "readable"}
+
+    def test_the_scan_sample_has_its_own_budget(self, toolset, session, monkeypatch):
+        monkeypatch.setattr(toolset_module, "MAX_SAMPLE_VALUE_CHARS", 6)
+        scan = toolset.scan_value(session["session_id"], "bytes", "0000")
+        assert scan["sample_values_truncated"] is True
+        assert sum(len(row["value"]) for row in scan["sample"]) == 6
+
+    def test_numbers_are_never_cut(self):
+        rows = [{"value": 123456789}, {"value": "ABCDEF"}]
+        assert toolset_module._apply_value_budget(rows, 3, "str") is True
+        assert rows == [{"value": 123456789}, {"value": "ABC", "value_truncated": True}]
+
+    def test_a_float_scan_keeps_its_inf_and_nan_strings(self):
+        rows = [{"value": "inf"}, {"value": "-inf"}, {"value": "nan"}]
+        assert toolset_module._apply_value_budget(rows, 2, "float") is False
+        assert [row["value"] for row in rows] == ["inf", "-inf", "nan"]
+
+    def test_a_cut_bytes_value_is_still_valid_hex(self):
+        rows = [{"value": "DEADBEEF"}, {"value": "CAFEBABE"}]
+        assert toolset_module._apply_value_budget(rows, 11, "bytes") is True
+        assert rows[0] == {"value": "DEADBEEF"}
+        assert rows[1]["value"] == "CA"  # 3 chars left, cut to an even 2
+        bytes.fromhex(rows[1]["value"])
+
+    def test_the_tool_descriptions_mark_target_data_untrusted(self):
+        from PyMemoryEditor.mcp import MemoryToolset
+
+        for method in (MemoryToolset.list_scan_results, MemoryToolset.read_value):
+            assert "untrusted" in method.__doc__
+
+
+class TestHugeRegionsAreScannedInPieces:
+    def test_overlap_per_scan_kind(self):
+        from PyMemoryEditor.enums import ScanTypesEnum
+
+        overlap = toolset_module._value_scan_overlap
+        exact = ScanTypesEnum.EXACT_VALUE
+        assert overlap(int, 4, True, exact) == 0
+        assert overlap(int, 4, False, exact) == 3
+        assert overlap(str, 6, True, exact) == 5
+        assert overlap(bytes, 6, True, ScanTypesEnum.NOT_EXACT_VALUE) is None
+        assert toolset_module._pattern_overlap("48 8B ? ? 00") == 4
+        assert toolset_module._pattern_overlap("zz") is None
+
+    def test_the_pointer_map_gets_pieces(self, make_toolset, fake_process, monkeypatch):
+        """The map reports progress -- the deadline check -- once per region,
+        so a single huge heap was mapped in full past the budget."""
+        from PyMemoryEditor.mcp import session as session_module
+
+        monkeypatch.setattr(session_module, "SPLIT_ALIGNMENT", 0x100)
+        monkeypatch.setattr(session_module, "MIN_SPLIT_BYTES", 0x100)
+        seen = {}
+
+        def capture(target_address, **kwargs):
+            seen["regions"] = kwargs["memory_regions"]
+            return iter(())
+
+        fake_process.scan_pointer_paths = capture
+        toolset = make_toolset(config(scan_batch_bytes=0x400))
+        opened = toolset.open_process(pid=4242)
+        toolset.find_pointer_paths(opened["session_id"], hex(WRITABLE_BASE))
+
+        sizes = [region.size for region in seen["regions"]]
+        assert max(sizes) == 0x400 and len(sizes) == 8  # two 4 KiB regions
+
+    def test_the_library_does_not_swallow_a_progress_abort(self):
+        """find_pointer_paths stops the map by raising from progress_callback;
+        that only works if the library lets the exception through."""
+        from PyMemoryEditor.process.pointer_scan import AddressRanges, build_pointer_map
+
+        class Stop(Exception):
+            pass
+
+        def abort(_fraction):
+            raise Stop()
+
+        with pytest.raises(Stop):
+            build_pointer_map(
+                [(0x1000, 0x100), (0x2000, 0x100)],
+                lambda address, size: bytes(size),
+                AddressRanges([(0x1000, 0x1100)]),
+                progress_callback=abort,
+            )

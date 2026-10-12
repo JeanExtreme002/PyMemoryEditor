@@ -346,6 +346,10 @@ def iter_search_results(
 
     Regions are read in the order provided — callers should pre-sort by
     ``address`` if monotonic progress fractions matter.
+
+    ``progress_information`` only reports progress *alongside a match* (the
+    ``(address, info)`` shape has no room for anything else), so a scan with
+    few or no hits shows little or no progress.
     """
     if transient_error_check is None:
         transient_error_check = _always_false
@@ -393,8 +397,9 @@ def iter_search_results(
         for chunk_offset, chunk_size in iter_region_chunks(size, bufflength):
             chunk_address = address + chunk_offset
 
-            is_last_chunk = chunk_offset + chunk_size >= size
-            read_size = chunk_size + (0 if is_last_chunk else byte_granular_overlap)
+            read_size = chunk_size + _overlap(
+                byte_granular_overlap, size, chunk_offset, chunk_size
+            )
 
             try:
                 chunk_data = read_chunk(chunk_address, read_size)
@@ -406,8 +411,9 @@ def iter_search_results(
                         read_size,
                         exc,
                     )
-                    continue
-                raise
+                    chunk_data = None
+                else:
+                    raise
 
             if chunk_data is None:
                 continue
@@ -447,19 +453,28 @@ def iter_search_results(
         checked_memory_size += size
 
 
-def _iter_match_starts(
-    compiled_pattern: "Pattern[bytes]", data: bytes, overlapping: bool
-) -> Generator[int, None, None]:
-    """Ascending start offsets of the matches of ``compiled_pattern`` in
-    ``data``. ``overlapping`` restarts the search one byte after each match's
-    start instead of at its end, so a match beginning inside the previous one
-    is reported too (a zero-width match advances one byte either way)."""
+def _overlap(wanted: int, region_size: int, chunk_offset: int, chunk_size: int) -> int:
+    """How many bytes past a chunk to read so a match straddling its end is
+    still seen: ``wanted``, but never past the end of the region. Chunks are
+    aligned to the value width, so the last one can be shorter than
+    ``wanted`` — reading the full overlap there ran past the region into
+    memory that may not be mapped, failing the whole chunk."""
+    return max(0, min(wanted, region_size - chunk_offset - chunk_size))
+
+
+def _iter_matches(
+    compiled_pattern: "Pattern[bytes]", data: bytes, overlapping: bool, position: int = 0
+) -> Generator[Tuple[int, int], None, None]:
+    """Ascending ``(start, end)`` offsets of the matches of
+    ``compiled_pattern`` in ``data``, searching from ``position``.
+    ``overlapping`` restarts the search one byte after each match's start
+    instead of at its end, so a match beginning inside the previous one is
+    reported too (a zero-width match advances one byte either way)."""
     if not overlapping:
-        for found in compiled_pattern.finditer(data):
-            yield found.start()
+        for found in compiled_pattern.finditer(data, position):
+            yield found.start(), found.end()
         return
     search = compiled_pattern.search
-    position = 0
     # ``search`` clamps a start past the end back to ``len(data)``, where a
     # zero-width pattern would match forever — stop once we are past it.
     while position <= len(data):
@@ -467,7 +482,7 @@ def _iter_match_starts(
         if match is None:
             return
         start = match.start()
-        yield start
+        yield start, match.end()
         position = start + 1
 
 
@@ -501,7 +516,12 @@ def iter_pattern_results(
     matches — ``90 90`` over ``90 90 90`` yields offsets 0 and 1, the same
     as a value scan for those bytes. A variable-width regex follows
     ``re.finditer`` (leftmost, non-overlapping), so a long match is not
-    re-reported once per suffix.
+    re-reported once per suffix — including across a chunk boundary: the
+    next chunk resumes searching where the last reported match ended, as one
+    ``finditer`` over the whole region would. (A match longer than
+    ``pattern_length`` is cut at the end of the chunk's read; its remainder
+    can then surface as a separate match. Size ``byte_length`` for the
+    longest match you expect.)
     """
     if transient_error_check is None:
         transient_error_check = _always_false
@@ -525,13 +545,17 @@ def iter_pattern_results(
 
     for region in memory_regions:
         address, size = region.address, region.size
+        # Non-overlapping mode: where the last reported match ended, so the
+        # next chunk does not report a suffix of a match that straddled the
+        # boundary (its overlap bytes are the next chunk's first bytes).
+        resume_address = address
 
         for chunk_offset, chunk_size in iter_region_chunks(size, pattern_length):
             chunk_address = address + chunk_offset
 
-            is_last_chunk = chunk_offset + chunk_size >= size
-            overlap = 0 if is_last_chunk else pattern_length - 1
-            read_size = chunk_size + overlap
+            read_size = chunk_size + _overlap(
+                pattern_length - 1, size, chunk_offset, chunk_size
+            )
 
             try:
                 chunk_data = read_chunk(chunk_address, read_size)
@@ -543,8 +567,9 @@ def iter_pattern_results(
                         read_size,
                         exc,
                     )
-                    continue
-                raise
+                    chunk_data = None
+                else:
+                    raise
 
             if chunk_data is None:
                 continue
@@ -554,13 +579,17 @@ def iter_pattern_results(
             # single memcpy.
             data_bytes = bytes(chunk_data)
 
-            for offset in _iter_match_starts(compiled_pattern, data_bytes, overlapping):
+            position = 0 if overlapping else max(0, resume_address - chunk_address)
+            for offset, end in _iter_matches(
+                compiled_pattern, data_bytes, overlapping, position
+            ):
                 # Same clamping rule as iter_search_results: matches in the
                 # overlap belong to the *next* chunk's emission slot. Starts
                 # ascend, so nothing after this one belongs here either.
                 if offset >= chunk_size:
                     break
                 found_address = chunk_address + offset
+                resume_address = chunk_address + end
 
                 if progress_information:
                     yield (

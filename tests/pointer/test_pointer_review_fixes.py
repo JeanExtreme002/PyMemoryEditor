@@ -222,3 +222,123 @@ def test_first_module_bases_keeps_the_first_module_of_a_name():
         ModuleInfo(name="game.dll", path="/b/game.dll", base_address=0x9000, size=0x100),
     ]
     assert first_module_bases(modules) == {"game.dll": 0x1000, "other.dll": 0x2000}
+
+
+# --------------------------------------------------------------------------- #
+# build_pointer_map: chunk boundaries, NumPy parity, logging; intersect ptr_size
+# --------------------------------------------------------------------------- #
+
+import logging  # noqa: E402
+import random  # noqa: E402
+
+from PyMemoryEditor.process import pointer_scan  # noqa: E402
+from PyMemoryEditor.process.pointer_scan import intersect_pointer_paths  # noqa: E402
+from PyMemoryEditor.util import scan_numpy  # noqa: E402
+from PyMemoryEditor.util.scan import _iter_large_region_chunks  # noqa: E402
+
+
+def _small_pointer_chunks(monkeypatch, max_chunk):
+    monkeypatch.setattr(
+        pointer_scan,
+        "iter_region_chunks",
+        lambda size, width: tuple(_iter_large_region_chunks(size, width, max_chunk)),
+    )
+
+
+def _flat_reader(base, buf, reads=None):
+    def read_chunk(address, size):
+        if reads is not None:
+            reads.append((address, size))
+        offset = address - base
+        if offset < 0 or offset + size > len(buf):
+            raise OSError(14, "Bad address")
+        return bytes(buf[offset : offset + size])
+
+    return read_chunk
+
+
+@pytest.mark.parametrize("ptr_size", [4, 8])
+def test_unaligned_map_finds_a_pointer_straddling_a_chunk(monkeypatch, ptr_size):
+    """Each chunk was scanned on its own, so a misaligned pointer that began
+    in the last ``ptr_size - 1`` bytes of a chunk was never decoded."""
+    _small_pointer_chunks(monkeypatch, 32)
+    base = 0x40000
+    buf = bytearray(96)
+    slot = 32 - 2  # two bytes in chunk 0, the rest in chunk 1
+    target = base + 0x50
+    buf[slot : slot + ptr_size] = target.to_bytes(ptr_size, sys.byteorder)
+    reads = []
+    values, addresses = build_pointer_map(
+        [(base, len(buf))], _flat_reader(base, buf, reads),
+        AddressRanges([(base, base + len(buf))]), ptr_size=ptr_size, aligned=False,
+    )
+    assert list(addresses) == [base + slot]
+    assert list(values) == [target]
+    # The overlap never reads past the region.
+    assert all(address + size <= base + len(buf) for address, size in reads)
+
+
+def _random_memory(ptr_size, seed):
+    rng = random.Random(seed)
+    base = 0x7F0000000000 if ptr_size == 8 else 0x10000000
+    size = 4096
+    mapped = [(base, base + size), (base + 0x10000, base + 0x12000)]
+    buf = bytearray(size)
+    for slot in range(0, size, ptr_size):
+        pick = rng.random()
+        if pick < 0.3:
+            start, end = rng.choice(mapped)
+            value = rng.randrange(start, end)
+        elif pick < 0.4:
+            value = rng.choice((base - 1, base + size, base + 0x12000, base + 0x10000))
+        else:
+            value = rng.randrange(0, 1 << (8 * ptr_size))
+        buf[slot : slot + ptr_size] = value.to_bytes(ptr_size, sys.byteorder)
+    return base, buf, AddressRanges(mapped)
+
+
+@pytest.mark.skipif(not scan_numpy.NUMPY_AVAILABLE, reason="NumPy not installed")
+@pytest.mark.parametrize("ptr_size", [4, 8])
+def test_pointer_map_numpy_path_matches_the_python_loop(monkeypatch, ptr_size):
+    _small_pointer_chunks(monkeypatch, 512)
+    base, buf, mapped = _random_memory(ptr_size, 99 + ptr_size)
+    reader = _flat_reader(base, buf)
+    regions = [(base, len(buf))]
+
+    with_numpy = build_pointer_map(regions, reader, mapped, ptr_size=ptr_size)
+    monkeypatch.setattr(scan_numpy, "NUMPY_AVAILABLE", False)
+    without = build_pointer_map(regions, reader, mapped, ptr_size=ptr_size)
+
+    assert with_numpy[0].typecode == without[0].typecode
+    assert list(with_numpy[0]) == list(without[0])
+    assert list(with_numpy[1]) == list(without[1])
+    assert len(without[0]) > 100
+
+
+def test_pointer_map_logs_a_skipped_chunk(caplog):
+    base = 0x40000
+    buf = bytearray(64)
+    with caplog.at_level(logging.DEBUG, logger="PyMemoryEditor"):
+        build_pointer_map(
+            [(base, 64), (0x900000, 64)], _flat_reader(base, buf),
+            AddressRanges([(base, base + 64)]),
+        )
+    assert any(
+        "build_pointer_map: skipping chunk at 0x900000" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_pointer_map_progress_reaches_one_without_regions():
+    seen = []
+    build_pointer_map([], lambda a, s: None, AddressRanges([]), progress_callback=seen.append)
+    assert seen == [1.0]
+
+
+def test_intersect_does_not_merge_paths_of_different_pointer_widths():
+    path32 = PointerPath(0x1000, (0x8, 0x10), module="game.exe", module_offset=0x20, ptr_size=4)
+    path64 = PointerPath(0x9000, (0x8, 0x10), module="game.exe", module_offset=0x20, ptr_size=8)
+    assert intersect_pointer_paths([[path32], [path64]]) == []
+    assert intersect_pointer_paths([[path32], [path32]]) == [path32]
+    # The public recipe shape is unchanged.
+    assert path32.recipe() == ("game.exe", 0x20, (0x8, 0x10))

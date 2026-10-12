@@ -24,7 +24,9 @@ actually be given:
   most permissive auto-approve mode (see ``_ALWAYS_ASK`` in
   :mod:`PyMemoryEditor.mcp.server`). The hint is an Anthropic extension, not
   standard MCP: a client that does not know it may run writes unprompted, and
-  ``--read-only`` is the guarantee for that case.
+  ``--read-only`` is the guarantee for that case, and ``--confirm-writes``
+  the opt-in that makes the server itself ask before each write on any client
+  that supports elicitation.
 
 ``--read-only`` is there for when you want the guarantee enforced below this
 process rather than promised by it: the write tool is not registered at all, so
@@ -84,6 +86,12 @@ class ServerConfig:
         when your client auto-approves tools, or whenever you want the
         guarantee enforced below this process: the tool then does not exist,
         and on Windows the process handle carries no write rights.
+    :param confirm_writes: confirm every ``write_value`` call with the user
+        through an MCP elicitation prompt the server sends itself, instead of
+        relying on the client to honour the ``requiresUserInteraction`` hint.
+        Off by default, because a client that honours the hint (Claude Code)
+        would then ask twice. Fails closed: on a client that cannot show the
+        prompt, writes are refused rather than run unconfirmed.
     :param allowed_processes: process names pre-approved so they open without
         prompting — see :class:`~PyMemoryEditor.mcp.policy.ProcessPolicy`.
         Leaving it empty does **not** mean "anything goes": unlisted targets
@@ -116,6 +124,7 @@ class ServerConfig:
     """
 
     allow_write: bool = True
+    confirm_writes: bool = False
     allowed_processes: Tuple[str, ...] = field(default=())
     allow_any_process: bool = False
     allow_system_processes: bool = False
@@ -164,9 +173,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Needs no flags: it asks you before attaching to a process, and "
             "clients that honour the requiresUserInteraction hint (such as "
             "Claude Code) ask before each write; others may not. Pass "
-            "--read-only to remove the write tool entirely (do so if your "
-            "client auto-approves tools), or --allow-process NAME to skip the "
-            "attach prompt for a target you already trust."
+            "--read-only to remove the write tool entirely, or "
+            "--confirm-writes to have the server itself ask before each write "
+            "(do one or the other if your client auto-approves tools), or "
+            "--allow-process NAME to skip the attach prompt for a target you "
+            "already trust."
         ),
     )
     parser.add_argument(
@@ -177,6 +188,19 @@ def build_parser() -> argparse.ArgumentParser:
             "do not register the write tool, so the server can read and scan "
             "but never modify a target. On Windows the process handle is also "
             "opened without write rights, so the kernel enforces it."
+        ),
+    )
+    parser.add_argument(
+        "--confirm-writes",
+        action="store_true",
+        dest="confirm_writes",
+        help=(
+            "ask you to confirm every write through an approval prompt sent by "
+            "the server itself, on any client that supports MCP elicitation. "
+            "Use it when your client does not honour the "
+            "requiresUserInteraction hint; on a client that cannot show the "
+            "prompt, writes are refused. Unneeded on Claude Code, which "
+            "already asks (it would ask twice)."
         ),
     )
     parser.add_argument(
@@ -241,10 +265,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="stdio",
         help=(
             "MCP transport (default: %(default)s). stdio is what desktop "
-            "clients launch; the HTTP transports are for remote hosting and "
-            "expose this machine's memory to whoever can reach the port. They "
-            "carry no authentication, so writes over them are refused unless "
-            "--allow-remote-write is also passed."
+            "clients launch. The HTTP transports listen on 127.0.0.1 and carry "
+            "no authentication: any local process -- or anyone the port is "
+            "forwarded or proxied to -- can read this machine's process "
+            "memory through them and answers the attach prompt itself. Writes "
+            "over them are refused unless --allow-remote-write is also passed."
         ),
     )
     parser.add_argument(
@@ -302,6 +327,7 @@ def parse_args(
 
     config = ServerConfig(
         allow_write=not args.read_only,
+        confirm_writes=args.confirm_writes,
         allowed_processes=tuple(allowed),
         allow_any_process=args.allow_any_process,
         allow_system_processes=args.allow_system_processes,

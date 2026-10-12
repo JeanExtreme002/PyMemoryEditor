@@ -2,6 +2,7 @@
 
 from typing import Any, Optional, Tuple, Type, TypeVar, Union, cast
 import ctypes
+import operator
 
 
 T = TypeVar("T")
@@ -78,11 +79,20 @@ def _check_int_fits(value: int, length: int, *, signed: bool = True) -> None:
       matching the unsigned helpers' contract (a negative value is rejected).
 
     ``bool`` is a subclass of ``int`` but is written through its own ``c_bool``
-    path, so it never reaches the signed call here. Non-int values for an
-    ``int`` write (e.g. a float) are left for the ctypes assignment to reject.
+    path, so it never reaches the signed call here. An integer-like object
+    that is not an ``int`` (``numpy.int64``, anything with ``__index__``) is
+    range-checked through its integer value: ctypes accepts those too and
+    would wrap them just the same. Anything else (e.g. a float) is left for
+    the caller to reject — the ctypes assignment raises ``TypeError`` on the
+    signed path, ``AbstractProcess._write_unsigned`` on the unsigned one.
     """
-    if not isinstance(value, int) or isinstance(value, bool):
+    if isinstance(value, bool):
         return
+    if not isinstance(value, int):
+        try:
+            value = operator.index(value)
+        except TypeError:
+            return
 
     bits = length * 8
     low = -(1 << (bits - 1)) if signed else 0

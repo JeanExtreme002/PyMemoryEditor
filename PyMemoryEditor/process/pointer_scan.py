@@ -36,6 +36,7 @@ Linux and macOS.
 """
 
 import array
+import logging
 import sys
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
@@ -54,12 +55,16 @@ from typing import (
 )
 
 from ..util import iter_region_chunks
+from ..util import scan_numpy
 from .errors import PyMemoryEditorError
 from .module_info import ModuleInfo
 
 if TYPE_CHECKING:
     from .abstract import AbstractProcess
     from .remote_pointer import RemotePointer
+
+
+_logger = logging.getLogger("PyMemoryEditor")
 
 
 # array typecodes for the two supported pointer widths. Native byte order is
@@ -270,6 +275,12 @@ class PointerPath:
         Paths with no ``module`` have no portable recipe — their base is only
         valid for one run — so they return ``(None, None, offsets)`` and are
         excluded from :func:`intersect_pointer_paths` entirely.
+
+        ``ptr_size`` is not part of the tuple (its shape is kept for
+        compatibility), but it is part of a path's identity: the same offsets
+        walked with 4-byte and with 8-byte pointers read different memory.
+        :func:`intersect_pointer_paths` therefore matches on
+        ``(ptr_size, *recipe())``; do the same when comparing recipes yourself.
         """
         return (self.module, self.module_offset, self.offsets)
 
@@ -353,7 +364,14 @@ def build_pointer_map(
         these ranges (a plausible, dereferenceable pointer).
     :param aligned: when ``True`` (default) only consider slots at pointer-size
         alignment — far faster and how real compilers lay pointers out. ``False``
-        scans every byte offset (slow; catches packed/misaligned pointers).
+        scans every byte offset (slow; catches packed/misaligned pointers),
+        including pointers that straddle the boundary between two chunks of a
+        large region. With NumPy installed (the ``[speed]`` extra) the aligned
+        slots are classified in vectorized blocks; the map is identical.
+    :param progress_callback: called with the scanned fraction after each
+        region; it always ends at ``1.0`` (straight away for no regions).
+        Chunks that cannot be read are skipped and logged at DEBUG level on
+        the ``PyMemoryEditor`` logger.
     """
     typecode = _ARRAY_TYPECODE.get(ptr_size)
     if typecode is None:
@@ -365,6 +383,10 @@ def build_pointer_map(
     pairs_value = array.array(typecode)
     pairs_addr = array.array("Q")
 
+    # The aligned path classifies a whole chunk at once when NumPy is present
+    # (the ``[speed]`` extra) — same pairs, same order as the slot loop.
+    numpy_ranges = _numpy_ranges(mapped_ranges) if aligned else None
+
     total = sum(size for _, size in regions) or 1
     scanned = 0
 
@@ -372,22 +394,48 @@ def build_pointer_map(
         for chunk_offset, chunk_size in iter_region_chunks(region_size, ptr_size):
             chunk_address = region_start + chunk_offset
 
+            # The unaligned scan tests every byte offset, so a pointer can
+            # start in the last ``ptr_size - 1`` bytes of a chunk and end in
+            # the next one: read that many bytes past the chunk (never past the
+            # region) and only take slots that *start* inside it. Aligned slots
+            # cannot straddle — chunks are sized in whole pointers.
+            overlap = 0 if aligned else max(
+                0, min(ptr_size - 1, region_size - chunk_offset - chunk_size)
+            )
+
+            failure: object = "the read returned no data"
             try:
-                data = read_chunk(chunk_address, chunk_size)
+                data = read_chunk(chunk_address, chunk_size + overlap)
             except (PyMemoryEditorError, MemoryError):
                 # The process is closed or gone: not a skippable page, and an
                 # empty map would be indistinguishable from "no pointers". The
                 # same goes for an exhausted host: skipping the chunk would
                 # hand back a silently incomplete map.
                 raise
-            except Exception:  # noqa: BLE001 — backend read errors vary; skip the chunk
+            except Exception as exc:  # noqa: BLE001 — backend read errors vary; skip the chunk
                 data = None
+                failure = exc
             if not data:
+                # A skipped chunk is a hole in the map (paths through it are
+                # not found), so leave a trace for whoever debugs a scan that
+                # came back short.
+                _logger.debug(
+                    "build_pointer_map: skipping chunk at 0x%X (%d bytes): %s",
+                    chunk_address,
+                    chunk_size + overlap,
+                    failure,
+                )
                 continue
 
             if aligned:
-                slots = array.array(typecode)
                 usable = (len(data) // ptr_size) * ptr_size
+                if numpy_ranges is not None:
+                    _numpy_collect_slots(
+                        data, usable, ptr_size, chunk_address, numpy_ranges,
+                        pairs_value, pairs_addr,
+                    )
+                    continue
+                slots = array.array(typecode)
                 slots.frombytes(bytes(data[:usable]))
                 for index, value in enumerate(slots):
                     # Cheap bounds reject before the (costlier) range membership.
@@ -398,7 +446,8 @@ def build_pointer_map(
                         pairs_addr.append(chunk_address + index * ptr_size)
             else:
                 view = bytes(data)
-                for index in range(0, len(view) - ptr_size + 1):
+                last_start = min(chunk_size, len(view) - ptr_size + 1)
+                for index in range(0, last_start):
                     value = int.from_bytes(
                         view[index : index + ptr_size], byteorder, signed=False
                     )
@@ -412,9 +461,24 @@ def build_pointer_map(
         if progress_callback is not None:
             progress_callback(min(scanned / total, 1.0))
 
-    # Sort the two parallel arrays by value. zip+sort is the simplest stdlib
-    # path; the intermediate list of tuples is freed once the arrays are rebuilt.
-    if pairs_value:
+    if not regions and progress_callback is not None:
+        progress_callback(1.0)
+
+    # Sort the two parallel arrays by value (stable: equal values keep their
+    # address order).
+    if pairs_value and scan_numpy.NUMPY_AVAILABLE:
+        np = scan_numpy._np
+        raw_values = np.frombuffer(pairs_value, dtype="u%d" % pairs_value.itemsize)
+        by_value = np.argsort(raw_values, kind="stable")
+        values = array.array(typecode)
+        values.frombytes(raw_values[by_value].tobytes())
+        addresses = array.array("Q")
+        addresses.frombytes(
+            np.frombuffer(pairs_addr, dtype="u%d" % pairs_addr.itemsize)[by_value].tobytes()
+        )
+    elif pairs_value:
+        # zip+sort is the simplest stdlib path; the intermediate index list is
+        # freed once the arrays are rebuilt.
         order = sorted(range(len(pairs_value)), key=pairs_value.__getitem__)
         values = array.array(typecode, (pairs_value[i] for i in order))
         addresses = array.array("Q", (pairs_addr[i] for i in order))
@@ -423,6 +487,57 @@ def build_pointer_map(
         addresses = pairs_addr
 
     return values, addresses
+
+
+def _numpy_ranges(mapped_ranges: AddressRanges):
+    """``mapped_ranges`` as two ``uint64`` arrays ``(starts, ends)`` for the
+    vectorized slot filter, or ``None`` when NumPy is absent or a bound does
+    not fit in 64 bits (then the pure-Python loop runs)."""
+    if not scan_numpy.NUMPY_AVAILABLE or not mapped_ranges:
+        return None
+    if mapped_ranges._max > 0xFFFFFFFFFFFFFFFF:
+        return None
+    np = scan_numpy._np
+    return (
+        np.array(mapped_ranges._starts, dtype=np.uint64),
+        np.array(mapped_ranges._ends, dtype=np.uint64),
+    )
+
+
+def _numpy_collect_slots(
+    data,
+    usable: int,
+    ptr_size: int,
+    chunk_address: int,
+    numpy_ranges,
+    pairs_value: "array.array",
+    pairs_addr: "array.array",
+) -> None:
+    """Vectorized aligned-slot filter: append every slot of ``data`` whose
+    value lies inside one of ``numpy_ranges`` — exactly the slots, in exactly
+    the order, the pure-Python loop in :func:`build_pointer_map` appends."""
+    np = scan_numpy._np
+    starts, ends = numpy_ranges
+    # Native byte order, like the array typecodes: the target runs on this host.
+    slots = np.frombuffer(
+        bytes(data[:usable]), dtype="=u%d" % ptr_size
+    ).astype(np.uint64, copy=False)
+    # The range that could hold each value: the last one starting at or
+    # below it. A value below every start gets index -1 and is rejected.
+    index = np.searchsorted(starts, slots, side="right").astype(np.int64) - 1
+    inside = index >= 0
+    inside[inside] = slots[inside] < ends[index[inside]]
+    hits = np.flatnonzero(inside)
+    if not hits.size:
+        return
+    pairs_value.frombytes(
+        slots[hits].astype("=u%d" % pairs_value.itemsize).tobytes()
+    )
+    pairs_addr.frombytes(
+        (np.uint64(chunk_address) + hits.astype(np.uint64) * np.uint64(ptr_size))
+        .astype("=u%d" % pairs_addr.itemsize)
+        .tobytes()
+    )
 
 
 # How many candidate slots the reverse walk visits between two calls of its
@@ -536,7 +651,9 @@ def intersect_pointer_paths(
     several independent pointer scans.
 
     Two paths match when their :meth:`PointerPath.recipe` is equal (same module,
-    module offset and offsets), so this is ASLR-independent: run a full pointer
+    module offset and offsets) and they walk pointers of the same
+    ``ptr_size`` — a 32-bit and a 64-bit path with the same numbers are
+    different chains. This is ASLR-independent: run a full pointer
     scan after each restart, export each, then intersect them here to keep only
     the paths that survived every run — the reliable static pointers. This is
     the file-based alternative to the live :meth:`AbstractProcess.scan_pointer_paths`
@@ -551,8 +668,11 @@ def intersect_pointer_paths(
     if not path_lists:
         return []
 
+    def key(path: PointerPath) -> tuple:
+        return (path.ptr_size,) + path.recipe()
+
     def recipe_set(paths: Sequence[PointerPath]) -> set:
-        return {p.recipe() for p in paths if p.module is not None}
+        return {key(p) for p in paths if p.module is not None}
 
     common = recipe_set(path_lists[0])
     for paths in path_lists[1:]:
@@ -565,9 +685,9 @@ def intersect_pointer_paths(
     for path in path_lists[0]:
         if path.module is None:
             continue
-        key = path.recipe()
-        if key in common and key not in seen:
-            seen.add(key)
+        identity = key(path)
+        if identity in common and identity not in seen:
+            seen.add(identity)
             out.append(path)
     return out
 

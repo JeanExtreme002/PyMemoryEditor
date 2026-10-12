@@ -158,3 +158,46 @@ def test_write_bytes_round_trip(process):
     buffer = (ctypes.c_uint8 * 4)()
     process.write_bytes(ctypes.addressof(buffer), b"\x01\x02\x03\x04")
     assert process.read_bytes(ctypes.addressof(buffer), 4) == b"\x01\x02\x03\x04"
+
+
+@pytest.mark.parametrize("method", ["write_uchar", "write_uint", "write_ulonglong"])
+def test_unsigned_writers_reject_float_like_signed_ones(process, method):
+    """``write_int(a, 3.7)`` raises TypeError; the unsigned helpers used to
+    ``int()`` the value and silently store 3."""
+    holder = ctypes.c_uint64(0x1111111111111111)
+    with pytest.raises(TypeError):
+        process.write_int(ctypes.addressof(holder), 3.7)
+    with pytest.raises(TypeError):
+        getattr(process, method)(ctypes.addressof(holder), 3.7)
+    assert holder.value == 0x1111111111111111
+
+
+def test_unsigned_writers_accept_bool_and_integer_likes(process):
+    """Same set the signed helpers accept: bool (its int value) and objects
+    with ``__index__`` (e.g. NumPy integers)."""
+
+    class Index:
+        def __index__(self):
+            return 0xAB
+
+    holder = ctypes.c_uint8(0)
+    process.write_uchar(ctypes.addressof(holder), True)
+    assert holder.value == 1
+    process.write_uchar(ctypes.addressof(holder), Index())
+    assert holder.value == 0xAB
+
+
+def test_integer_like_values_are_range_checked_on_the_signed_path(process):
+    """An ``__index__`` object used to skip the range check and be wrapped
+    silently by the ctypes setter."""
+
+    class Big:
+        def __index__(self):
+            return 2 ** 40
+
+    holder = ctypes.c_int32(7)
+    with pytest.raises(ValueError, match="does not fit"):
+        process.write_int(ctypes.addressof(holder), Big())
+    with pytest.raises(ValueError, match="does not fit"):
+        process.write_uint(ctypes.addressof(holder), Big())
+    assert holder.value == 7

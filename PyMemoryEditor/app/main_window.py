@@ -383,11 +383,12 @@ class MainWindow(QMainWindow):
         # The worker builds the region snapshot off the UI thread; cache it here
         # for the refine/update scans that reuse it.
         worker.snapshot_ready.connect(self._on_snapshot_ready)
-        # Connection order matters: _cleanup_worker must clear self._worker
-        # before _fill_initial_values runs, otherwise the busy guard in
-        # _on_update_values rejects the auto-refresh.
-        worker.finished.connect(self._cleanup_worker)
-        worker.finished.connect(lambda: self._fill_initial_values(request))
+        # One slot, not two connections in a load-bearing order: it clears
+        # self._worker (via _cleanup_worker) before _fill_initial_values runs,
+        # otherwise the busy guard in _on_update_values rejects the
+        # auto-refresh — and it runs that refresh only after a scan that went
+        # through, not after Cancel or an error.
+        worker.finished.connect(lambda: self._on_first_scan_finished(request))
         self._worker = worker
         worker.start()
 
@@ -464,9 +465,24 @@ class MainWindow(QMainWindow):
         self._worker = worker
         worker.start()
 
+    def _on_first_scan_finished(self, request: ScanRequest) -> None:
+        worker = self._worker
+        completed = worker is not None and worker.completed()
+        self._cleanup_worker()
+        # A cancelled scan still emits finished_ok (with the partial count) and
+        # a failed one emits error; either way the user asked for no more
+        # work — Cancel started "Updating values…", and a dead target popped
+        # a second error dialog from the refresh.
+        if completed:
+            self._fill_initial_values(request)
+
     def _fill_initial_values(self, request: ScanRequest) -> None:
         # If the first-scan worker dropped or had zero hits, skip the refresh.
         if self._results_model.count() == 0:
+            return
+        # The heartbeat locked the scanner while the scan ran: the target is
+        # gone, so a refresh could only fail.
+        if self._target_dead:
             return
         # Don't recurse into another scan if the user has already triggered one.
         if self._worker is not None:
@@ -529,7 +545,18 @@ class MainWindow(QMainWindow):
         self._status.showMessage(message)
 
     def _cleanup_worker(self) -> None:
+        # Runs from the worker's `finished`, and only one scan runs at a time,
+        # so self._worker is the worker that just finished. It is a child of
+        # this window: dropping the reference alone kept every scan's QThread
+        # (and the address list / value map it was handed) alive until the
+        # window closed. `finished` is emitted as run() returns, so wait()
+        # comes back at once; it makes sure the thread is really over before
+        # deleteLater() (destroying a running QThread aborts the process).
+        worker = self._worker
         self._worker = None
+        if worker is not None:
+            worker.wait()
+            worker.deleteLater()
         # A scan that was running when the target exited finishes (with an
         # error) after the heartbeat locked the scanner; releasing the lock
         # here would hand the controls back against a dead handle.
@@ -570,7 +597,24 @@ class MainWindow(QMainWindow):
             snap = self._memory_map.snapshot()
             if snap:
                 self._region_snapshot = snap
-        self._memory_map = None
+        self._release_dialog("_memory_map")
+
+    def _release_dialog(self, attr: str) -> None:
+        """Forget a closed tool dialog and free it.
+
+        The dialogs are children of this window and are rebuilt on the next
+        open, so dropping the reference alone kept every closed instance (and
+        the tables it held) alive for the life of the window. By the time
+        ``finished`` gets here the dialog's teardown has already run — it is
+        driven from ``done()`` — so its background worker is stopped, or
+        detached from it if it would not stop, and the delete can't take a
+        running thread down with it. deleteLater(), not delete: this runs
+        inside the dialog's own ``done()``.
+        """
+        dialog = getattr(self, attr, None)
+        setattr(self, attr, None)
+        if dialog is not None:
+            dialog.deleteLater()
 
     def _open_threads_dialog(self) -> None:
         if self._threads_dialog is None:
@@ -583,7 +627,7 @@ class MainWindow(QMainWindow):
         self._threads_dialog.activateWindow()
 
     def _on_threads_dialog_closed(self, _result: int) -> None:
-        self._threads_dialog = None
+        self._release_dialog("_threads_dialog")
 
     def _open_modules_dialog(self) -> None:
         if self._modules_dialog is None:
@@ -602,7 +646,7 @@ class MainWindow(QMainWindow):
         self._modules_dialog.activateWindow()
 
     def _on_modules_dialog_closed(self, _result: int) -> None:
-        self._modules_dialog = None
+        self._release_dialog("_modules_dialog")
 
     def _open_pointer_chain_dialog(self) -> None:
         if self._pointer_chain_dialog is None:
@@ -618,7 +662,7 @@ class MainWindow(QMainWindow):
         self._pointer_chain_dialog.activateWindow()
 
     def _on_pointer_chain_dialog_closed(self, _result: int) -> None:
-        self._pointer_chain_dialog = None
+        self._release_dialog("_pointer_chain_dialog")
 
     def _on_module_resolve_chain(self, base_address: int) -> None:
         """Open the Pointer Chain tool with a module's base address prefilled."""
@@ -675,7 +719,7 @@ class MainWindow(QMainWindow):
         self._pointer_scan_dialog.activateWindow()
 
     def _on_pointer_scan_dialog_closed(self, _result: int) -> None:
-        self._pointer_scan_dialog = None
+        self._release_dialog("_pointer_scan_dialog")
 
     def _on_pointer_scan_promote(
         self, address: int, spec_label: str, length: int
@@ -694,7 +738,7 @@ class MainWindow(QMainWindow):
         self._log_console_dialog.activateWindow()
 
     def _on_log_console_closed(self, _result: int) -> None:
-        self._log_console_dialog = None
+        self._release_dialog("_log_console_dialog")
 
     def _open_hex_viewer(self, address: int) -> None:
         self._open_hex_viewer_with_size(address, 256)
@@ -908,8 +952,8 @@ class MainWindow(QMainWindow):
         # until GC. shutdown() is idempotent and joins the worker.
         try:
             old_cheat.shutdown()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — teardown must go on; keep the cause
+            _LOG.debug("Old cheat table shutdown failed", exc_info=True)
         # A worker that blew its join is detached, not stopped, so it can still
         # be inside a syscall on the old handle. Release the handle only once
         # every detached worker has finished; closing it now could hand its
@@ -963,8 +1007,8 @@ class MainWindow(QMainWindow):
         # before the process handle goes away in `application.main`'s finally.
         try:
             self._cheat.shutdown()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — teardown must go on; keep the cause
+            _LOG.debug("Cheat table shutdown failed", exc_info=True)
 
         self._shutdown_worker()
 
@@ -1018,16 +1062,26 @@ class MainWindow(QMainWindow):
             return
         self._worker = None
         worker.cancel()
-        try:
-            worker.chunk_ready.disconnect()
-            worker.progress.disconnect()
-            worker.status.disconnect()
-            worker.error.disconnect()
-            worker.finished_ok.disconnect()
-            worker.finished.disconnect()
-        except (RuntimeError, TypeError):
-            # Already disconnected / no slots — fine, we just want them gone.
-            pass
+        # Each signal on its own, so one that has no slots can't leave the
+        # rest connected. snapshot_ready exists on the first-scan worker only;
+        # a late one would cache a snapshot on a window that is going away.
+        for name in (
+            "chunk_ready",
+            "progress",
+            "status",
+            "error",
+            "finished_ok",
+            "snapshot_ready",
+            "finished",
+        ):
+            signal = getattr(worker, name, None)
+            if signal is None:
+                continue
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                # Already disconnected / no slots — fine, we just want them gone.
+                pass
 
         # Pump queued cross-thread calls so any in-flight blocking emit is
         # dispatched (which releases the worker even though we just
@@ -1051,7 +1105,7 @@ def _close_quietly(process) -> None:
     try:
         process.close()
     except Exception:  # noqa: BLE001 — the target may already be gone
-        pass
+        _LOG.debug("Closing the previous process handle failed", exc_info=True)
 
 
 def _safe_for_json(value) -> object:

@@ -97,7 +97,8 @@ asks for your approval before attaching to a process you have not
 pre-approved, so one registration covers whatever you end up working on.
 Clients that honour the `requiresUserInteraction` hint (such as Claude Code) ask
 before each write; others may not, so pass `--read-only` to drop the write tool
-entirely if your client auto-approves tools.
+entirely, or `--confirm-writes` to have the server itself ask before each write,
+if your client auto-approves tools.
 
 Only the protocol layer needs the SDK — the tool implementations import
 nothing from it, and the core library stays dependency-free either way.

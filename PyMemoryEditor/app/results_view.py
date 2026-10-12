@@ -6,6 +6,8 @@ Built on a Qt model/view so we can stream hundreds of thousands of results
 into it without freezing the UI. The model keeps an internal address→row
 index so the scan worker's chunked updates can patch existing rows in O(1).
 """
+from bisect import bisect_left
+from itertools import compress
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
@@ -61,7 +63,16 @@ class ResultsModel(QAbstractTableModel):
         self._addresses: List[int] = []
         self._values: List[Any] = []
         self._previous: List[Any] = []
+        # address → the row it held when the index was last built (its "base"
+        # row). Rows dropped since then are listed, ascending, in ``_removed``:
+        # an address's current row is its base minus the dropped rows above it
+        # (see ``_row_of``). Rebuilding the whole dict after every refine chunk
+        # made a refine quadratic in the result count.
         self._index: Dict[int, int] = {}
+        self._removed: List[int] = []
+        # Set when an address was appended twice: the base-row bookkeeping
+        # assumes one row per address, so _drop_rows falls back to a rebuild.
+        self._duplicates = False
         self._spec: Optional[ValueTypeSpec] = None
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -132,15 +143,35 @@ class ResultsModel(QAbstractTableModel):
         self._values.clear()
         self._previous.clear()
         self._index.clear()
+        self._removed.clear()
+        self._duplicates = False
         self.endResetModel()
+
+    def _row_of(self, address: int) -> Optional[int]:
+        """Current row of ``address``, or None if it isn't in the model."""
+        base = self._index.get(address)
+        if base is None or not self._removed:
+            return base
+        return base - bisect_left(self._removed, base)
+
+    def _reindex(self) -> None:
+        """Rebuild the address index from the lists (one O(n) pass)."""
+        self._index = {addr: idx for idx, addr in enumerate(self._addresses)}
+        self._removed = []
+        self._duplicates = len(self._index) != len(self._addresses)
 
     def append_chunk(self, chunk: List[Tuple[int, Any]]) -> None:
         """Append newly-discovered addresses (used by FirstScanWorker)."""
         if not chunk:
             return
+        if self._removed:
+            # New rows get base rows past every old one only on a fresh index.
+            self._reindex()
         first = len(self._addresses)
         self.beginInsertRows(QModelIndex(), first, first + len(chunk) - 1)
         for address, value in chunk:
+            if address in self._index:
+                self._duplicates = True
             self._index[address] = len(self._addresses)
             self._addresses.append(address)
             self._values.append(value)
@@ -158,7 +189,7 @@ class ResultsModel(QAbstractTableModel):
         rows_to_drop: List[int] = []
         rows_changed: List[int] = []
         for address, current, keep in chunk:
-            row = self._index.get(address)
+            row = self._row_of(address)
             if row is None:
                 continue
             if not keep:
@@ -198,14 +229,28 @@ class ResultsModel(QAbstractTableModel):
             return
 
         runs = _contiguous_runs(rows)
+        # Base rows of the dropped addresses, recorded before the lists shift
+        # (rows are ascending, so these come out ascending too).
+        dropped_bases: List[int] = []
+        if not self._duplicates:
+            for row in rows:
+                base = self._index.pop(self._addresses[row], None)
+                if base is not None:
+                    dropped_bases.append(base)
+
         if len(runs) > _RESET_RUN_THRESHOLD:
-            dropped = set(rows)
-            keep = [i for i in range(count) if i not in dropped]
+            # Compact only the window the dropped rows span: a refine walks the
+            # rows in order, so that window is about one chunk wide, and the
+            # rest of the list is shifted by a single memmove rather than
+            # copied element by element.
+            lo, hi = rows[0], rows[-1] + 1
+            mask = bytearray(b"\x01") * (hi - lo)
+            for row in rows:
+                mask[row - lo] = 0
             self.beginResetModel()
-            self._addresses = [self._addresses[i] for i in keep]
-            self._values = [self._values[i] for i in keep]
-            self._previous = [self._previous[i] for i in keep]
-            self._index = {addr: idx for idx, addr in enumerate(self._addresses)}
+            for column in (self._addresses, self._values, self._previous):
+                column[lo:hi] = list(compress(column[lo:hi], mask))
+            self._forget_dropped(dropped_bases)
             self.endResetModel()
             return
 
@@ -221,7 +266,25 @@ class ResultsModel(QAbstractTableModel):
             del self._previous[first:last + 1]
             self.endRemoveRows()
 
-        self._index = {addr: idx for idx, addr in enumerate(self._addresses)}
+        self._forget_dropped(dropped_bases)
+
+    def _forget_dropped(self, dropped_bases: List[int]) -> None:
+        """Fold a drop's base rows into the index bookkeeping.
+
+        Merging two ascending lists is linear and runs in C, unlike rebuilding
+        the whole dict; the dict itself is rebuilt only once more rows have
+        been dropped than remain, so its cost is amortised over those drops.
+        """
+        if self._duplicates:
+            self._reindex()
+            return
+        if dropped_bases:
+            if not self._removed or dropped_bases[0] > self._removed[-1]:
+                self._removed.extend(dropped_bases)
+            else:
+                self._removed = sorted(self._removed + dropped_bases)
+        if len(self._removed) > len(self._addresses):
+            self._reindex()
 
     def address_at(self, row: int) -> Optional[int]:
         if 0 <= row < len(self._addresses):

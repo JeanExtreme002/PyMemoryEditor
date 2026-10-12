@@ -58,3 +58,52 @@ def test_other_iterables_are_still_materialized(monkeypatch):
 
     assert isinstance(seen[0], list)
     assert seen[0] == regions
+
+
+# --- value / pattern scans take regions in address order ---------------------------
+
+
+def _region(address):
+    from PyMemoryEditor import MemoryRegion
+
+    return MemoryRegion(address=address, size=0x1000, is_readable=True)
+
+
+def _capture_scan_regions(monkeypatch, name):
+    captured = []
+
+    def fake(memory_regions, *args, **kwargs):
+        captured.append([region.address for region in memory_regions])
+        return iter(())
+
+    monkeypatch.setattr(lin, name, fake)
+    return captured
+
+
+@pytest.mark.parametrize("snapshot_type, expected", (
+    # A snapshot is a mutable list: one the caller reordered (append,
+    # reverse, ...) must still be scanned in address order, so every input
+    # is sorted -- a no-op pass over a list that already is.
+    (MemoryRegionSnapshot, [0x1000, 0x3000]),
+    (list, [0x1000, 0x3000]),
+))
+def test_a_value_scan_scans_regions_in_address_order(monkeypatch, snapshot_type, expected):
+    captured = _capture_scan_regions(monkeypatch, "iter_search_results")
+    regions = snapshot_type([_region(0x3000), _region(0x1000)])
+
+    list(lin.search_addresses_by_value(os.getpid(), int, 4, 7, memory_regions=regions))
+
+    assert captured == [expected]
+
+
+@pytest.mark.parametrize("snapshot_type, expected", (
+    (MemoryRegionSnapshot, [0x1000, 0x3000]),
+    (list, [0x1000, 0x3000]),
+))
+def test_a_pattern_scan_scans_regions_in_address_order(monkeypatch, snapshot_type, expected):
+    captured = _capture_scan_regions(monkeypatch, "iter_pattern_results")
+    regions = snapshot_type([_region(0x3000), _region(0x1000)])
+
+    list(lin.search_addresses_by_pattern(os.getpid(), "90", memory_regions=regions))
+
+    assert captured == [expected]

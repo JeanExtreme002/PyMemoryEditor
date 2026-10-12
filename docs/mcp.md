@@ -23,7 +23,8 @@ attaching to a process you have not pre-approved asks **you** for permission
 clients that honour the `requiresUserInteraction` hint — Claude Code, for one —
 to confirm **every single write** before it runs. Other clients may run writes
 without asking: if yours auto-approves tools, start the server with
-`--read-only`, which drops the write tool entirely.
+`--confirm-writes` (the server itself asks before each write) or `--read-only`
+(the write tool is gone entirely).
 
 Read [Safety](#safety) before pointing it at anything you care about: the
 server runs with your privileges and it is **not a sandbox**.
@@ -83,6 +84,7 @@ correct behaviour.
 ```bash
 pymemoryeditor-mcp                            # asks to attach; writes allowed
 pymemoryeditor-mcp --read-only                # can never modify a target
+pymemoryeditor-mcp --confirm-writes           # the server asks before each write
 pymemoryeditor-mcp --allow-process game.exe   # never asks for game.exe
 pymemoryeditor-mcp --allow-any-process        # never asks at all (scripts/CI)
 ```
@@ -96,7 +98,11 @@ that install from the MCP Registry start the server.
 <tr><th width="34%">Flag</th><th>What it does</th></tr>
 <tr>
   <td><code>--read-only</code></td>
-  <td>Removes the <code>write_value</code> tool, so the server can read and scan but never modify a target. On Windows the process handle is also opened without write rights, so the <i>kernel</i> enforces it rather than this process promising to. Writing is otherwise <b>on by default</b> — clients that honour the <code>requiresUserInteraction</code> hint (such as Claude Code) ask before each write; others may not, so use this flag if yours auto-approves tools.</td>
+  <td>Removes the <code>write_value</code> tool, so the server can read and scan but never modify a target. On Windows the process handle is also opened without write rights, so the <i>kernel</i> enforces it rather than this process promising to. Writing is otherwise <b>on by default</b> — clients that honour the <code>requiresUserInteraction</code> hint (such as Claude Code) ask before each write; others may not, so use this flag or <code>--confirm-writes</code> if yours auto-approves tools.</td>
+</tr>
+<tr>
+  <td><code>--confirm-writes</code></td>
+  <td>The server itself asks you to confirm <b>every</b> <code>write_value</code> call, through the same MCP elicitation prompt as the attach approval, showing the process, address, type, new value and current value. Works on any client that supports elicitation, whether or not it knows the <code>requiresUserInteraction</code> hint. On a client that cannot show the prompt, writes are <b>refused</b>, never run unconfirmed. Off by default because Claude Code already asks, and would then ask twice.</td>
 </tr>
 <tr>
   <td><code>--allow-process NAME</code></td>
@@ -104,11 +110,11 @@ that install from the MCP Registry start the server.
 </tr>
 <tr>
   <td><code>--allow-any-process</code></td>
-  <td>Never ask: open any target the denylist permits. For scripted or non-interactive runs where nobody is there to answer. Interactively, prefer the default.</td>
+  <td>Never ask: open any target the denylist permits. For scripted or non-interactive runs where nobody is there to answer. Interactively, prefer the default. A process whose name cannot be read still asks (or is refused on a client that cannot ask): the denylist cannot check a name it cannot see.</td>
 </tr>
 <tr>
   <td><code>--allow-system-processes</code></td>
-  <td>Lifts the built-in denylist of OS and credential processes (<code>lsass.exe</code>, <code>launchd</code>, <code>systemd</code>, <code>ssh-agent</code>, …). Rarely what you want. It does <i>not</i> lift the refusal to open the server's own process or the client that launched it — nothing does.</td>
+  <td>Lifts the built-in denylist of OS and credential processes (<code>lsass.exe</code>, <code>launchd</code>, <code>systemd</code>, <code>ssh-agent</code>, …). Rarely what you want. It also lets <code>--allow-any-process</code> open processes whose name cannot be read. It does <i>not</i> lift the refusal to open the server's own process or the client that launched it — nothing does.</td>
 </tr>
 <tr>
   <td><code>--scan-batch-bytes BYTES</code></td>
@@ -124,7 +130,7 @@ that install from the MCP Registry start the server.
 </tr>
 <tr>
   <td><code>--transport</code></td>
-  <td><code>stdio</code> (default), <code>sse</code> or <code>streamable-http</code>. The HTTP transports expose this machine's memory to whoever can reach the port, with no authentication — see <a href="#safety">Safety</a>. A writable server refuses to start on them unless <code>--allow-remote-write</code> is also passed.</td>
+  <td><code>stdio</code> (default), <code>sse</code> or <code>streamable-http</code>. The HTTP transports listen on <code>127.0.0.1</code> with no authentication: any local process — or anyone the port is forwarded or proxied to — can read this machine's process memory through them, with no flag needed — see <a href="#safety">Safety</a>. A writable server refuses to start on them unless <code>--allow-remote-write</code> is also passed.</td>
 </tr>
 <tr>
   <td><code>--allow-remote-write</code></td>
@@ -145,9 +151,9 @@ that install from the MCP Registry start the server.
 <tr><td><code>scan_value</code></td><td>First scan — eight comparison modes, five value types → a <code>scan_id</code>.</td></tr>
 <tr><td><code>scan_pattern</code></td><td>AOB scan with <code>?</code> wildcards → a <code>scan_id</code>.</td></tr>
 <tr><td><code>refine_scan</code></td><td>Next scan — narrow an existing result set. The step that makes it work.</td></tr>
-<tr><td><code>list_scan_results</code></td><td>Page through a result set, reading each address's live value.</td></tr>
+<tr><td><code>list_scan_results</code></td><td>Page through a result set, reading each address's live value. Text values on one page share a size budget; a row cut to fit says <code>value_truncated</code>.</td></tr>
 <tr><td><code>read_value</code></td><td>Read one typed value from an address.</td></tr>
-<tr><td><code>write_value</code></td><td>Write one value. Clients that honour <code>requiresUserInteraction</code> confirm every call; absent under <code>--read-only</code>.</td></tr>
+<tr><td><code>write_value</code></td><td>Write one value. Clients that honour <code>requiresUserInteraction</code> confirm every call, and <code>--confirm-writes</code> makes the server confirm it on any client; absent under <code>--read-only</code>.</td></tr>
 <tr><td><code>resolve_pointer_chain</code></td><td>Replay a Cheat Engine pointer recipe to its final address.</td></tr>
 <tr><td><code>find_pointer_paths</code></td><td>Reverse pointer scan — turn a found address into a recipe that survives a restart.</td></tr>
 </table>
@@ -218,6 +224,25 @@ refusal. Approvals you remember last for the life of the server process and are
 matched by name, so they survive the target restarting — which is routine when
 you are editing a game between runs.
 
+Two exceptions to "matched by name":
+
+- **Shared runtimes** — `python3`, `node`, `java`, `dotnet`, shells and the
+  like — are one name for many unrelated programs, so remembering one would
+  approve every script on the machine. For those, *remember* covers only the
+  running process you approved (its pid and start time); the prompt says so,
+  and another `python3` — or the same script restarted — asks again. If the
+  approved process exits while the prompt is open and another one reuses its
+  pid, the attach is refused rather than handed to the newcomer. The
+  `open_process` result reports which applies in `approval_scope`: `"name"` or
+  `"instance"`.
+- **A process whose name cannot be read** has nothing to remember it by, and
+  attaching to it always asks, even under `--allow-any-process`.
+
+The prompt also warns when the target looks like a **web browser or an AI
+client** (Chrome, Firefox, Safari, Edge, Claude, Cursor, VS Code, …): they are
+allowed, but they keep cookies, tokens and API keys in memory.
+`list_processes` flags them as `sensitive`.
+
 ```{admonition} This needs a client that supports elicitation
 :class: warning
 
@@ -233,7 +258,8 @@ Independently of that, `open_process` and `write_value` carry the
 asks before running them, even in its most permissive auto-approve mode. In
 Claude Code you see and confirm the tool call itself as well. The hint is an
 Anthropic extension rather than standard MCP, and a client that does not know
-it treats these like any other tool.
+it treats these like any other tool — `--confirm-writes` is the standard-MCP
+way to get a per-write prompt there.
 
 ## Safety
 
@@ -250,26 +276,36 @@ way.
   and `write_value` are tagged `requiresUserInteraction`, which makes a client
   that understands it (Claude Code, for one) prompt on **every** call — even in
   its most permissive auto-approve mode. It is an Anthropic extension, so other
-  clients may ignore it and auto-approve writes like any tool: on those, use
-  `--read-only`. `write_value` also returns the previous value, so a change can
-  be undone.
+  clients may ignore it and auto-approve writes like any tool.
+  **Writes are on by default, so on such a client the default is unprompted
+  writes.** Use `--confirm-writes` there (the server asks before every write,
+  and refuses writes on a client that cannot ask) or `--read-only`.
+  `write_value` also returns the previous value, so a change can be undone.
 - **A real read-only mode when you want one.** `--read-only` does not register
   the write tool at all, so the model cannot see it, let alone be talked into
   calling it; on Windows the handle itself carries no write rights.
 - **Never its own process, never its client.** The server refuses to open
-  itself and the process that launched it (your MCP client), whatever the
+  itself and every process above it in the launch chain — your MCP client, and
+  anything in between such as `uv` when it runs under `uvx` — whatever the
   flags say. A model editing the process that enforces its policy, or the
   client it is talking through, has no legitimate use, so no flag lifts this.
+  (Launched from a terminal, that chain includes your shell and terminal too.)
 - **A system-process denylist.** `lsass.exe`, `csrss.exe`, `launchd`,
   `kernel_task`, `systemd`, `sshd`, `ssh-agent`, `gpg-agent`, the desktop
-  keyrings and the common password managers are refused. These hold
-  credentials or keep the machine running; attaching to them is not what a
-  memory editor is for. It is a guard against the *accidental* target, not an
-  inventory of everything that holds a secret — a renamed binary is not on
-  it.
+  keyrings and the common password managers (1Password, Bitwarden, KeePass /
+  KeePassXC, LastPass, Dashlane, Enpass, Keychain Access) are refused. These
+  hold credentials or keep the machine running; attaching to them is not what
+  a memory editor is for. It is a guard against the *accidental* target, not
+  an inventory of everything that holds a secret — a renamed binary is not on
+  it, and browsers and AI clients are only *warned* about, not refused.
 - **Bounded scans.** Every scan stops at a result cap and a wall-clock budget,
   and a result set that stopped early is flagged `partial` so the assistant
-  reports it rather than confidently refining a prefix.
+  reports it rather than confidently refining a prefix. A region larger than
+  a scan batch is scanned in pieces, so one huge heap cannot run far past the
+  budget — the pointer map `find_pointer_paths` builds included.
+- **Bounded responses.** Text read from the target is capped per value
+  (64 KiB) and per page of results, so a result page cannot flood the
+  assistant's context with whatever the target's memory says.
 - **Handles closed on shutdown.** No debug handle left open on your game.
 
 **What it does not give you**
@@ -285,25 +321,28 @@ recycled and executables can be renamed.
 
 Three specific things to watch for:
 
-- **Do not expose the HTTP transports** (`--transport sse` /
-  `streamable-http`) to a network you do not control. They carry no
-  authentication, so that publishes read access to this machine's process
-  memory to anyone who can reach the port. Write access over them is refused
-  unless you pass `--allow-remote-write` as well — keep it that way unless the
-  port is yours end to end. The attach approval does not help here either: the
-  prompt goes to whichever client is connected, so whoever reaches the port
-  also answers it.
+- **Treat the HTTP transports as unauthenticated** (`--transport sse` /
+  `streamable-http`). They listen on `127.0.0.1`, but carry no authentication:
+  any process running on this machine — or anyone you forward or proxy the
+  port to — gets **read** access to this machine's process memory, and that
+  needs no flag beyond the transport itself. Write access over them is
+  refused unless you pass `--allow-remote-write` as well — keep it that way
+  unless the port is yours end to end. The attach approval does not help here
+  either: the prompt goes to whichever client is connected, so whoever reaches
+  the port also answers it. Prefer `stdio`.
 - **Approval is by name, and a pid can be reused.** The server re-reads the
   target's name once it holds the handle and drops it if the pid now belongs
   to something else, but a target whose name it cannot read cannot be checked
-  that way.
+  that way — which is why such a target always prompts.
 - **Be deliberate about prompt injection.** The assistant reads bytes out of a
   process it does not control. Text in a game's memory that looks like
   instructions is still just data — but a model that has been convinced
-  otherwise can be steered. The prompts are what bound the damage: read the
-  process name before approving an attach, and read the address and value
-  before approving a write. `--allow-any-process` removes the first of those
-  two checks, so pair it with `--read-only` unless you have a reason not to.
+  otherwise can be steered. The server tells the model so, and caps how much
+  target text one response carries, but the prompts are what bound the damage:
+  read the process name before approving an attach, and read the address and
+  value before approving a write. `--allow-any-process` removes the first of
+  those two checks, so pair it with `--read-only` (or at least
+  `--confirm-writes`) unless you have a reason not to.
 ```
 
 **Anti-cheat and terms of service.** Attaching to an online game's process is

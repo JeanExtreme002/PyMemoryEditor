@@ -268,6 +268,11 @@ def test_empty_snapshot_yields_nothing(qapp):
     assert process.write_calls == []
 
 
+def _drain(worker):
+    """One tick's worth of queued writes, the way ``run`` takes them."""
+    return worker._perform_writes(worker._take_pending_writes())
+
+
 def test_request_write_is_queued_and_drained(qapp):
     """A manual write is queued and performed by the worker, not inline.
 
@@ -281,12 +286,12 @@ def test_request_write_is_queued_and_drained(qapp):
     worker.request_write(0x1000, int, 4, 77)
     assert process.write_calls == []
 
-    failures = worker._drain_pending_writes()
+    failures = _drain(worker)
 
     assert failures == []
     assert process.write_calls == [(0x1000, int, 4, 77)]
     # The queue is cleared after draining.
-    assert worker._drain_pending_writes() == []
+    assert _drain(worker) == []
     assert process.write_calls == [(0x1000, int, 4, 77)]
 
 
@@ -297,7 +302,7 @@ def test_request_write_failure_is_reported(qapp):
     worker = _make_worker(process)
 
     worker.request_write(0x2000, int, 4, 5)
-    failures = worker._drain_pending_writes()
+    failures = _drain(worker)
 
     assert len(failures) == 1
     address, pytype, length, message = failures[0]

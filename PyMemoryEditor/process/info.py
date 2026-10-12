@@ -19,7 +19,9 @@ class ProcessInfo(object):
 
     @pid.setter
     def pid(self, pid: int) -> None:
-        if not isinstance(pid, int):
+        # bool is an int subclass: without the explicit check `pid=True`
+        # passed as pid 1 (launchd / init) and `pid=False` as pid 0.
+        if not isinstance(pid, int) or isinstance(pid, bool):
             raise ValueError("The process ID must be an integer.")
 
         if pid < 0:

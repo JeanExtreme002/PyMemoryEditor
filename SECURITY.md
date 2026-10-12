@@ -46,4 +46,29 @@ Out of scope:
   is a misuse question, not a library defect).
 - Cheating detection or anti-cheat bypass requests.
 
+### MCP server
+
+The optional MCP server (`pymemoryeditor-mcp`, the `mcp` extra) hands the
+library to an AI model, so it carries guarantees of its own. Reports that
+break any of them are in scope:
+
+- Attaching to a process the user did not approve (by the attach prompt,
+  `--allow-process` or `--allow-any-process`), to a process on the built-in
+  OS/credential denylist without `--allow-system-processes`, to the server
+  itself or its client, or to a recycled pid after the user approved a name.
+- Writing to a target when the server runs with `--read-only`, or without
+  the server's own confirmation when it runs with `--confirm-writes`.
+- A writable server listening on the unauthenticated `sse` /
+  `streamable-http` transports without `--allow-remote-write`.
+- Tool input (addresses, sizes, patterns, handles) that crashes the server,
+  reads or writes outside what the call asked for, or escapes the scan time
+  and result limits.
+
+Not in scope: what a model does with the access the user granted (a model
+reading a process it was allowed to open is the feature), a client that
+auto-approves tool calls, and prompt injection through the *contents* of a
+target's memory, which the server returns as data. These are covered by the
+[MCP guide]'s safety section.
+
+[MCP guide]: https://pymemoryeditor.readthedocs.io/en/latest/mcp.html#safety
 [private security advisory]: https://github.com/JeanExtreme002/PyMemoryEditor/security/advisories/new

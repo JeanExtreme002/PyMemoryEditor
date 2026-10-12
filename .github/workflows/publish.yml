@@ -4,12 +4,22 @@ on:
   release:
     types: [published]
 
+# Least privilege by default; each job below asks for exactly what it needs.
+permissions:
+  contents: read
+
 jobs:
-  publish:
+  # Everything that can be checked before an irrevocable upload, in a job that
+  # holds no OIDC token: the tag against the version, the release commit
+  # against CI, and the distributions against PyPI's metadata rules. The
+  # distributions it builds are handed to `publish` as an artifact, so the
+  # files that were checked are the files that are uploaded.
+  build:
     runs-on: ubuntu-latest
-    environment: pypi
+    timeout-minutes: 60
     permissions:
-      id-token: write  # Required for trusted publishing (OIDC)
+      contents: read
+      actions: read  # the CI gate below lists this commit's workflow runs
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -34,11 +44,70 @@ jobs:
           exit 1
         fi
 
+    - name: Check the release commit passed CI
+      # A release is a commit that python-package.yml already ran green on --
+      # normally the push run on main after the version-bump PR merged. This
+      # asks for that run instead of re-running the whole matrix: a run still
+      # in progress is waited for (up to ~45 minutes), and no green run at all
+      # stops the release before anything is built.
+      #
+      # If main's run was cancelled by a newer push (the workflow cancels
+      # superseded runs), start one on the tag and re-run this workflow once
+      # it is green:
+      #     gh workflow run python-package.yml --ref <tag>
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SHA: ${{ github.sha }}
+      run: |
+        runs="repos/$GITHUB_REPOSITORY/actions/workflows/python-package.yml/runs?head_sha=$SHA&per_page=100"
+        for _ in $(seq 1 90); do
+          # Pull-request runs don't count: the audit job is advisory there.
+          green=$(gh api "$runs" --jq '[.workflow_runs[] | select(.event != "pull_request" and .conclusion == "success")] | length')
+          pending=$(gh api "$runs" --jq '[.workflow_runs[] | select(.event != "pull_request" and .status != "completed")] | length')
+          if [ "$green" -gt 0 ]; then
+            echo "python-package.yml passed on $SHA"
+            exit 0
+          fi
+          if [ "$pending" -eq 0 ]; then
+            break
+          fi
+          echo "python-package.yml still running on $SHA; waiting"
+          sleep 30
+        done
+        echo "::error::no successful python-package.yml run for $SHA. Run 'gh workflow run python-package.yml --ref $GITHUB_REF_NAME' and re-run this workflow once it is green."
+        exit 1
+
     - name: Build package
       run: python -m build
 
     - name: Check the distributions
       run: python -m twine check --strict dist/*
+
+    - name: Upload the distributions
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: dist
+        path: dist/
+        if-no-files-found: error
+        retention-days: 7
+
+  # The only job that can mint the OIDC token PyPI's trusted publishing
+  # accepts. It builds nothing and runs no project code: it uploads the
+  # artifact `build` checked, so nothing that ran before the checks passed
+  # ever held the credential.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      id-token: write  # Required for trusted publishing (OIDC)
+    steps:
+    - name: Download the distributions
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      with:
+        name: dist
+        path: dist/
 
     - name: Publish to PyPI
       # Pinned to a release tag's commit rather than the moving `release/v1`
@@ -47,9 +116,12 @@ jobs:
 
   # The MCP Registry checks the package on PyPI (the README's mcp-name marker,
   # the pinned version), so this runs only once the upload above succeeded.
+  # It reads server.json from the checkout and the package from PyPI itself,
+  # so it needs no artifact from `build`.
   mcp-registry:
     needs: publish
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       id-token: write  # mcp-publisher logs in with the workflow's OIDC token
       contents: read

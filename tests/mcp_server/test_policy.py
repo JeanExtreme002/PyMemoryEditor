@@ -334,3 +334,214 @@ class TestTruncatedNamesMatchTheAllowlist:
         # happens to prefix an allowed one is a different process.
         policy = ProcessPolicy(allowed_names=["my-very-long-game-name"], platform="darwin")
         assert policy.check(5000, "my-very-long-ga").needs_approval is True
+
+
+class TestTheWholeLaunchChainIsProtected:
+    """Under ``uvx`` the server's parent is ``uv``; the client is further up."""
+
+    def test_every_ancestor_is_protected(self):
+        from PyMemoryEditor.mcp.procinfo import ancestor_pids
+
+        policy = ProcessPolicy(platform="linux")
+        assert ancestor_pids() <= policy.protected_pids
+        for pid in ancestor_pids():
+            decision = policy.check(pid, "uv")
+            assert decision.allowed is False and decision.needs_approval is False
+            assert "client that launched" in decision.reason
+
+    def test_a_grandparent_is_found(self):
+        # Our own child: its ancestors are this process and everything above
+        # it, so the chain must reach past one level.
+        import os
+        import subprocess
+        import sys
+
+        from PyMemoryEditor.mcp.procinfo import ancestor_pids, parent_pid
+
+        if parent_pid(os.getpid()) is None:
+            pytest.skip("no parent lookup on this platform")
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"]
+        )
+        try:
+            chain = ancestor_pids(child.pid)
+            assert os.getpid() in chain
+            if os.getppid() > 1:
+                assert os.getppid() in chain
+        finally:
+            child.kill()
+            child.wait()
+
+    def test_the_parent_lookup_agrees_with_the_os(self):
+        import os
+
+        from PyMemoryEditor.mcp.procinfo import parent_pid, process_identity
+
+        found = parent_pid(os.getpid())
+        if found is None:
+            pytest.skip("no parent lookup on this platform")
+        assert found == os.getppid()
+        assert process_identity(os.getpid()) == process_identity(os.getpid())
+
+    def test_a_missing_process_reads_as_unknown(self):
+        from PyMemoryEditor.mcp.procinfo import ancestor_pids, parent_pid, process_identity
+
+        assert parent_pid(2**31 - 1) is None
+        assert process_identity(2**31 - 1) is None
+        assert ancestor_pids(2**31 - 1) == frozenset()
+
+    def test_a_parent_younger_than_its_child_is_not_followed(self, monkeypatch):
+        # Windows keeps a dead parent's id, which can since belong to a
+        # stranger; that stranger started after the child, and is not ours.
+        from PyMemoryEditor.mcp import procinfo
+
+        parents = {500: 400, 400: 300, 300: 1}
+        started = {500: 50, 400: 40, 300: 99}
+        monkeypatch.setattr(procinfo, "parent_pid", parents.get)
+        monkeypatch.setattr(procinfo, "start_identity", started.get)
+        assert procinfo.ancestor_pids(500) == frozenset({400})
+
+    def test_a_non_utf8_linux_name_does_not_end_the_walk(self, monkeypatch):
+        # comm is whatever the process set (prctl PR_SET_NAME); decoding the
+        # whole stat line as text raised, read as "unknown", and left every
+        # ancestor above it -- the MCP client -- unprotected.
+        import builtins
+        import io
+
+        from PyMemoryEditor.mcp import procinfo
+
+        stat = b"4242 (\xff\xfe odd) name) S 77 4242 77 0 -1 4194560 " + b"0 " * 12 + b"123456 0\n"
+        real_open = builtins.open
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            if path == "/proc/4242/stat":
+                if "b" not in mode:  # what the old text-mode read did
+                    return io.TextIOWrapper(io.BytesIO(stat), encoding="utf-8")
+                return io.BytesIO(stat)
+            return real_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+        fields = procinfo._linux_stat_fields(4242)
+        assert fields is not None
+        assert fields[0] == "S" and fields[1] == "77"  # state, ppid
+        assert fields[19] == "123456"  # starttime (field 22)
+
+    def test_a_cycle_terminates(self, monkeypatch):
+        from PyMemoryEditor.mcp import procinfo
+
+        monkeypatch.setattr(procinfo, "parent_pid", {10: 20, 20: 10}.get)
+        monkeypatch.setattr(procinfo, "start_identity", lambda pid: None)
+        assert procinfo.ancestor_pids(10) == frozenset({20})
+
+
+class TestUnreadableNames:
+    """A name the server cannot read is one the denylist cannot check."""
+
+    def test_allow_any_still_asks(self):
+        decision = ProcessPolicy(platform="linux", allow_any=True).check(5000, "")
+        assert decision.allowed is False
+        assert decision.needs_approval is True
+        assert "--allow-system-processes" in decision.reason
+
+    def test_the_allowlist_does_not_cover_it(self):
+        policy = ProcessPolicy(allowed_names=["game"], allow_any=True, platform="linux")
+        assert policy.check(5000, "").needs_approval is True
+
+    def test_lifting_the_denylist_lifts_this_too(self):
+        policy = ProcessPolicy(platform="linux", allow_any=True, allow_system=True)
+        assert policy.check(5000, "").allowed is True
+
+    def test_a_readable_name_is_unaffected(self):
+        assert ProcessPolicy(platform="linux", allow_any=True).check(5000, "game").allowed
+
+
+class TestRememberingASharedRuntime:
+    """Remembering ``python3`` by name would approve every Python script."""
+
+    def _policy(self, identities):
+        return ProcessPolicy(platform="linux", identify=identities.get)
+
+    @pytest.mark.parametrize("name", [
+        "python3", "Python", "python3.12", "pythonw.exe", "node", "node.exe",
+        "java", "javaw.exe", "dotnet", "bash", "pwsh.exe", "ruby", "Electron",
+    ])
+    def test_runtimes_are_recognised(self, name):
+        from PyMemoryEditor.mcp.policy import is_shared_runtime
+
+        assert is_shared_runtime(name)
+
+    @pytest.mark.parametrize("name", ["game.exe", "pythonista", "nodejs-game", "javagame"])
+    def test_ordinary_names_are_not(self, name):
+        from PyMemoryEditor.mcp.policy import is_shared_runtime
+
+        assert not is_shared_runtime(name)
+
+    def test_the_grant_covers_only_that_instance(self):
+        policy = self._policy({5000: 111, 5001: 222})
+        assert policy.grant("python3", pid=5000) == "instance"
+        assert policy.check(5000, "python3").allowed is True
+        assert policy.check(5001, "python3").needs_approval is True
+        assert policy.granted_names == ()
+        assert policy.granted_instances == (("python3", 5000),)
+
+    def test_a_recycled_pid_does_not_inherit_it(self):
+        identities = {5000: 111}
+        policy = self._policy(identities)
+        policy.grant("node", pid=5000)
+        identities[5000] = 999  # the pid now belongs to a new process
+        assert policy.check(5000, "node").needs_approval is True
+
+    def test_an_unknown_identity_is_not_remembered(self):
+        policy = self._policy({})
+        assert policy.grant("python3", pid=5000) is None
+        assert policy.check(5000, "python3").needs_approval is True
+
+    def test_other_names_are_still_remembered_by_name(self):
+        policy = self._policy({})
+        assert policy.grant("game.exe", pid=5000) == "name"
+        assert policy.check(9999, "game.exe").allowed is True
+
+    def test_a_grant_without_a_pid_keeps_the_name_rule(self):
+        # The embedder API: grant(name) still means what it always meant.
+        policy = self._policy({})
+        assert policy.grant("python3") == "name"
+        assert policy.check(9999, "python3").allowed is True
+
+    def test_describe_reports_instances(self):
+        policy = self._policy({5000: 1})
+        policy.grant("python3", pid=5000)
+        assert policy.describe()["approved_instances_this_session"] == ["python3 (pid 5000)"]
+
+
+class TestSensitiveTargets:
+    """Browsers and AI clients are allowed, but flagged."""
+
+    @pytest.mark.parametrize("platform, name", [
+        ("darwin", "Google Chrome"),
+        ("darwin", "Claude"),
+        ("win32", "msedge.exe"),
+        ("linux", "firefox"),
+        ("linux", "chromium-browse"),  # chromium-browser, truncated
+    ])
+    def test_flagged_but_not_denied(self, platform, name):
+        policy = ProcessPolicy(platform=platform)
+        assert policy.is_sensitive(name)
+        assert policy.check(5000, name).needs_approval is True
+        assert ProcessPolicy(platform=platform, allow_any=True).check(5000, name).allowed
+
+    def test_ordinary_targets_are_not_flagged(self):
+        assert not ProcessPolicy(platform="win32").is_sensitive("game.exe")
+
+
+class TestMorePasswordManagersAreDenied:
+    @pytest.mark.parametrize("platform, name", [
+        ("win32", "KeePass.exe"),
+        ("win32", "LastPass.exe"),
+        ("darwin", "Keychain Access"),
+        ("darwin", "1Password 7"),
+        ("darwin", "Dashlane"),
+        ("linux", "enpass"),
+    ])
+    def test_denied(self, platform, name):
+        decision = ProcessPolicy(platform=platform).check(5000, name)
+        assert decision.allowed is False and decision.needs_approval is False

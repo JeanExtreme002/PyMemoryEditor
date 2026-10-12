@@ -6,12 +6,15 @@ import warnings
 from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
+from ..util.pattern import compile_pattern
 from ..process import AbstractProcess
+from ..process._guard import guard_generator
 from ..process.errors import ClosedProcess, ProcessIDNotExistsError
 from ..util import (
     UNSET,
     prepare_write,
     resolve_bufflength,
+    prepare_search_target,
     resolve_bufflength_for_value,
 )
 from ..process.module_info import ModuleInfo
@@ -181,15 +184,15 @@ class LinuxProcess(AbstractProcess):
 
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         self.__require_target()
-        return get_memory_regions(self.pid)
+        return guard_generator(get_memory_regions(self.pid), self.__require_open)
 
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         self.__require_target()
-        return get_threads(self.pid)
+        return guard_generator(get_threads(self.pid), self.__require_open)
 
     def get_modules(self) -> Generator[ModuleInfo, None, None]:
         self.__require_target()
-        return get_modules(self.pid)
+        return guard_generator(get_modules(self.pid), self.__require_open)
 
     def read_process_memory(
         self,
@@ -218,7 +221,7 @@ class LinuxProcess(AbstractProcess):
         self.__require_target()
         if addresses is UNSET:
             raise TypeError("addresses is required.")
-        return search_values_by_addresses(
+        scan = search_values_by_addresses(
             self.pid,
             pytype,
             resolve_bufflength(pytype, bufflength),
@@ -226,6 +229,7 @@ class LinuxProcess(AbstractProcess):
             memory_regions=memory_regions,
             raise_error=raise_error,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_value(
         self,
@@ -246,10 +250,14 @@ class LinuxProcess(AbstractProcess):
                 "Use the method search_by_value_between(...) to search within a range of values."
             )
 
-        return search_addresses_by_value(
+        width = resolve_bufflength_for_value(pytype, bufflength, value)
+        # Validate now: the scan is a generator, so its own checks would
+        # only raise on the first next(), far from this call.
+        prepare_search_target(pytype, width, value)
+        scan = search_addresses_by_value(
             self.pid,
             pytype,
-            resolve_bufflength_for_value(pytype, bufflength, value),
+            width,
             value,
             scan_type,
             progress_information,
@@ -257,6 +265,7 @@ class LinuxProcess(AbstractProcess):
             memory_regions=memory_regions,
             aligned=aligned,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_pattern(
         self,
@@ -267,13 +276,17 @@ class LinuxProcess(AbstractProcess):
         memory_regions: Optional[Sequence[MemoryRegion]] = None,
     ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         self.__require_target()
-        return search_addresses_by_pattern(
+        # Compile now so a malformed pattern raises at the call, not on the
+        # first next() of the returned generator.
+        compile_pattern(pattern, byte_length=byte_length)
+        scan = search_addresses_by_pattern(
             self.pid,
             pattern,
             byte_length=byte_length,
             progress_information=progress_information,
             memory_regions=memory_regions,
         )
+        return guard_generator(scan, self.__require_open)
 
     def search_by_value_between(
         self,
@@ -295,10 +308,14 @@ class LinuxProcess(AbstractProcess):
             if not_between
             else ScanTypesEnum.VALUE_BETWEEN
         )
-        return search_addresses_by_value(
+        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
+        # Validate now: the scan is a generator, so its own checks would
+        # only raise on the first next(), far from this call.
+        prepare_search_target(pytype, width, (start, end))
+        scan = search_addresses_by_value(
             self.pid,
             pytype,
-            resolve_bufflength_for_value(pytype, bufflength, start, end),
+            width,
             (start, end),
             scan_type,
             progress_information,
@@ -306,6 +323,7 @@ class LinuxProcess(AbstractProcess):
             memory_regions=memory_regions,
             aligned=aligned,
         )
+        return guard_generator(scan, self.__require_open)
 
     def write_process_memory(
         self,
