@@ -271,6 +271,12 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
             )
 
         shared = is_shared_runtime(found_name)
+        # The instance the prompt is about. Read before asking: a shared
+        # runtime's pid can be reused by another script of the same name
+        # while the user reads, and attach() only re-checks the name.
+        shown_identity = (
+            await _off_loop(toolset.policy.identify, found_pid) if shared else None
+        )
         notes = ""
         if toolset.policy.is_sensitive(found_name):
             # Allowed, not denied -- scanning a browser is a legitimate thing
@@ -332,18 +338,34 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
         remember = bool(getattr(answer.data, "remember", False))
         scope = None
 
-        if remember and found_name:
-            # With the pid, so a shared runtime (python3, node) is remembered
-            # as this one running instance rather than as a name every script
-            # on the machine shares. See ProcessPolicy.grant.
-            scope = toolset.policy.grant(found_name, pid=found_pid)
-            _logger.info("Approved and remembered target %r (%s)", found_name, scope)
-        else:
-            _logger.info("Approved target %r (this attach only)", found_name)
-
         # attach -> SessionStore.open re-checks the cap: a slot may have been
         # taken while the user read the prompt.
         result = await _off_loop(toolset.attach, found_pid, found_name)
+
+        if shown_identity is not None:
+            # The handle now pins the pid; make sure it is still the instance
+            # the user approved, not a same-named process that reused the pid.
+            current = await _off_loop(toolset.policy.identify, found_pid)
+            if current != shown_identity:
+                await _off_loop(toolset.close_process, result["session_id"])
+                raise SdkToolError(
+                    'pid %d is no longer the "%s" process the user approved: it '
+                    "exited and the pid was reused while the prompt was open. "
+                    "Nothing was attached; ask the user before opening it again."
+                    % (found_pid, found_name)
+                )
+
+        if remember and found_name:
+            # With the pid, so a shared runtime (python3, node) is remembered
+            # as this one running instance rather than as a name every script
+            # on the machine shares -- the instance that was shown, not
+            # whatever holds the pid now. See ProcessPolicy.grant.
+            scope = toolset.policy.grant(
+                found_name, pid=found_pid, identity=shown_identity
+            )
+            _logger.info("Approved and remembered target %r (%s)", found_name, scope)
+        else:
+            _logger.info("Approved target %r (this attach only)", found_name)
 
         if remember and scope is None:
             # A process whose name this user cannot read has nothing to

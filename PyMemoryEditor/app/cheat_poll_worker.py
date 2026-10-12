@@ -115,18 +115,6 @@ class _CheatPollWorker(QThread):
         with QMutexLocker(self._mutex):
             self._stop = True
 
-    def _drain_pending_writes(self) -> List[Tuple[int, type, int, str]]:
-        """Perform and clear every queued manual write.
-
-        Returns one ``(address, pytype, length, message)`` tuple per write that
-        failed, so ``run`` can surface it via ``write_failed``. Reads and clears
-        the queue under the lock, then runs the syscalls outside it so a slow
-        write never blocks a UI thread enqueuing the next edit.
-        """
-        with QMutexLocker(self._mutex):
-            pending = self._take_pending_writes()
-        return self._perform_writes(pending)
-
     def _take_pending_writes(self) -> List[Tuple[int, type, int, Any]]:
         """Detach the queued writes. The caller holds ``self._mutex``."""
         pending = self._pending_writes
@@ -136,7 +124,12 @@ class _CheatPollWorker(QThread):
     def _perform_writes(
         self, pending: List[Tuple[int, type, int, Any]]
     ) -> List[Tuple[int, type, int, str]]:
-        """Run the given manual writes; see :meth:`_drain_pending_writes`."""
+        """Perform manual writes taken with :meth:`_take_pending_writes`.
+
+        Returns one ``(address, pytype, length, message)`` tuple per write that
+        failed, so ``run`` can surface it via ``write_failed``. Runs outside the
+        lock, so a slow write never blocks a UI thread enqueuing the next edit.
+        """
         failures: List[Tuple[int, type, int, str]] = []
         for address, pytype, length, value in pending:
             if self._stopping():

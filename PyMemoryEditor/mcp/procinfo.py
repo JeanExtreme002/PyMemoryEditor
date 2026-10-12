@@ -34,17 +34,20 @@ def _linux_stat_fields(pid: int) -> Optional[list]:
     """The fields of ``/proc/<pid>/stat`` after ``comm``, or ``None``.
 
     ``comm`` is parenthesised and may itself contain spaces or parentheses, so
-    the only safe split point is the last ``)`` (``man 5 proc``).
+    the only safe split point is the last ``)`` (``man 5 proc``). Read as
+    bytes: ``comm`` is whatever the process set, not necessarily UTF-8, and a
+    decode error here would end the ancestor walk early and leave the client
+    above unprotected. Every field after ``comm`` is ASCII.
     """
     try:
-        with open("/proc/%d/stat" % pid, "r") as handle:
+        with open("/proc/%d/stat" % pid, "rb") as handle:
             raw = handle.read()
-    except (OSError, ValueError):
+    except OSError:
         return None
-    close = raw.rfind(")")
+    close = raw.rfind(b")")
     if close == -1:
         return None
-    return raw[close + 1 :].split()
+    return raw[close + 1 :].decode("ascii", "replace").split()
 
 
 if sys.platform == "darwin":

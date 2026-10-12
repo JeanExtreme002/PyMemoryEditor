@@ -329,7 +329,13 @@ class ProcessPolicy:
         """Whether ``name`` is a browser or AI client: allowed, but warned about."""
         return (name or "").strip().casefold() in self._sensitive
 
-    def grant(self, name: str, pid: Optional[int] = None) -> Optional[str]:
+    def identify(self, pid: int) -> Optional[int]:
+        """The start identity of ``pid`` (see :mod:`.procinfo`), or ``None``."""
+        return self._identify(pid)
+
+    def grant(
+        self, name: str, pid: Optional[int] = None, identity: Optional[int] = None
+    ) -> Optional[str]:
         """Remember an approval, so this target stops prompting.
 
         :returns: what was remembered — ``"name"``, ``"instance"``, or
@@ -346,7 +352,9 @@ class ProcessPolicy:
         remembering it would approve all of them. The grant is then scoped to
         that one running instance, keyed by pid *and* start time so a recycled
         pid does not inherit it. A caller that passes no ``pid`` gets the name
-        rule it asked for.
+        rule it asked for. ``identity`` is the start identity the user was
+        shown; without it the current one is read, which may already belong
+        to a process that reused the pid.
 
         Matched **exactly** (case-insensitively), unlike ``allowed_names``.
         That asymmetry is deliberate. An operator typing
@@ -360,7 +368,8 @@ class ProcessPolicy:
         if not folded:
             return None
         if pid is not None and is_shared_runtime(folded):
-            identity = self._identify(pid)
+            if identity is None:
+                identity = self._identify(pid)
             if identity is None:
                 return None
             with self._lock:

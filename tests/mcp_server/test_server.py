@@ -1015,6 +1015,27 @@ class TestApprovalPromptNotes:
         assert toolset.policy.granted_names == ()
         assert toolset.policy.check(4243, "python3").needs_approval is True
 
+    def test_a_pid_reused_while_the_prompt_is_open_is_not_attached(self):
+        # The prompt showed one python3; by the time the user said yes, the
+        # pid belonged to another python3. attach() only re-checks the name,
+        # so the start identity must be compared -- and nothing remembered.
+        process = FakeProcess(name="python3")
+        answerer = Answerer("accept", remember=True)
+        toolset = _toolset_for(process, ServerConfig())
+        identities = iter([12345, 99999, 99999])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, answerer) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        assert result.is_error
+        assert "reused" in result.content[0].text
+        assert toolset.store.sessions == ()
+        assert toolset.policy.granted_instances == ()
+
     def test_an_ordinary_name_reports_a_name_scope(self):
         payload, _toolset = self._open(FakeProcess(), Answerer("accept", remember=True))
         assert payload["approval_scope"] == "name"

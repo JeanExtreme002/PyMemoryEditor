@@ -331,6 +331,17 @@ def parse_value_type(raw: str) -> Type:
     return pytype
 
 
+def canonical_value_type(raw: str) -> str:
+    """The canonical name of a ``value_type`` argument, for echoing it back.
+
+    Derived from the type rather than from ``raw``, so a spelling that parses
+    (``" INT "``, or an alias added to :data:`VALUE_TYPES` later) is never
+    repeated into a result or an ``undo_hint`` the model replays.
+    """
+    pytype = parse_value_type(raw)
+    return next(name for name, known in VALUE_TYPES.items() if known is pytype)
+
+
 def parse_scan_type(raw: str) -> Tuple[str, ScanTypesEnum]:
     """Resolve a ``scan_type`` argument to its name and enum member."""
     key = (raw or "").strip().lower()
@@ -1258,7 +1269,7 @@ class MemoryToolset:
             )
             scan = self.store.new_scan(
                 session,
-                value_type=value_type.strip().lower(),
+                value_type=canonical_value_type(value_type),
                 bufflength=width,
                 addresses=addresses,
                 description=description,
@@ -1523,7 +1534,7 @@ class MemoryToolset:
             "has_more": offset + len(page) < scan.count,
             "partial": scan.is_partial,
         }
-        if _apply_value_budget(rows, MAX_PAGE_VALUE_CHARS):
+        if _apply_value_budget(rows, MAX_PAGE_VALUE_CHARS, scan.value_type):
             payload["values_truncated"] = True
             payload["values_note"] = (
                 "Some text values were cut to keep this page under %d "
@@ -1565,7 +1576,7 @@ class MemoryToolset:
         width = parse_bufflength(bufflength, pytype, required=True)
         # Echo the canonical spelling, as scan results do: " INT " parses
         # fine, and repeating it verbatim fed it into the model's next call.
-        value_type = value_type.strip().lower()
+        value_type = canonical_value_type(value_type)
 
         with session.lock, self._target_errors(
             session, "read_value at %s" % format_address(target), hint=_READ_HINT
@@ -1622,7 +1633,7 @@ class MemoryToolset:
         width = parse_bufflength(bufflength, pytype, required=False)
         # Canonical, because it is interpolated into undo_hint -- the one
         # string a model is told to replay verbatim to get its memory back.
-        value_type = value_type.strip().lower()
+        value_type = canonical_value_type(value_type)
 
         with session.lock:
             # Read back exactly the bytes the write is about to replace, so the
@@ -1737,7 +1748,7 @@ class MemoryToolset:
             "pid": session.pid,
             "name": session.name,
             "address": format_address(target),
-            "value_type": value_type.strip().lower(),
+            "value_type": canonical_value_type(value_type),
             "bytes": span,
             "value": format_value(_truncate_to_span(pytype, parsed, span)),
             "current_value": format_value(current),
@@ -2349,7 +2360,7 @@ class MemoryToolset:
             picked = [scan.addresses[int(index * step)] for index in range(SAMPLE_SIZE)]
 
         rows = self._rows_for(session, scan, picked)
-        _apply_value_budget(rows, MAX_SAMPLE_VALUE_CHARS)
+        _apply_value_budget(rows, MAX_SAMPLE_VALUE_CHARS, scan.value_type)
         return rows
 
     def _scan_payload(
@@ -2459,17 +2470,23 @@ def _pattern_overlap(pattern: str) -> Optional[int]:
         return None
 
 
-def _apply_value_budget(rows: List[Dict[str, Any]], budget: int) -> bool:
+def _apply_value_budget(
+    rows: List[Dict[str, Any]], budget: int, value_type: str
+) -> bool:
     """Cut the text values in ``rows`` so together they fit ``budget`` chars.
 
     Rows are filled in order; once the budget is spent, each later text value
     is cut to whatever is left (possibly nothing) and flagged
-    ``value_truncated``. Numbers are left alone — they are a few characters
-    and a cut number would be a wrong one. Additive: an untouched row keeps
-    exactly the shape it always had.
+    ``value_truncated``. Only ``str`` and ``bytes`` scans are cut: a number is
+    a few characters and a cut one would be a wrong one — including the
+    ``"inf"`` / ``"nan"`` strings :func:`format_value` gives a float. A
+    ``bytes`` value is hex, so it is cut to an even length that still parses.
+    Additive: an untouched row keeps exactly the shape it always had.
 
     :returns: whether anything was cut.
     """
+    if value_type not in ("str", "bytes"):
+        return False
     remaining = budget
     cut = False
     for row in rows:
@@ -2477,7 +2494,8 @@ def _apply_value_budget(rows: List[Dict[str, Any]], budget: int) -> bool:
         if not isinstance(value, str):
             continue
         if len(value) > remaining:
-            row["value"] = value[:remaining]
+            keep = remaining - remaining % 2 if value_type == "bytes" else remaining
+            row["value"] = value[:keep]
             row["value_truncated"] = True
             cut = True
         remaining = max(0, remaining - len(value))

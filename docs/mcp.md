@@ -230,7 +230,9 @@ Two exceptions to "matched by name":
   like — are one name for many unrelated programs, so remembering one would
   approve every script on the machine. For those, *remember* covers only the
   running process you approved (its pid and start time); the prompt says so,
-  and another `python3` — or the same script restarted — asks again. The
+  and another `python3` — or the same script restarted — asks again. If the
+  approved process exits while the prompt is open and another one reuses its
+  pid, the attach is refused rather than handed to the newcomer. The
   `open_process` result reports which applies in `approval_scope`: `"name"` or
   `"instance"`.
 - **A process whose name cannot be read** has nothing to remember it by, and

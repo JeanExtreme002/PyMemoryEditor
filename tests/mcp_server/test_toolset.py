@@ -2599,8 +2599,20 @@ class TestResponsesAreBounded:
 
     def test_numbers_are_never_cut(self):
         rows = [{"value": 123456789}, {"value": "ABCDEF"}]
-        assert toolset_module._apply_value_budget(rows, 3) is True
+        assert toolset_module._apply_value_budget(rows, 3, "str") is True
         assert rows == [{"value": 123456789}, {"value": "ABC", "value_truncated": True}]
+
+    def test_a_float_scan_keeps_its_inf_and_nan_strings(self):
+        rows = [{"value": "inf"}, {"value": "-inf"}, {"value": "nan"}]
+        assert toolset_module._apply_value_budget(rows, 2, "float") is False
+        assert [row["value"] for row in rows] == ["inf", "-inf", "nan"]
+
+    def test_a_cut_bytes_value_is_still_valid_hex(self):
+        rows = [{"value": "DEADBEEF"}, {"value": "CAFEBABE"}]
+        assert toolset_module._apply_value_budget(rows, 11, "bytes") is True
+        assert rows[0] == {"value": "DEADBEEF"}
+        assert rows[1]["value"] == "CA"  # 3 chars left, cut to an even 2
+        bytes.fromhex(rows[1]["value"])
 
     def test_the_tool_descriptions_mark_target_data_untrusted(self):
         from PyMemoryEditor.mcp import MemoryToolset

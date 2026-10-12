@@ -401,6 +401,31 @@ class TestTheWholeLaunchChainIsProtected:
         monkeypatch.setattr(procinfo, "start_identity", started.get)
         assert procinfo.ancestor_pids(500) == frozenset({400})
 
+    def test_a_non_utf8_linux_name_does_not_end_the_walk(self, monkeypatch):
+        # comm is whatever the process set (prctl PR_SET_NAME); decoding the
+        # whole stat line as text raised, read as "unknown", and left every
+        # ancestor above it -- the MCP client -- unprotected.
+        import builtins
+        import io
+
+        from PyMemoryEditor.mcp import procinfo
+
+        stat = b"4242 (\xff\xfe odd) name) S 77 4242 77 0 -1 4194560 " + b"0 " * 12 + b"123456 0\n"
+        real_open = builtins.open
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            if path == "/proc/4242/stat":
+                if "b" not in mode:  # what the old text-mode read did
+                    return io.TextIOWrapper(io.BytesIO(stat), encoding="utf-8")
+                return io.BytesIO(stat)
+            return real_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+        fields = procinfo._linux_stat_fields(4242)
+        assert fields is not None
+        assert fields[0] == "S" and fields[1] == "77"  # state, ppid
+        assert fields[19] == "123456"  # starttime (field 22)
+
     def test_a_cycle_terminates(self, monkeypatch):
         from PyMemoryEditor.mcp import procinfo
 
