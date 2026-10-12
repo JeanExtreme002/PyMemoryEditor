@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 
 import warnings
-from typing import Dict, Generator, Optional, Type, TypeVar, Union
+from typing import Dict, Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union
 
+from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
 from ..util import UNSET, prepare_write, resolve_bufflength
+from ..util.pattern import PatternLike
 
 from .functions import (
     allocate_memory,
@@ -192,7 +194,15 @@ class MacProcess(AbstractProcess):
                 )
         return ranges
 
-    def _scan_addresses(self, pytype, bufflength, addresses, *, raise_error, memory_regions):
+    def _scan_addresses(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        addresses: Sequence[int],
+        *,
+        raise_error: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Tuple[int, Optional[T]], None, None]:
         return search_values_by_addresses(
             self.__task,
             pytype,
@@ -204,9 +214,18 @@ class MacProcess(AbstractProcess):
         )
 
     def _scan_values(
-        self, pytype, bufflength, value, target_value_bytes, scan_type, *,
-        progress_information, writeable_only, memory_regions, aligned,
-    ):
+        self,
+        pytype: Type,
+        bufflength: int,
+        value: Union[bool, int, float, str, bytes, tuple],
+        target_value_bytes: Union[bytes, Tuple[bytes, ...]],
+        scan_type: ScanTypesEnum,
+        *,
+        progress_information: bool,
+        writeable_only: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+        aligned: bool,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         return search_addresses_by_value(
             self.__task,
             pytype,
@@ -221,7 +240,14 @@ class MacProcess(AbstractProcess):
             target_value_bytes=target_value_bytes,
         )
 
-    def _scan_pattern(self, pattern, compiled_pattern, *, progress_information, memory_regions):
+    def _scan_pattern(
+        self,
+        pattern: PatternLike,
+        compiled_pattern: Tuple[Pattern[bytes], int],
+        *,
+        progress_information: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         return search_addresses_by_pattern(
             self.__task,
             pattern,

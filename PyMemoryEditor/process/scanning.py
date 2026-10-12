@@ -346,9 +346,9 @@ def iter_search_results(
 
     ``before_read()``, when given, runs before every chunk read and outside
     the error classification, so whatever it raises always propagates. The
-    Linux backend uses it to confirm the target is still the process it
-    opened: it reads by pid, and a pid can be reused mid-scan. The same hook
-    is taken by :func:`iter_pattern_results` and
+    Linux backend uses it to refuse reading a pid that another process took
+    over mid-scan (it reads by pid, which nothing pins). The same hook is
+    taken by :func:`iter_pattern_results` and
     :func:`iter_values_for_addresses`.
 
     Regions are read in the order provided — callers should pre-sort by

@@ -214,26 +214,49 @@ def test_read_start_time_of_self_is_stable():
     assert lin.read_start_time(os.getpid()) == first
 
 
-@pytest.mark.skipif(not _HAS_PIDFD, reason="pidfd_open unavailable here")
-def test_a_scan_suspended_between_chunks_stops_once_the_target_is_gone(child, monkeypatch):
-    # The identity is checked before every chunk, not only when the scan is
-    # created: a generator resumed after the target exited (and its pid was
-    # free to be reused) must not read through the pid again.
+def _two_page_scan(process):
+    """A started search_by_addresses over two one-page regions: the first
+    read is done, the second happens on the next ``next()``."""
     from PyMemoryEditor import MemoryRegion
 
+    start = _first_readable_address(process)
+    regions = [
+        MemoryRegion(address=start, size=0x1000, is_readable=True),
+        MemoryRegion(address=start + 0x1000, size=0x1000, is_readable=True),
+    ]
+    scan = process.search_by_addresses(
+        int, addresses=[start, start + 0x1000], memory_regions=regions
+    )
+    next(scan)
+    return scan, start
+
+
+@pytest.mark.skipif(not _HAS_PIDFD, reason="pidfd_open unavailable here")
+def test_a_scan_resumed_after_the_pid_was_reused_does_not_read_it(child, monkeypatch):
+    # The identity is checked before every chunk, not only when the scan is
+    # created: a generator resumed after the target's pid went to another
+    # process must not read through that pid.
     process = OpenProcess(pid=child.pid)
     try:
-        start = _first_readable_address(process)
-        regions = [
-            MemoryRegion(address=start, size=0x1000, is_readable=True),
-            MemoryRegion(address=start + 0x1000, size=0x1000, is_readable=True),
-        ]
-        scan = process.search_by_addresses(int, addresses=[start, start + 0x1000], memory_regions=regions)
-        next(scan)
-
-        _kill_and_reap(child)
+        scan, _start = _two_page_scan(process)
+        monkeypatch.setattr(type(process), "_target_alive", lambda self: False)
+        monkeypatch.setattr(lin_process, "read_start_time", lambda pid: 1)
         monkeypatch.setattr(lin, "_process_vm_readv", _fail_if_called)
         with pytest.raises(ProcessIDNotExistsError):
             next(scan)
+    finally:
+        process.close()
+
+
+@pytest.mark.skipif(not _HAS_PIDFD, reason="pidfd_open unavailable here")
+def test_a_scan_resumed_after_the_target_exited_reads_as_before(child):
+    # A target that merely exited (pid not reused) is left to the read, which
+    # fails like any read of an exited process: with raise_error=False the
+    # address reports None, as it always has.
+    process = OpenProcess(pid=child.pid)
+    try:
+        scan, start = _two_page_scan(process)
+        _kill_and_reap(child)
+        assert next(scan) == (start + 0x1000, None)
     finally:
         process.close()

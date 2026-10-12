@@ -3,11 +3,13 @@
 import logging
 import os
 import warnings
-from typing import Generator, Optional, Type, TypeVar, Union
+from typing import Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union
 
+from ..enums import ScanTypesEnum
 from ..process import AbstractProcess
 from ..process.errors import ClosedProcess, ProcessIDNotExistsError
 from ..util import UNSET, prepare_write, resolve_bufflength
+from ..util.pattern import PatternLike
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
@@ -180,10 +182,20 @@ class LinuxProcess(AbstractProcess):
         self.__require_target()
 
     def _before_chunk_read(self) -> None:
-        # The target is addressed by pid, which can be reused while a scan is
-        # suspended between chunks: confirm it is still the process this
-        # object opened before each read (one pidfd probe, ~0.3 us).
-        self.__require_target(hot_path=True)
+        # The target is addressed by pid. A scan suspended between chunks can
+        # resume after the target exited and its pid went to another process,
+        # which must not be read: that case raises. A target that merely
+        # exited is left to the read, which fails with ESRCH exactly as before
+        # (callers already handle it, and search_by_addresses with
+        # raise_error=False still reports None). With a pidfd this costs one
+        # probe (~0.3 us); without one, chunk reads follow the hot-path rule of
+        # __require_target and are not checked.
+        self._require_open()
+        if self.__pidfd is None or self._target_alive():
+            return
+        current = read_start_time(self.pid)
+        if current is not None and current != self.__start_time:
+            raise ProcessIDNotExistsError(self.pid)
 
     def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         return get_memory_regions(self.pid)
@@ -209,7 +221,15 @@ class LinuxProcess(AbstractProcess):
         self.__require_target(hot_path=True)
         return read_process_memory_into(self.pid, address, buffer)
 
-    def _scan_addresses(self, pytype, bufflength, addresses, *, raise_error, memory_regions):
+    def _scan_addresses(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        addresses: Sequence[int],
+        *,
+        raise_error: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Tuple[int, Optional[T]], None, None]:
         return search_values_by_addresses(
             self.pid,
             pytype,
@@ -221,9 +241,18 @@ class LinuxProcess(AbstractProcess):
         )
 
     def _scan_values(
-        self, pytype, bufflength, value, target_value_bytes, scan_type, *,
-        progress_information, writeable_only, memory_regions, aligned,
-    ):
+        self,
+        pytype: Type,
+        bufflength: int,
+        value: Union[bool, int, float, str, bytes, tuple],
+        target_value_bytes: Union[bytes, Tuple[bytes, ...]],
+        scan_type: ScanTypesEnum,
+        *,
+        progress_information: bool,
+        writeable_only: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+        aligned: bool,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         return search_addresses_by_value(
             self.pid,
             pytype,
@@ -238,7 +267,14 @@ class LinuxProcess(AbstractProcess):
             before_read=self._before_chunk_read,
         )
 
-    def _scan_pattern(self, pattern, compiled_pattern, *, progress_information, memory_regions):
+    def _scan_pattern(
+        self,
+        pattern: PatternLike,
+        compiled_pattern: Tuple[Pattern[bytes], int],
+        *,
+        progress_information: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
         return search_addresses_by_pattern(
             self.pid,
             pattern,

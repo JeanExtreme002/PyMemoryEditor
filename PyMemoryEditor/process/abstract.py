@@ -628,7 +628,7 @@ class AbstractProcess(ABC):
         self,
         pytype: Type,
         bufflength: int,
-        value: Union[object, Tuple],
+        value: Union[bool, int, float, str, bytes, tuple],
         target_value_bytes: Union[bytes, Tuple[bytes, ...]],
         scan_type: ScanTypesEnum,
         *,
