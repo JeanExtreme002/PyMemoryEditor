@@ -12,7 +12,7 @@ import logging
 import os
 import signal
 from ctypes import addressof, sizeof
-from typing import Callable, Dict, Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
+from typing import Dict, Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
 
 from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
@@ -470,7 +470,6 @@ def search_addresses_by_value(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     aligned: bool = True,
     target_value_bytes: Optional[Union[bytes, Tuple[bytes, ...]]] = None,
-    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -478,9 +477,7 @@ def search_addresses_by_value(
 
     Passing a `memory_regions` snapshot skips region enumeration.
     ``target_value_bytes`` is ``value`` already encoded (see
-    :func:`~PyMemoryEditor.util.prepare_search_target`), and ``before_read``
-    runs before every chunk read (see
-    :func:`~PyMemoryEditor.process.scanning.iter_search_results`).
+    :func:`~PyMemoryEditor.util.prepare_search_target`).
     """
     _validate_pytype(pytype)
 
@@ -508,7 +505,6 @@ def search_addresses_by_value(
         progress_information=progress_information,
         aligned=aligned,
         transient_error_check=_is_transient,
-        before_read=before_read,
     )
 
 
@@ -520,7 +516,6 @@ def search_addresses_by_pattern(
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     compiled_pattern: Optional[Tuple[Pattern[bytes], int]] = None,
-    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target. See
@@ -550,7 +545,6 @@ def search_addresses_by_pattern(
         _make_read_chunk(pid),
         progress_information=progress_information,
         transient_error_check=_is_transient,
-        before_read=before_read,
     )
 
 
@@ -562,7 +556,6 @@ def search_values_by_addresses(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
-    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -598,7 +591,6 @@ def search_values_by_addresses(
         _make_read_chunk(pid),
         raise_error=raise_error,
         transient_error_check=_is_transient,
-        before_read=before_read,
     )
 
 

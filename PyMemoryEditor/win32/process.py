@@ -220,11 +220,8 @@ class WindowsProcess(AbstractProcess):
         self._require_open()
         return _detect_process_64bit(self.__process_handle)
 
-    def _require_listing(self) -> None:
-        self._require_open()
-
     def _require_scanning(self) -> None:
-        self._require_open()
+        self._require_listing()
         self.__require_read()
 
     def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:

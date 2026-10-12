@@ -115,7 +115,10 @@ class LinuxProcess(AbstractProcess):
         loops: they are verified only when the cheap pidfd probe is
         available. Without a pidfd the start-time read would roughly
         quadruple the cost of every read, so there they keep the pre-pidfd
-        behaviour. Writes, scans and listings are always verified.
+        behaviour. Writes are always verified, and so are scans and listings
+        when they are called; their generators are not re-verified between
+        items, so one held while the target exits and its pid is reused would
+        read the newcomer -- create the scan again after a long pause.
         """
         self._require_open()
         if hot_path and self.__pidfd is None:
@@ -178,25 +181,6 @@ class LinuxProcess(AbstractProcess):
     def _require_listing(self) -> None:
         self.__require_target()
 
-    def _require_scanning(self) -> None:
-        self.__require_target()
-
-    def _before_chunk_read(self) -> None:
-        # The target is addressed by pid. A scan suspended between chunks can
-        # resume after the target exited and its pid went to another process,
-        # which must not be read: that case raises. A target that merely
-        # exited is left to the read, which fails with ESRCH exactly as before
-        # (callers already handle it, and search_by_addresses with
-        # raise_error=False still reports None). With a pidfd this costs one
-        # probe (~0.3 us); without one, chunk reads follow the hot-path rule of
-        # __require_target and are not checked.
-        self._require_open()
-        if self.__pidfd is None or self._target_alive():
-            return
-        current = read_start_time(self.pid)
-        if current is not None and current != self.__start_time:
-            raise ProcessIDNotExistsError(self.pid)
-
     def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         return get_memory_regions(self.pid)
 
@@ -237,7 +221,6 @@ class LinuxProcess(AbstractProcess):
             addresses,
             memory_regions=memory_regions,
             raise_error=raise_error,
-            before_read=self._before_chunk_read,
         )
 
     def _scan_values(
@@ -264,7 +247,6 @@ class LinuxProcess(AbstractProcess):
             memory_regions=memory_regions,
             aligned=aligned,
             target_value_bytes=target_value_bytes,
-            before_read=self._before_chunk_read,
         )
 
     def _scan_pattern(
@@ -281,7 +263,6 @@ class LinuxProcess(AbstractProcess):
             progress_information=progress_information,
             memory_regions=memory_regions,
             compiled_pattern=compiled_pattern,
-            before_read=self._before_chunk_read,
         )
 
     def write_process_memory(

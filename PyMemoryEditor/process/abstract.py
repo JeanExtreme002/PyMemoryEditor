@@ -571,9 +571,13 @@ class AbstractProcess(ABC):
     # from the call), and bind the returned generator to this object, so that
     # resuming it after close() raises instead of using a released handle. A
     # backend supplies the access checks and the raw generators below.
+    #
+    # The hooks are deliberately not abstract: AbstractProcess is public, and a
+    # subclass written against the earlier contract -- one that overrides the
+    # public listing and search methods itself -- must keep instantiating.
+    # Such a subclass never reaches these defaults.
     # ------------------------------------------------------------------ #
 
-    @abstractmethod
     def _require_open(self) -> None:
         """Raise :class:`~PyMemoryEditor.ClosedProcess` once :meth:`close` ran.
 
@@ -582,34 +586,30 @@ class AbstractProcess(ABC):
         """
         raise NotImplementedError()
 
-    @abstractmethod
     def _require_listing(self) -> None:
         """Raise if the regions, threads or modules cannot be listed now
-        (closed, or the target gone where the backend can tell)."""
-        raise NotImplementedError()
+        (closed, or the target gone where the backend can tell). Defaults to
+        :meth:`_require_open`."""
+        self._require_open()
 
-    @abstractmethod
     def _require_scanning(self) -> None:
         """Raise if memory cannot be searched now: as :meth:`_require_listing`,
-        plus read access where that is a property of the handle."""
-        raise NotImplementedError()
+        plus read access where that is a property of the handle. Defaults to
+        :meth:`_require_listing`."""
+        self._require_listing()
 
-    @abstractmethod
     def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         """The backend's region walk, for :meth:`get_memory_regions`."""
         raise NotImplementedError()
 
-    @abstractmethod
     def _iter_threads(self) -> Generator[ThreadInfo, None, None]:
         """The backend's thread listing, for :meth:`get_threads`."""
         raise NotImplementedError()
 
-    @abstractmethod
     def _iter_modules(self) -> Generator[ModuleInfo, None, None]:
         """The backend's module listing, for :meth:`get_modules`."""
         raise NotImplementedError()
 
-    @abstractmethod
     def _scan_addresses(
         self,
         pytype: Type[T],
@@ -623,7 +623,6 @@ class AbstractProcess(ABC):
         resolved."""
         raise NotImplementedError()
 
-    @abstractmethod
     def _scan_values(
         self,
         pytype: Type,
@@ -643,7 +642,6 @@ class AbstractProcess(ABC):
         same target already validated and encoded."""
         raise NotImplementedError()
 
-    @abstractmethod
     def _scan_pattern(
         self,
         pattern: PatternLike,

@@ -16,16 +16,9 @@ import struct
 
 import pytest
 
-from PyMemoryEditor.enums import ScanTypesEnum
-from PyMemoryEditor.process import scanning
 from PyMemoryEditor.process.errors import ClosedProcess
 from PyMemoryEditor.process.region import MemoryRegion
-from PyMemoryEditor.process.scanning import (
-    iter_pattern_results,
-    iter_search_results,
-    iter_values_for_addresses,
-)
-from PyMemoryEditor.util.pattern import compile_pattern
+from PyMemoryEditor.process.scanning import iter_values_for_addresses
 
 from ._fakes import FakeMemory, small_chunks
 
@@ -201,78 +194,6 @@ def test_addresses_are_processed_in_sorted_order():
     addrs = [addr for addr, _ in results]
     assert sorted(addrs) == [0x1000, 0x2000]
     assert len(results) == 2
-
-
-# --------------------------------------------------------------------------- #
-# before_read: a check run before every read, never classified as a skip
-# --------------------------------------------------------------------------- #
-
-
-class _TargetGone(Exception):
-    """Stands in for ProcessIDNotExistsError raised by a backend's check."""
-
-
-def _countdown(reads_allowed):
-    """A ``before_read`` that lets ``reads_allowed`` reads through, then raises."""
-    calls = []
-
-    def before_read():
-        calls.append(1)
-        if len(calls) > reads_allowed:
-            raise _TargetGone()
-
-    before_read.calls = calls
-    return before_read
-
-
-def test_before_read_runs_before_every_address_read_and_is_never_swallowed():
-    # The Linux backend reads by pid and checks, before each read, that the pid
-    # is still the process it opened. With raise_error=False a failed read
-    # turns into (address, None) -- the check's error must not.
-    region_a = _make_region(0x1000, b"\x01\x00\x00\x00" * 4)
-    region_b = _make_region(0x9000, b"\x02\x00\x00\x00" * 4)
-    regions = [region_a, region_b]
-    before_read = _countdown(1)
-
-    results = iter_values_for_addresses(
-        [0x1000, 0x9000], regions, int, 4, _make_reader(regions),
-        raise_error=False, transient_error_check=lambda exc: True,
-        before_read=before_read,
-    )
-    assert next(results) == (0x1000, 1)
-    with pytest.raises(_TargetGone):
-        next(results)
-    assert len(before_read.calls) == 2
-
-
-def test_before_read_runs_before_every_scan_chunk(monkeypatch):
-    monkeypatch.setattr(scanning, "iter_region_chunks", _chunks_of(16))
-    region = _make_region(0x4000, b"\x07\x00\x00\x00" * 12)  # 48 bytes: 3 chunks
-    reader = _make_reader([region])
-
-    before_read = _countdown(3)
-    found = list(iter_search_results(
-        [region], int, 4, b"\x07\x00\x00\x00", ScanTypesEnum.EXACT_VALUE, reader,
-        transient_error_check=lambda exc: True, before_read=before_read,
-    ))
-    assert len(found) == 12 and len(before_read.calls) == 3
-
-    before_read = _countdown(1)
-    compiled, length = compile_pattern("07 00 00 00")
-    scan = iter_pattern_results(
-        [region], compiled, length, reader,
-        transient_error_check=lambda exc: True, before_read=before_read,
-    )
-    assert [next(scan) for _ in range(4)] == [0x4000, 0x4004, 0x4008, 0x400C]
-    with pytest.raises(_TargetGone):
-        next(scan)
-
-
-def _chunks_of(chunk_size):
-    """``iter_region_chunks`` capped at a small chunk size."""
-    from PyMemoryEditor.util.scan import iter_region_chunks
-
-    return lambda size, width: iter_region_chunks(size, width, max_chunk=chunk_size)
 
 
 # --------------------------------------------------------------------------- #

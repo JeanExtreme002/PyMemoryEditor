@@ -142,12 +142,6 @@ class MacProcess(AbstractProcess):
         self._require_open()
         return _detect_task_64bit(self.__task)
 
-    def _require_listing(self) -> None:
-        self._require_open()
-
-    def _require_scanning(self) -> None:
-        self._require_open()
-
     def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         return get_memory_regions(self.__task, self.pid)
 
