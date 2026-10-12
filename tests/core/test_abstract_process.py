@@ -77,6 +77,18 @@ def test_a_subclass_of_the_earlier_contract_still_instantiates_and_runs_its_own_
         process.scan_pointer_paths(0x1000, ptr_size=3)
 
 
+def test_scan_pointer_paths_runs_an_earlier_contract_subclass_own_scanning_check():
+    """A 3.3-contract subclass that adds its own _require_scanning (but no
+    _require_open) still has it run by scan_pointer_paths."""
+
+    class _ChecksScanning(_ContractV3Process):
+        def _require_scanning(self):
+            raise PermissionError("no read access")
+
+    with pytest.raises(PermissionError, match="read access"):
+        _ChecksScanning().scan_pointer_paths(0x1000)
+
+
 def test_every_backend_implements_every_raw_hook():
     # The hooks are not abstract (see above), so a backend missing one would
     # only fail when that method is called -- possibly only on the CI of its

@@ -71,7 +71,8 @@ def compile_pattern(
     :raises ValueError: malformed IDA-style token, or ``byte_length`` omitted
         for a regex / pre-compiled pattern.
     :raises TypeError: if ``pattern`` is not a ``str``, ``bytes`` or
-        ``re.Pattern[bytes]``.
+        ``re.Pattern[bytes]`` — a compiled ``str`` regex included, as it can
+        never match process memory.
     """
     if isinstance(pattern, re.Pattern):
         # A str pattern can't match process memory: it would only fail later,

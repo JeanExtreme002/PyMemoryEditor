@@ -538,7 +538,7 @@ def test_scan_pointer_paths_stops_once_the_process_is_closed(monkeypatch):
     [
         ({"max_depth": 0}, "max_depth"),
         ({"max_offset": -8}, "max_offset"),
-        ({"max_results": -1}, "max_results"),
+        ({"max_results": 0}, "max_results"),
     ],
 )
 def test_scan_pointer_paths_rejects_bad_limits_at_the_call(process, kwargs, message):

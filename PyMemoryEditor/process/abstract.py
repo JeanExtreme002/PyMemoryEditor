@@ -1303,6 +1303,15 @@ class AbstractProcess(ABC):
             bounds it. (To abort the map-building phase, raise from
             ``progress_callback``.)
 
+        :raises ValueError: ``ptr_size`` other than 4 or 8, ``max_depth`` or
+            ``max_results`` below 1, or a negative ``max_offset``.
+        :raises ClosedProcess: the process was closed (also raised by the
+            returned generator once it is).
+
+        Arguments and access are checked at the call, like every ``search_*``
+        method; the pointer map is built and walked lazily, as the generator
+        is consumed.
+
         Example
         -------
         ::
@@ -1321,18 +1330,21 @@ class AbstractProcess(ABC):
         # The map build and path search stay lazy in _iter_pointer_paths.
         #
         # A subclass written against the 3.3 contract implements the listings
-        # itself and need not define _require_open (see __init_subclass__);
-        # it keeps the unguarded behaviour instead of a NotImplementedError.
-        guarded = type(self)._require_open is not AbstractProcess._require_open
-        if guarded:
+        # itself and need not define these hooks (see __init_subclass__): each
+        # check runs only where the subclass provides it, instead of hitting
+        # the NotImplementedError of the base _require_open.
+        cls = type(self)
+        guarded = cls._require_open is not AbstractProcess._require_open
+        if guarded or cls._require_scanning is not AbstractProcess._require_scanning:
             self._require_scanning()
 
         if max_depth < 1:
             raise ValueError("max_depth must be at least 1.")
         if max_offset < 0:
             raise ValueError("max_offset must not be negative.")
-        if max_results is not None and max_results < 0:
-            raise ValueError("max_results must not be negative.")
+        if max_results is not None and max_results < 1:
+            # 0 would build the whole pointer map only to yield nothing.
+            raise ValueError("max_results must be at least 1 (or None for no cap).")
 
         if ptr_size is None:
             ptr_size = self.pointer_size
