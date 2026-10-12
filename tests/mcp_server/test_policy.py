@@ -273,8 +273,10 @@ class TestSelfProtection:
         import os
 
         policy = ProcessPolicy(platform="linux", allow_any=True)
-        kept = policy.filter([(os.getpid(), "python"), (5000, "game.exe")])
-        assert kept == [(5000, "game.exe")]
+        # Any pid outside the real chain: this class runs against it.
+        other = next(pid for pid in range(5000, 6000) if pid not in policy.protected_pids)
+        kept = policy.filter([(os.getpid(), "python"), (other, "game.exe")])
+        assert kept == [(other, "game.exe")]
 
     def test_describe_reports_it(self):
         assert ProcessPolicy(platform="linux").describe()["self_protected"] is True
