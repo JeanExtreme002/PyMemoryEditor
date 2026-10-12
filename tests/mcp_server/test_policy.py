@@ -228,6 +228,7 @@ class TestFilterAndDescribe:
         assert described["denied_system_process_count"] > 0
 
 
+@pytest.mark.real_self_protection
 class TestSelfProtection:
     """The server never opens itself or the client that launched it."""
 
@@ -336,6 +337,7 @@ class TestTruncatedNamesMatchTheAllowlist:
         assert policy.check(5000, "my-very-long-ga").needs_approval is True
 
 
+@pytest.mark.real_self_protection
 class TestTheWholeLaunchChainIsProtected:
     """Under ``uvx`` the server's parent is ``uv``; the client is further up."""
 

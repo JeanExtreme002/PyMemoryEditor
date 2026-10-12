@@ -424,3 +424,26 @@ def make_toolset(fake_process: FakeProcess):
 def session(toolset: MemoryToolset) -> Dict[str, Any]:
     """An open session on the fake target."""
     return toolset.open_process(pid=4242)
+
+
+#: Stand-ins for this process and its ancestors, far above any pid a test
+#: makes up (and above every OS's pid range), so a fake pid never collides.
+FAKE_SELF_AND_ANCESTOR_PIDS = frozenset({0x7FFF_FF01, 0x7FFF_FF02})
+
+
+@pytest.fixture(autouse=True)
+def _fake_self_and_ancestors(request, monkeypatch):
+    """Keep made-up pids clear of the real ancestor chain.
+
+    ``ProcessPolicy`` refuses this process and every ancestor. Tests use fixed
+    fake pids (1000, 5000, ...), and when a real ancestor happens to own one --
+    a CI runner process at pid 1001 did -- the fake is refused and the test
+    fails for reasons unrelated to the code. Tests about that protection itself
+    opt back into the real chain with ``@pytest.mark.real_self_protection``.
+    """
+    if request.node.get_closest_marker("real_self_protection") is None:
+        from PyMemoryEditor.mcp import policy as policy_module
+
+        monkeypatch.setattr(
+            policy_module, "_self_and_ancestor_pids", lambda: FAKE_SELF_AND_ANCESTOR_PIDS
+        )
