@@ -246,7 +246,22 @@ def _register_open_process(server: "MCPServer", toolset: MemoryToolset) -> None:
         decision = target["decision"]
 
         if decision.allowed:
-            return await _off_loop(toolset.attach, found_pid, found_name)
+            result = await _off_loop(toolset.attach, found_pid, found_name)
+            # A remembered approval for one instance of a shared runtime is
+            # keyed by pid and start time, and attach() re-checks only the
+            # name: if the approved script exited and another of the same name
+            # took its pid in between, the policy no longer allows it. Asking
+            # again now that the handle pins the pid closes that window; for
+            # name and allowlist approvals the verdict cannot have changed.
+            if not toolset.policy.check(found_pid, found_name).allowed:
+                await _off_loop(toolset.close_process, result["session_id"])
+                raise SdkToolError(
+                    'pid %d is no longer the "%s" process that was approved: it '
+                    "exited and the pid was reused. Nothing was attached; call "
+                    "open_process again so the user is asked about the new one."
+                    % (found_pid, found_name)
+                )
+            return result
 
         if not decision.needs_approval:
             raise SdkToolError(decision.reason)

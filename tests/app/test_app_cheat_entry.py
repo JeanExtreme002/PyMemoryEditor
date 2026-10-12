@@ -645,6 +645,10 @@ def test_bulk_promotion_merges_duplicates_and_rebuilds_once(qapp):
         assert table._entries[0].description == "hp"
         assert table._table.rowCount() == 3
     finally:
+        # The patch closes over the table (a cycle): left in place, the
+        # widget is freed by the cyclic GC -- on whatever thread it runs on,
+        # which for a Qt object off the GUI thread is a segfault.
+        table.__dict__.pop("_rebuild", None)
         table.shutdown()
 
 

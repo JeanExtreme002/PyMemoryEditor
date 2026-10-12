@@ -1036,6 +1036,26 @@ class TestApprovalPromptNotes:
         assert toolset.store.sessions == ()
         assert toolset.policy.granted_instances == ()
 
+    def test_a_remembered_instance_whose_pid_was_reused_is_not_attached(self):
+        # Remembered as python3 pid 4242 started at 12345. By the time attach
+        # pinned the pid, a different python3 (another start time) held it.
+        process = FakeProcess(name="python3")
+        toolset = _toolset_for(process, ServerConfig())
+        toolset.policy._identify = {4242: 12345}.get
+        assert toolset.policy.grant("python3", pid=4242) == "instance"
+        identities = iter([12345, 99999])
+        toolset.policy._identify = lambda pid: next(identities)
+        server, _toolset = build_server(toolset=toolset)
+
+        async def run():
+            async with connected(server, Answerer("accept")) as session:
+                return await session.call_tool("open_process", {"pid": 4242})
+
+        result = asyncio.run(run())
+        assert result.is_error
+        assert "pid was reused" in result.content[0].text
+        assert toolset.store.sessions == ()
+
     def test_an_ordinary_name_reports_a_name_scope(self):
         payload, _toolset = self._open(FakeProcess(), Answerer("accept", remember=True))
         assert payload["approval_scope"] == "name"

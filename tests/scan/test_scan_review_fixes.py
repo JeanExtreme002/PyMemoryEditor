@@ -488,54 +488,6 @@ def test_chunk_overlap_never_reads_past_the_region(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# progress_callback reports progress with or without hits
-# --------------------------------------------------------------------------- #
-
-def test_search_progress_callback_reaches_one_without_any_hit(monkeypatch):
-    _small_chunks(monkeypatch, 16)
-    memory = FakeMemory({0x1000: bytes(64), 0x9000: bytes(32)})
-    seen = []
-    found = list(iter_search_results(
-        memory.regions, int, 4, struct.pack("<i", 7), ScanTypesEnum.EXACT_VALUE,
-        memory.read_chunk, progress_information=True, progress_callback=seen.append,
-    ))
-    assert found == []
-    assert seen == sorted(seen) and len(seen) == 6
-    assert seen[-1] == 1.0
-
-
-def test_pattern_progress_callback_counts_skipped_chunks(monkeypatch):
-    _small_chunks(monkeypatch, 16)
-    memory = FakeMemory({0x1000: bytes(48)})
-
-    def flaky(address, size):
-        if address == 0x1010:
-            raise OSError(14, "Bad address")
-        return memory.read_chunk(address, size)
-
-    seen = []
-    compiled, length = compile_pattern("90 90")
-    assert list(iter_pattern_results(
-        memory.regions, compiled, length, flaky,
-        transient_error_check=lambda exc: True, progress_callback=seen.append,
-    )) == []
-    assert seen == [pytest.approx(1 / 3), pytest.approx(2 / 3), 1.0]
-
-
-def test_progress_callback_on_an_empty_region_list():
-    seen = []
-    assert list(iter_search_results(
-        [], int, 4, b"\x00" * 4, ScanTypesEnum.EXACT_VALUE,
-        lambda a, s: None, progress_callback=seen.append,
-    )) == []
-    compiled, length = compile_pattern("90")
-    assert list(iter_pattern_results(
-        [], compiled, length, lambda a, s: None, progress_callback=seen.append,
-    )) == []
-    assert seen == [1.0, 1.0]
-
-
-# --------------------------------------------------------------------------- #
 # Eager validation helper for the generator-returning search methods
 # --------------------------------------------------------------------------- #
 

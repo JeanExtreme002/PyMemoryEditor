@@ -322,7 +322,6 @@ def iter_search_results(
     progress_information: bool = False,
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
     aligned: bool = True,
-    progress_callback: Optional[Callable[[float], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every chunk of every region and yield the addresses where
@@ -350,10 +349,7 @@ def iter_search_results(
 
     ``progress_information`` only reports progress *alongside a match* (the
     ``(address, info)`` shape has no room for anything else), so a scan with
-    few or no hits shows little or no progress. ``progress_callback``, when
-    given, is called with the scanned fraction after every chunk — hits or
-    not, read or skipped — so it reaches ``1.0`` when the walk completes (an
-    empty region list reports ``1.0`` straight away).
+    few or no hits shows little or no progress.
     """
     if transient_error_check is None:
         transient_error_check = _always_false
@@ -365,8 +361,6 @@ def iter_search_results(
         memory_total += region.size
 
     if memory_total == 0:
-        if progress_callback is not None:
-            progress_callback(1.0)
         return
 
     if scan_type in (ScanTypesEnum.EXACT_VALUE, ScanTypesEnum.NOT_EXACT_VALUE):
@@ -422,10 +416,6 @@ def iter_search_results(
                     raise
 
             if chunk_data is None:
-                _report_progress(
-                    progress_callback, checked_memory_size + chunk_offset + chunk_size,
-                    memory_total,
-                )
                 continue
 
             for offset in searching_method(
@@ -460,11 +450,6 @@ def iter_search_results(
                 else:
                     yield found_address
 
-            _report_progress(
-                progress_callback, checked_memory_size + chunk_offset + chunk_size,
-                memory_total,
-            )
-
         checked_memory_size += size
 
 
@@ -475,15 +460,6 @@ def _overlap(wanted: int, region_size: int, chunk_offset: int, chunk_size: int) 
     ``wanted`` — reading the full overlap there ran past the region into
     memory that may not be mapped, failing the whole chunk."""
     return max(0, min(wanted, region_size - chunk_offset - chunk_size))
-
-
-def _report_progress(
-    progress_callback: Optional[Callable[[float], None]], scanned: int, total: int
-) -> None:
-    """Tell ``progress_callback`` (when there is one) how much of ``total``
-    the scan has walked."""
-    if progress_callback is not None:
-        progress_callback(min(scanned / total, 1.0))
 
 
 def _iter_matches(
@@ -518,7 +494,6 @@ def iter_pattern_results(
     *,
     progress_information: bool = False,
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
-    progress_callback: Optional[Callable[[float], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every chunk of every region and yield the addresses where
@@ -547,8 +522,6 @@ def iter_pattern_results(
     ``pattern_length`` is cut at the end of the chunk's read; its remainder
     can then surface as a separate match. Size ``byte_length`` for the
     longest match you expect.)
-
-    ``progress_callback`` behaves as in :func:`iter_search_results`.
     """
     if transient_error_check is None:
         transient_error_check = _always_false
@@ -566,8 +539,6 @@ def iter_pattern_results(
         memory_total += region.size
 
     if memory_total == 0:
-        if progress_callback is not None:
-            progress_callback(1.0)
         return
 
     checked_memory_size = 0
@@ -601,10 +572,6 @@ def iter_pattern_results(
                     raise
 
             if chunk_data is None:
-                _report_progress(
-                    progress_callback, checked_memory_size + chunk_offset + chunk_size,
-                    memory_total,
-                )
                 continue
 
             # The regex engine needs a real bytes object. Convert once per
@@ -637,11 +604,6 @@ def iter_pattern_results(
                     )
                 else:
                     yield found_address
-
-            _report_progress(
-                progress_callback, checked_memory_size + chunk_offset + chunk_size,
-                memory_total,
-            )
 
         checked_memory_size += size
 

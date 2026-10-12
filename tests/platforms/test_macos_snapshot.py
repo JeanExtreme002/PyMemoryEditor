@@ -69,7 +69,7 @@ def test_a_snapshot_refine_reads_real_values():
     assert results[address] == 0x1234567
 
 
-# --- value / pattern scans keep a snapshot's order ---------------------------
+# --- value / pattern scans take regions in address order ---------------------------
 
 
 def _region(address):
@@ -90,12 +90,13 @@ def _capture_scan_regions(monkeypatch, name):
 
 
 @pytest.mark.parametrize("snapshot_type, expected", (
-    # A snapshot is sorted by contract, so it is not sorted again. The order
-    # here deliberately breaks that contract to make a re-sort observable.
-    (MemoryRegionSnapshot, [0x3000, 0x1000]),
+    # A snapshot is a mutable list: one the caller reordered (append,
+    # reverse, ...) must still be scanned in address order, so every input
+    # is sorted -- a no-op pass over a list that already is.
+    (MemoryRegionSnapshot, [0x1000, 0x3000]),
     (list, [0x1000, 0x3000]),
 ))
-def test_a_value_scan_sorts_only_non_snapshot_inputs(monkeypatch, snapshot_type, expected):
+def test_a_value_scan_scans_regions_in_address_order(monkeypatch, snapshot_type, expected):
     captured = _capture_scan_regions(monkeypatch, "iter_search_results")
     regions = snapshot_type([_region(0x3000), _region(0x1000)])
 
@@ -105,10 +106,10 @@ def test_a_value_scan_sorts_only_non_snapshot_inputs(monkeypatch, snapshot_type,
 
 
 @pytest.mark.parametrize("snapshot_type, expected", (
-    (MemoryRegionSnapshot, [0x3000, 0x1000]),
+    (MemoryRegionSnapshot, [0x1000, 0x3000]),
     (list, [0x1000, 0x3000]),
 ))
-def test_a_pattern_scan_sorts_only_non_snapshot_inputs(monkeypatch, snapshot_type, expected):
+def test_a_pattern_scan_scans_regions_in_address_order(monkeypatch, snapshot_type, expected):
     captured = _capture_scan_regions(monkeypatch, "iter_pattern_results")
     regions = snapshot_type([_region(0x3000), _region(0x1000)])
 

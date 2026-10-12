@@ -895,10 +895,7 @@ def search_addresses_by_value(
         for region in source_regions
         if default_scan_filter(region, writeable_only=writeable_only)
     ]
-    # Filtering keeps a snapshot's address order, so only other inputs
-    # need sorting.
-    if not isinstance(source_regions, MemoryRegionSnapshot):
-        filtered_regions.sort(key=lambda region: region.address)
+    filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_search_results(
         filtered_regions,
@@ -1402,10 +1399,7 @@ def search_addresses_by_pattern(
     filtered_regions = [
         region for region in source_regions if default_scan_filter(region)
     ]
-    # Filtering keeps a snapshot's address order, so only other inputs
-    # need sorting.
-    if not isinstance(source_regions, MemoryRegionSnapshot):
-        filtered_regions.sort(key=lambda region: region.address)
+    filtered_regions.sort(key=lambda region: region.address)
 
     yield from iter_pattern_results(
         filtered_regions,

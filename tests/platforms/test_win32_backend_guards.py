@@ -328,6 +328,20 @@ def test_module_snapshot_retries_are_bounded(monkeypatch, empty_module_walk):
     assert len(fake.calls) == win._SNAPSHOT_BAD_LENGTH_RETRIES
 
 
+def test_module_snapshot_retries_wait_between_attempts(monkeypatch, empty_module_walk):
+    # Back-to-back attempts fall inside the same loader transition; each
+    # retry waits a little, and the last failure does not.
+    fake = _fake_snapshot([_ERROR_BAD_LENGTH])
+    monkeypatch.setattr(win.kernel32, "CreateToolhelp32Snapshot", fake)
+    sleeps = []
+    monkeypatch.setattr(win.time, "sleep", sleeps.append)
+
+    with pytest.raises(OSError):
+        list(win.GetModules(os.getpid()))
+
+    assert sleeps == [win._SNAPSHOT_BAD_LENGTH_DELAY] * (win._SNAPSHOT_BAD_LENGTH_RETRIES - 1)
+
+
 def test_other_snapshot_errors_are_not_retried(monkeypatch, empty_module_walk):
     fake = _fake_snapshot([_ERROR_ACCESS_DENIED])
     monkeypatch.setattr(win.kernel32, "CreateToolhelp32Snapshot", fake)
@@ -478,12 +492,13 @@ def _capture_scan_regions(monkeypatch, name):
 
 
 @pytest.mark.parametrize("snapshot_type, expected", (
-    # A snapshot is sorted by contract, so it is not sorted again. The order
-    # here deliberately breaks that contract to make a re-sort observable.
-    (MemoryRegionSnapshot, [0x3000, 0x1000]),
+    # A snapshot is a mutable list: one the caller reordered (append,
+    # reverse, ...) must still be scanned in address order, so every input
+    # is sorted -- a no-op pass over a list that already is.
+    (MemoryRegionSnapshot, [0x1000, 0x3000]),
     (list, [0x1000, 0x3000]),
 ))
-def test_scans_sort_only_non_snapshot_inputs(monkeypatch, snapshot_type, expected):
+def test_scans_take_regions_in_address_order(monkeypatch, snapshot_type, expected):
     values = _capture_scan_regions(monkeypatch, "iter_search_results")
     patterns = _capture_scan_regions(monkeypatch, "iter_pattern_results")
 

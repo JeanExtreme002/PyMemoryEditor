@@ -350,6 +350,10 @@ _COL_OFFSETS = 3
 _COL_RESOLVED = 4
 _COL_VALUE = 5
 
+# Set on a Compare row whose module is not loaded now: the stashed path still
+# carries the previous run's absolute base, so it must not be resolved.
+_ROLE_NO_LIVE_BASE = Qt.UserRole + 1
+
 
 class PointerScanDialog(TearsDownOnClose, QDialog):
     """Reverse pointer scan with a Cheat-Engine-style result table."""
@@ -797,6 +801,13 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
 
     # ----------------------------------------------------------- actions --- #
 
+    def _selected_has_no_live_base(self) -> bool:
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
+            return False
+        item = self._model.item(rows[0].row(), _COL_PATH)
+        return bool(item is not None and item.data(_ROLE_NO_LIVE_BASE))
+
     def _selected_path(self) -> Optional[PointerPath]:
         rows = self._table.selectionModel().selectedRows()
         if not rows:
@@ -837,22 +848,18 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         path = self._selected_path()
         if path is None:
             return None
+        if self._selected_has_no_live_base():
+            # A Compare survivor whose module is not loaded now: it keeps the
+            # saved path, and walking that path's absolute base would read the
+            # previous run's addresses -- possibly unrelated memory that maps.
+            QMessageBox.warning(
+                self,
+                "Pointer Scan",
+                f"Could not resolve this path now — its module "
+                f"{path.module!r} is not loaded in the target.",
+            )
+            return None
         try:
-            if path.module is not None and path.module_offset is not None:
-                # Rebase onto the module as loaded *now*. A row from Compare
-                # whose module is not loaded keeps the saved path, and walking
-                # its saved absolute base would read the previous run's
-                # addresses — possibly unrelated memory that happens to map.
-                live = path._rebased_onto(first_module_bases(self._process.get_modules()))
-                if live is None:
-                    QMessageBox.warning(
-                        self,
-                        "Pointer Scan",
-                        f"Could not resolve this path now — its module "
-                        f"{path.module!r} is not loaded in the target.",
-                    )
-                    return None
-                path = live
             return path.resolve(self._process)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(
@@ -1048,6 +1055,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
         spec, length = self._current_spec()
 
         rows: List[_ResultRow] = []
+        no_live_base: List[int] = []
         for saved in survivors:
             # Survivors are all module paths (the intersection drops the
             # rest). One whose module isn't loaded now has no live base: the
@@ -1057,6 +1065,7 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
             # membership is already decided, so it stays, shown unresolved.
             live = saved._rebased_onto(module_bases)
             if live is None:
+                no_live_base.append(len(rows))
                 rows.append((saved, None, "—", False))
                 continue
             try:
@@ -1068,7 +1077,12 @@ class PointerScanDialog(TearsDownOnClose, QDialog):
                 resolved, text, valid = None, "—", False
             rows.append((live, resolved, text, valid))
 
+        first_row = self._model.rowCount()
         self._append_rows(rows)
+        for index in no_live_base:
+            item = self._model.item(first_row + index, _COL_PATH)
+            if item is not None:
+                item.setData(True, _ROLE_NO_LIVE_BASE)
         self._count_label.setText(
             f"{len(survivors):,} path(s) common to {len(filenames)} scans."
             + unavailable

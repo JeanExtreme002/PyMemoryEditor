@@ -100,7 +100,7 @@ def test_patch_values_announces_one_removal_per_contiguous_run(qapp):
     assert all(model._row_of(a) == r for r, a in enumerate(model._addresses))
 
 
-def test_a_chunked_refine_keeps_rows_right_without_rebuilding_the_index(qapp):
+def test_a_chunked_refine_keeps_rows_right_without_rebuilding_the_index(qapp, monkeypatch):
     """
     A refine arrives as many small chunks. Every chunk used to rebuild the
     whole address→row dict after dropping its rows, which made a refine
@@ -120,7 +120,13 @@ def test_a_chunked_refine_keeps_rows_right_without_rebuilding_the_index(qapp):
 
     rebuilds = []
     original = results_view.ResultsModel._reindex
-    model._reindex = lambda: (rebuilds.append(1), original(model))
+    # Patched on the class: an instance attribute closing over the model would
+    # make a cycle, leaving the QObject to the cyclic GC on whatever thread
+    # it runs on.
+    monkeypatch.setattr(
+        results_view.ResultsModel, "_reindex",
+        lambda self: (rebuilds.append(1), original(self)),
+    )
 
     for start in range(0, count, 750):
         model.patch_values(

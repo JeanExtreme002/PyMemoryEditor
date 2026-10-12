@@ -9,6 +9,7 @@
 import ctypes
 import ctypes.wintypes
 import logging
+import time
 from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 from ..enums import ScanTypesEnum
@@ -353,6 +354,11 @@ _REGION_MAX_CONSECUTIVE_FAILURES = 64
 # documentation says to retry until it succeeds; a ceiling keeps a target that
 # loads DLLs in a tight loop from hanging the caller.
 _SNAPSHOT_BAD_LENGTH_RETRIES = 16
+
+# Pause between those retries. Back-to-back attempts land inside the same
+# loader transition and fail alike; a few milliseconds lets it finish, and the
+# worst case stays well under a tenth of a second.
+_SNAPSHOT_BAD_LENGTH_DELAY = 0.005
 
 
 # Message for OpenProcess failing with ERROR_ACCESS_DENIED. The library never
@@ -783,10 +789,7 @@ def SearchAddressesByValue(
         for region in source_regions
         if default_scan_filter(region, writeable_only=writeable_only)
     ]
-    # Filtering keeps a snapshot's address order, so only other inputs
-    # need sorting.
-    if not isinstance(source_regions, MemoryRegionSnapshot):
-        filtered_regions.sort(key=lambda region: region.address)
+    filtered_regions.sort(key=lambda region: region.address)
 
     def read_chunk(address: int, size: int):
         # `_read_region` returns None on transient failures (page unmapped /
@@ -830,10 +833,7 @@ def SearchAddressesByPattern(
     filtered_regions = [
         region for region in source_regions if default_scan_filter(region)
     ]
-    # Filtering keeps a snapshot's address order, so only other inputs
-    # need sorting.
-    if not isinstance(source_regions, MemoryRegionSnapshot):
-        filtered_regions.sort(key=lambda region: region.address)
+    filtered_regions.sort(key=lambda region: region.address)
 
     def read_chunk(address: int, size: int):
         # ``_read_region`` returns None on transient failures (page unmapped /
@@ -1007,6 +1007,8 @@ def GetModules(
             break
         if ctypes.get_last_error() != _ERROR_BAD_LENGTH:
             break
+        if _attempt + 1 < _SNAPSHOT_BAD_LENGTH_RETRIES:
+            time.sleep(_SNAPSHOT_BAD_LENGTH_DELAY)
     else:
         snapshot = None
 
