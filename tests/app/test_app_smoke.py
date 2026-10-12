@@ -131,6 +131,36 @@ def test_main_cli_scopes_sig_dfl_to_the_run(monkeypatch):
         signal.signal(signal.SIGINT, original)
 
 
+def test_main_runs_the_cyclic_collector_on_the_gui_thread_only(monkeypatch):
+    """
+    While the app runs, automatic collection is off (a timer on the GUI thread
+    collects instead), so a collection never runs inside a QThread worker and
+    destroys GUI-thread Qt objects from there. It is back on afterwards.
+    """
+    import gc
+
+    from PyMemoryEditor.app import application, open_process_dialog
+
+    seen = {}
+
+    class _ProbingDialog:
+        class DialogCode:
+            Accepted = 1
+
+        def exec(self):
+            seen["inside"] = gc.isenabled()
+            return 0
+
+        process = None
+
+    monkeypatch.setattr(open_process_dialog, "OpenProcessDialog", _ProbingDialog)
+
+    gc.enable()
+    assert application.main(["pymemoryeditor"]) is None
+    assert seen["inside"] is False
+    assert gc.isenabled()
+
+
 def test_scoped_signal_handler_is_a_noop_off_the_main_thread():
     """
     ``signal.signal`` only works on the main thread. The helper must degrade to

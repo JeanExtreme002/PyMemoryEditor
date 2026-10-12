@@ -560,10 +560,7 @@ def main(argv=None):
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
 
-    from ._widgets import detached_workers_running
-    from .main_window import MainWindow
-    from .open_process_dialog import OpenProcessDialog
-
+    from ._gc import garbage_collected_on_gui_thread
     from ._icon import app_icon
 
     app = QApplication.instance() or QApplication(argv)
@@ -576,6 +573,18 @@ def main(argv=None):
 
     saved_theme = str(QSettings().value("theme", DEFAULT_THEME_ID))
     apply_theme(app, saved_theme)
+
+    # Every dialog from here on runs QThread workers; see _gc for why the
+    # cyclic collector must not run inside them.
+    with garbage_collected_on_gui_thread(app):
+        _pick_process_and_run(app)
+
+
+def _pick_process_and_run(app) -> None:
+    """The picker, then the main window until the event loop exits."""
+    from ._widgets import detached_workers_running
+    from .main_window import MainWindow
+    from .open_process_dialog import OpenProcessDialog
 
     picker = OpenProcessDialog()
     if picker.exec() != picker.DialogCode.Accepted:
