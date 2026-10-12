@@ -212,3 +212,28 @@ def test_read_start_time_of_self_is_stable():
     first = lin.read_start_time(os.getpid())
     assert first is not None
     assert lin.read_start_time(os.getpid()) == first
+
+
+@pytest.mark.skipif(not _HAS_PIDFD, reason="pidfd_open unavailable here")
+def test_a_scan_suspended_between_chunks_stops_once_the_target_is_gone(child, monkeypatch):
+    # The identity is checked before every chunk, not only when the scan is
+    # created: a generator resumed after the target exited (and its pid was
+    # free to be reused) must not read through the pid again.
+    from PyMemoryEditor import MemoryRegion
+
+    process = OpenProcess(pid=child.pid)
+    try:
+        start = _first_readable_address(process)
+        regions = [
+            MemoryRegion(address=start, size=0x1000, is_readable=True),
+            MemoryRegion(address=start + 0x1000, size=0x1000, is_readable=True),
+        ]
+        scan = process.search_by_addresses(int, addresses=[start, start + 0x1000], memory_regions=regions)
+        next(scan)
+
+        _kill_and_reap(child)
+        monkeypatch.setattr(lin, "_process_vm_readv", _fail_if_called)
+        with pytest.raises(ProcessIDNotExistsError):
+            next(scan)
+    finally:
+        process.close()

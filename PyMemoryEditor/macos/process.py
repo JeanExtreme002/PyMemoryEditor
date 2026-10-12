@@ -1,23 +1,14 @@
 # -*- coding: utf-8 -*-
 
 import warnings
-from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Dict, Generator, Optional, Type, TypeVar, Union
 
-from ..enums import ScanTypesEnum
-from ..util.pattern import compile_pattern
 from ..process import AbstractProcess
-from ..process._guard import guard_generator
 from ..process.errors import ClosedProcess
 from ..process.module_info import ModuleInfo
 from ..process.region import MemoryRegion
 from ..process.thread_info import ThreadInfo
-from ..util import (
-    UNSET,
-    prepare_write,
-    resolve_bufflength,
-    prepare_search_target,
-    resolve_bufflength_for_value,
-)
+from ..util import UNSET, prepare_write, resolve_bufflength
 
 from .functions import (
     allocate_memory,
@@ -105,7 +96,7 @@ class MacProcess(AbstractProcess):
         # the caller tracking sizes (Mach's mach_vm_deallocate needs the size).
         self.__allocations: Dict[int, int] = {}
 
-    def __require_open(self) -> None:
+    def _require_open(self) -> None:
         if self.__closed:
             raise ClosedProcess()
 
@@ -146,24 +137,23 @@ class MacProcess(AbstractProcess):
             pass
 
     def _detect_is_64bit(self) -> Optional[bool]:
-        self.__require_open()
+        self._require_open()
         return _detect_task_64bit(self.__task)
 
-    def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
-        self.__require_open()
-        return guard_generator(
-            get_memory_regions(self.__task, self.pid), self.__require_open
-        )
+    def _require_listing(self) -> None:
+        self._require_open()
 
-    def get_threads(self) -> Generator[ThreadInfo, None, None]:
-        self.__require_open()
-        return guard_generator(get_threads(self.__task), self.__require_open)
+    def _require_scanning(self) -> None:
+        self._require_open()
 
-    def get_modules(self) -> Generator[ModuleInfo, None, None]:
-        self.__require_open()
-        return guard_generator(
-            get_modules(self.__task, self.pid), self.__require_open
-        )
+    def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
+        return get_memory_regions(self.__task, self.pid)
+
+    def _iter_threads(self) -> Generator[ThreadInfo, None, None]:
+        return get_threads(self.__task)
+
+    def _iter_modules(self) -> Generator[ModuleInfo, None, None]:
+        return get_modules(self.__task, self.pid)
 
     def _static_image_ranges(self):
         """
@@ -177,7 +167,7 @@ class MacProcess(AbstractProcess):
         with the module name and ``__TEXT`` base so discovered paths still
         rebase across runs.
         """
-        self.__require_open()
+        self._require_open()
         ranges = []
         # Modules are listed without their sizes: each size parses the image's
         # load commands, which get_image_segments parses anyway. The __TEXT
@@ -202,125 +192,44 @@ class MacProcess(AbstractProcess):
                 )
         return ranges
 
-    def search_by_addresses(
-        self,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-        addresses: Sequence[int] = UNSET,
-        *,
-        raise_error: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-    ) -> Generator[Tuple[int, Optional[T]], None, None]:
-        self.__require_open()
-        if addresses is UNSET:
-            raise TypeError("addresses is required.")
-        scan = search_values_by_addresses(
+    def _scan_addresses(self, pytype, bufflength, addresses, *, raise_error, memory_regions):
+        return search_values_by_addresses(
             self.__task,
             pytype,
-            resolve_bufflength(pytype, bufflength),
+            bufflength,
             addresses,
             memory_regions=memory_regions,
             raise_error=raise_error,
             pid=self.pid,
         )
-        return guard_generator(scan, self.__require_open)
 
-    def search_by_value(
-        self,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-        value: Union[bool, int, float, str, bytes] = UNSET,
-        scan_type: ScanTypesEnum = ScanTypesEnum.EXACT_VALUE,
-        *,
-        progress_information: bool = False,
-        writeable_only: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-        aligned: bool = True,
-    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_open()
-
-        if scan_type in [ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN]:
-            raise ValueError(
-                "Use the method search_by_value_between(...) to search within a range of values."
-            )
-
-        width = resolve_bufflength_for_value(pytype, bufflength, value)
-        # Validate now: the scan is a generator, so its own checks would
-        # only raise on the first next(), far from this call.
-        prepare_search_target(pytype, width, value)
-        scan = search_addresses_by_value(
+    def _scan_values(
+        self, pytype, bufflength, value, target_value_bytes, scan_type, *,
+        progress_information, writeable_only, memory_regions, aligned,
+    ):
+        return search_addresses_by_value(
             self.__task,
             pytype,
-            width,
+            bufflength,
             value,
             scan_type,
             progress_information,
             writeable_only,
             memory_regions=memory_regions,
-            aligned=aligned,
             pid=self.pid,
+            aligned=aligned,
+            target_value_bytes=target_value_bytes,
         )
-        return guard_generator(scan, self.__require_open)
 
-    def search_by_pattern(
-        self,
-        pattern,
-        *,
-        byte_length: int = 0,
-        progress_information: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_open()
-        # Compile now so a malformed pattern raises at the call, not on the
-        # first next() of the returned generator.
-        compile_pattern(pattern, byte_length=byte_length)
-        scan = search_addresses_by_pattern(
+    def _scan_pattern(self, pattern, compiled_pattern, *, progress_information, memory_regions):
+        return search_addresses_by_pattern(
             self.__task,
             pattern,
-            byte_length=byte_length,
             progress_information=progress_information,
             memory_regions=memory_regions,
             pid=self.pid,
+            compiled_pattern=compiled_pattern,
         )
-        return guard_generator(scan, self.__require_open)
-
-    def search_by_value_between(
-        self,
-        pytype: Type[T],
-        bufflength: Optional[int] = None,
-        start: Union[bool, int, float, str, bytes] = UNSET,
-        end: Union[bool, int, float, str, bytes] = UNSET,
-        *,
-        not_between: bool = False,
-        progress_information: bool = False,
-        writeable_only: bool = False,
-        memory_regions: Optional[Sequence[MemoryRegion]] = None,
-        aligned: bool = True,
-    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
-        self.__require_open()
-
-        scan_type = (
-            ScanTypesEnum.NOT_VALUE_BETWEEN
-            if not_between
-            else ScanTypesEnum.VALUE_BETWEEN
-        )
-        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
-        # Validate now: the scan is a generator, so its own checks would
-        # only raise on the first next(), far from this call.
-        prepare_search_target(pytype, width, (start, end))
-        scan = search_addresses_by_value(
-            self.__task,
-            pytype,
-            width,
-            (start, end),
-            scan_type,
-            progress_information,
-            writeable_only,
-            memory_regions=memory_regions,
-            aligned=aligned,
-            pid=self.pid,
-        )
-        return guard_generator(scan, self.__require_open)
 
     def read_process_memory(
         self,
@@ -328,13 +237,13 @@ class MacProcess(AbstractProcess):
         pytype: Type[T],
         bufflength: Optional[int] = None,
     ) -> T:
-        self.__require_open()
+        self._require_open()
         return read_process_memory(
             self.__task, address, pytype, resolve_bufflength(pytype, bufflength)
         )
 
     def read_process_memory_into(self, address: int, buffer: object) -> int:
-        self.__require_open()
+        self._require_open()
         return read_process_memory_into(self.__task, address, buffer)
 
     def write_process_memory(
@@ -369,19 +278,19 @@ class MacProcess(AbstractProcess):
             omitting it (``write_process_memory(addr, str, value="hi")``).
         :param value: value to be written.
         """
-        self.__require_open()
+        self._require_open()
         w_pytype, w_length, w_value = prepare_write(pytype, bufflength, value)
         write_process_memory(self.__task, address, w_pytype, w_length, w_value)
         return value
 
     def allocate_memory(self, size: int, *, permission=None) -> int:
-        self.__require_open()
+        self._require_open()
         address = allocate_memory(self.__task, size, permission)
         self.__allocations[address] = size
         return address
 
     def free_memory(self, address: int, size: int = 0) -> bool:
-        self.__require_open()
+        self._require_open()
         # mach_vm_deallocate needs the exact size. Reuse the tracked size when
         # the caller doesn't supply one.
         actual_size = size or self.__allocations.get(address, 0)

@@ -10,12 +10,13 @@ import logging
 import os
 import warnings
 from contextlib import contextmanager
-from typing import Generator, Iterator, List, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, Iterator, List, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
 
 from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
 from ..process.module_info import ModuleInfo
 from ..process.region import (
+    ADDRESS_SPACE_END,
     default_address_filter,
     default_scan_filter,
     MemoryRegion,
@@ -96,11 +97,10 @@ _REGION_SKIP_BUMP = 0x1000
 # the whole 64-bit address space.
 _REGION_MAX_CONSECUTIVE_FAILURES = 64
 
-# One past the highest address a `mach_vm_address_t` (c_uint64) can hold. The
-# walk advances its cursor in place, and ctypes wraps silently on overflow: a
-# region reaching the top of the address space would send the cursor back to 0
-# and restart the walk from the bottom.
-_ADDRESS_SPACE_END = 1 << 64
+# The region walk advances a `mach_vm_address_t` (c_uint64) cursor in place,
+# and ctypes wraps silently on overflow: a region reaching the top of the
+# address space would send the cursor back to 0 and restart the walk from the
+# bottom. It stops at ADDRESS_SPACE_END instead.
 
 # mach_vm_write's data_count parameter is `mach_msg_type_number_t` — a 32-bit
 # unsigned int per the Mach interface. A write larger than UINT32_MAX would
@@ -331,7 +331,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
                 "advancing one page",
                 address.value, kr, mach_error_message(kr),
             )
-            if address.value + _REGION_SKIP_BUMP >= _ADDRESS_SPACE_END:
+            if address.value + _REGION_SKIP_BUMP >= ADDRESS_SPACE_END:
                 return
             address.value += _REGION_SKIP_BUMP
             continue
@@ -375,7 +375,7 @@ def get_memory_regions(task: int, pid: int = 0) -> Generator[MemoryRegion, None,
             consecutive_failures = 0
             step = size.value
 
-        if address.value + step >= _ADDRESS_SPACE_END:
+        if address.value + step >= ADDRESS_SPACE_END:
             return  # the last region reaches the top of the address space
         address.value += step
 
@@ -767,9 +767,9 @@ def read_process_memory(
     _mach_read(task, address, ctypes.addressof(data), bufflength)
 
     if pytype is str:
-        return bytes(data).decode("utf-8", errors="replace")
+        return cast(T, bytes(data).decode("utf-8", errors="replace"))
     elif pytype is bytes:
-        return bytes(data)
+        return cast(T, bytes(data))
     else:
         # Narrow widths pad with zeroes, which reads a signed value as
         # unsigned -- and a scan for the same bytes is signed.
@@ -874,6 +874,7 @@ def search_addresses_by_value(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     pid: int = 0,
     aligned: bool = True,
+    target_value_bytes: Optional[Union[bytes, Tuple[bytes, ...]]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every readable, non-shared region of the task and yield addresses
@@ -881,10 +882,13 @@ def search_addresses_by_value(
     (including the dyld shared cache) are skipped via ``default_scan_filter``.
 
     Passing a `memory_regions` snapshot skips region enumeration.
+    ``target_value_bytes`` is ``value`` already encoded (see
+    :func:`~PyMemoryEditor.util.prepare_search_target`).
     """
     _validate_pytype(pytype)
 
-    target_value_bytes = values_to_bytes(pytype, bufflength, value)
+    if target_value_bytes is None:
+        target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(task, pid)
@@ -1385,13 +1389,20 @@ def search_addresses_by_pattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    compiled_pattern: Optional[Tuple[Pattern[bytes], int]] = None,
     pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target task. See
-    :meth:`AbstractProcess.search_by_pattern`.
+    :meth:`AbstractProcess.search_by_pattern`. ``compiled_pattern`` is what
+    :func:`~PyMemoryEditor.util.pattern.compile_pattern` returned for
+    ``pattern``, when the caller already compiled it.
     """
-    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+    compiled, length = (
+        compiled_pattern
+        if compiled_pattern is not None
+        else compile_pattern(pattern, byte_length=byte_length)
+    )
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(task, pid)

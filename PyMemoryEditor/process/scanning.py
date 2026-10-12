@@ -127,6 +127,7 @@ def iter_values_for_addresses(
     *,
     raise_error: bool = False,
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
+    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """
     Yield `(address, value)` for each address in ascending address order.
@@ -172,6 +173,8 @@ def iter_values_for_addresses(
     def read(address: int, size: int) -> Optional[memoryview]:
         """``read_chunk`` as one contiguous byte view, or ``None`` when the
         read failed in a way the caller allows us to skip."""
+        if before_read is not None:
+            before_read()
         try:
             data = read_chunk(address, size)
         except _READ_ERRORS as exc:
@@ -322,6 +325,7 @@ def iter_search_results(
     progress_information: bool = False,
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
     aligned: bool = True,
+    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every chunk of every region and yield the addresses where
@@ -343,6 +347,13 @@ def iter_search_results(
     permission / configuration errors. ``read_chunk`` may also return ``None``
     to signal a transient miss without raising (kept for backends like Win32
     that already classified inside the helper).
+
+    ``before_read()``, when given, runs before every chunk read and outside
+    the error classification, so whatever it raises always propagates. The
+    Linux backend uses it to confirm the target is still the process it
+    opened: it reads by pid, and a pid can be reused mid-scan. The same hook
+    is taken by :func:`iter_pattern_results` and
+    :func:`iter_values_for_addresses`.
 
     Regions are read in the order provided — callers should pre-sort by
     ``address`` if monotonic progress fractions matter.
@@ -401,6 +412,8 @@ def iter_search_results(
                 byte_granular_overlap, size, chunk_offset, chunk_size
             )
 
+            if before_read is not None:
+                before_read()
             try:
                 chunk_data = read_chunk(chunk_address, read_size)
             except Exception as exc:  # noqa: BLE001 — backend errors vary
@@ -494,6 +507,7 @@ def iter_pattern_results(
     *,
     progress_information: bool = False,
     transient_error_check: Optional[Callable[[BaseException], bool]] = None,
+    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Walk every chunk of every region and yield the addresses where
@@ -557,6 +571,8 @@ def iter_pattern_results(
                 pattern_length - 1, size, chunk_offset, chunk_size
             )
 
+            if before_read is not None:
+                before_read()
             try:
                 chunk_data = read_chunk(chunk_address, read_size)
             except Exception as exc:  # noqa: BLE001 — backend errors vary

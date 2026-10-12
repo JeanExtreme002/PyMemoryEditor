@@ -150,8 +150,8 @@ Funding = "https://github.com/sponsors/JeanExtreme002"
 exclude = ["PyMemoryEditor/app/"]
 ignore_missing_imports = true
 warn_unused_ignores = true
-# Bodies of unannotated functions are checked too. Clean as of v3.2.0 for the
-# shared layer under all three --platform values (CI checks each one).
+# Bodies of unannotated functions are checked too, for the shared layer and
+# the backends alike, under all three --platform values (CI checks each one).
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
@@ -159,23 +159,19 @@ module = ["PyMemoryEditor.app", "PyMemoryEditor.app.*"]
 follow_imports = "skip"
 ignore_errors = true
 
-# Platform-specific backends use symbols that only exist on their target OS
-# (`ctypes.windll`, `WINFUNCTYPE`, `WinError`, `set_last_error`, etc. on
-# Windows; Mach types on macOS). mypy running on a single OS sees the others
-# as undefined. The shared layer (process/, util/) is still type-checked.
-#
-# Checked on its own platform (`mypy --platform <os>` with this override
-# removed), each backend is close: measured at v3.2.0, macos/ has 2 errors,
-# win32/ 2 and linux/ 4, all in functions.py's typed-read return (a `T`
-# TypeVar returning str/bytes) and, on Linux, two str/int reassignments.
-# Once those are fixed, this override can become a per-platform CI check.
+# The platform backends call APIs that only exist on their own OS
+# (`ctypes.windll`, `set_last_error` on Windows; `os.pidfd_open`,
+# `signal.pidfd_send_signal` on Linux; `os.sysconf` names on macOS), so under
+# any other `--platform` those attributes look undefined. Only that error code
+# is switched off for them: everything else in the backends -- return types,
+# assignments, call signatures -- is checked under all three platforms CI runs.
 [[tool.mypy.overrides]]
 module = [
     "PyMemoryEditor.win32.*",
     "PyMemoryEditor.linux.*",
     "PyMemoryEditor.macos.*",
 ]
-ignore_errors = true
+disable_error_code = ["attr-defined"]
 
 [tool.hatch.version]
 path = "PyMemoryEditor/__init__.py"

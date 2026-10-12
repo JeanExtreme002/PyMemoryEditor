@@ -20,16 +20,25 @@ from typing import (
 )
 
 from ..enums import ScanTypesEnum
-from ..util import UNSET, _check_int_fits
-from ..util.pattern import PatternLike
+from ..util import (
+    UNSET,
+    _check_int_fits,
+    prepare_search_target,
+    resolve_bufflength,
+    resolve_bufflength_for_value,
+)
+from ..util.pattern import PatternLike, compile_pattern
+from ._guard import guard_generator
 from .errors import BitnessDetectionError, ProcessIDNotExistsError, PyMemoryEditorError
 from .info import ProcessInfo
 from .module_info import ModuleInfo
-from .region import MemoryRegion, MemoryRegionSnapshot
+from .region import ADDRESS_SPACE_END, MemoryRegion, MemoryRegionSnapshot
 from .thread_info import ThreadInfo
 from .util import pid_exists
 
 if TYPE_CHECKING:
+    from re import Pattern
+
     from .pointer_scan import PointerPath
     from .remote_pointer import RemotePointer
 
@@ -42,9 +51,6 @@ T = TypeVar("T")
 # ``load_pointer_paths``.
 _POINTER_SCAN_FORMAT = "pymemoryeditor-pointerscan"
 _POINTER_SCAN_VERSION = 1
-
-# One past the highest address a pointer chain may dereference.
-_ADDRESS_SPACE_END = 1 << 64
 
 
 class _PointerOutOfRangeError(ValueError, OSError):
@@ -245,7 +251,6 @@ class AbstractProcess(ABC):
         """
         raise NotImplementedError()
 
-    @abstractmethod
     def get_memory_regions(self) -> Generator[MemoryRegion, None, None]:
         """
         Yield a :class:`~PyMemoryEditor.MemoryRegion` for every memory region
@@ -256,9 +261,9 @@ class AbstractProcess(ABC):
         ``is_shared``, the backing file ``path`` (when known), and the
         platform-specific ``struct`` for advanced introspection.
         """
-        raise NotImplementedError()
+        self._require_listing()
+        return guard_generator(self._iter_memory_regions(), self._require_open)
 
-    @abstractmethod
     def get_threads(self) -> Generator[ThreadInfo, None, None]:
         """
         Yield a :class:`~PyMemoryEditor.ThreadInfo` for every thread running
@@ -290,9 +295,9 @@ class AbstractProcess(ABC):
 
         Use :attr:`main_thread` for the conventional "main thread" shortcut.
         """
-        raise NotImplementedError()
+        self._require_listing()
+        return guard_generator(self._iter_threads(), self._require_open)
 
-    @abstractmethod
     def get_modules(self) -> Generator[ModuleInfo, None, None]:
         """
         Yield a :class:`~PyMemoryEditor.ModuleInfo` for every module loaded in
@@ -308,7 +313,8 @@ class AbstractProcess(ABC):
         cheaply — see :class:`~PyMemoryEditor.ModuleInfo` for the per-platform
         meaning of ``raw`` and for when ``size`` may be ``0``.
         """
-        raise NotImplementedError()
+        self._require_listing()
+        return guard_generator(self._iter_modules(), self._require_open)
 
     @property
     def main_thread(self) -> Optional[ThreadInfo]:
@@ -346,7 +352,6 @@ class AbstractProcess(ABC):
         regions = sorted(self.get_memory_regions(), key=lambda region: region.address)
         return MemoryRegionSnapshot(regions)
 
-    @abstractmethod
     def search_by_addresses(
         self,
         pytype: Type[T],
@@ -377,9 +382,18 @@ class AbstractProcess(ABC):
         :param memory_regions: optional snapshot returned by `snapshot_memory_regions()`.
             Pass it to skip the region enumeration on hot iterative workflows.
         """
-        raise NotImplementedError()
+        self._require_scanning()
+        if addresses is UNSET:
+            raise TypeError("addresses is required.")
+        scan = self._scan_addresses(
+            pytype,
+            resolve_bufflength(pytype, bufflength),
+            addresses,
+            raise_error=raise_error,
+            memory_regions=memory_regions,
+        )
+        return guard_generator(scan, self._require_open)
 
-    @abstractmethod
     def search_by_value(
         self,
         pytype: Type[T],
@@ -446,9 +460,27 @@ class AbstractProcess(ABC):
            (that argument only skips region *enumeration*, not the filtering),
            so shared regions can't be opted back in.
         """
-        raise NotImplementedError()
+        self._require_scanning()
 
-    @abstractmethod
+        if scan_type in (ScanTypesEnum.VALUE_BETWEEN, ScanTypesEnum.NOT_VALUE_BETWEEN):
+            raise ValueError(
+                "Use the method search_by_value_between(...) to search within a range of values."
+            )
+
+        width = resolve_bufflength_for_value(pytype, bufflength, value)
+        scan = self._scan_values(
+            pytype,
+            width,
+            value,
+            prepare_search_target(pytype, width, value),
+            scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
+            memory_regions=memory_regions,
+            aligned=aligned,
+        )
+        return guard_generator(scan, self._require_open)
+
     def search_by_pattern(
         self,
         pattern: PatternLike,
@@ -477,9 +509,15 @@ class AbstractProcess(ABC):
             ``snapshot_memory_regions()`` to skip region enumeration on
             iterative workflows.
         """
-        raise NotImplementedError()
+        self._require_scanning()
+        scan = self._scan_pattern(
+            pattern,
+            compile_pattern(pattern, byte_length=byte_length),
+            progress_information=progress_information,
+            memory_regions=memory_regions,
+        )
+        return guard_generator(scan, self._require_open)
 
-    @abstractmethod
     def search_by_value_between(
         self,
         pytype: Type[T],
@@ -504,6 +542,120 @@ class AbstractProcess(ABC):
         by keyword when omitting ``bufflength``:
         ``search_by_value_between(int, start=10, end=20)``.
         """
+        self._require_scanning()
+
+        scan_type = (
+            ScanTypesEnum.NOT_VALUE_BETWEEN
+            if not_between
+            else ScanTypesEnum.VALUE_BETWEEN
+        )
+        width = resolve_bufflength_for_value(pytype, bufflength, start, end)
+        scan = self._scan_values(
+            pytype,
+            width,
+            (start, end),
+            prepare_search_target(pytype, width, (start, end)),
+            scan_type,
+            progress_information=progress_information,
+            writeable_only=writeable_only,
+            memory_regions=memory_regions,
+            aligned=aligned,
+        )
+        return guard_generator(scan, self._require_open)
+
+    # ------------------------------------------------------------------ #
+    # Backend hooks
+    #
+    # The listing and search methods above are written once, here: they check
+    # access, validate and encode their arguments at the call (the scans are
+    # generators, whose own checks would only run on the first next(), far
+    # from the call), and bind the returned generator to this object, so that
+    # resuming it after close() raises instead of using a released handle. A
+    # backend supplies the access checks and the raw generators below.
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def _require_open(self) -> None:
+        """Raise :class:`~PyMemoryEditor.ClosedProcess` once :meth:`close` ran.
+
+        Called before every item a returned generator yields, so it must be
+        cheap: an attribute test, no syscall.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _require_listing(self) -> None:
+        """Raise if the regions, threads or modules cannot be listed now
+        (closed, or the target gone where the backend can tell)."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _require_scanning(self) -> None:
+        """Raise if memory cannot be searched now: as :meth:`_require_listing`,
+        plus read access where that is a property of the handle."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _iter_memory_regions(self) -> Generator[MemoryRegion, None, None]:
+        """The backend's region walk, for :meth:`get_memory_regions`."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _iter_threads(self) -> Generator[ThreadInfo, None, None]:
+        """The backend's thread listing, for :meth:`get_threads`."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _iter_modules(self) -> Generator[ModuleInfo, None, None]:
+        """The backend's module listing, for :meth:`get_modules`."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _scan_addresses(
+        self,
+        pytype: Type[T],
+        bufflength: int,
+        addresses: Sequence[int],
+        *,
+        raise_error: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Tuple[int, Optional[T]], None, None]:
+        """The read behind :meth:`search_by_addresses`, with ``bufflength``
+        resolved."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _scan_values(
+        self,
+        pytype: Type,
+        bufflength: int,
+        value: Union[object, Tuple],
+        target_value_bytes: Union[bytes, Tuple[bytes, ...]],
+        scan_type: ScanTypesEnum,
+        *,
+        progress_information: bool,
+        writeable_only: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+        aligned: bool,
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        """The scan behind :meth:`search_by_value` and
+        :meth:`search_by_value_between`. ``value`` is the value, or the
+        ``(start, end)`` pair of a range scan; ``target_value_bytes`` is that
+        same target already validated and encoded."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _scan_pattern(
+        self,
+        pattern: PatternLike,
+        compiled_pattern: Tuple["Pattern[bytes]", int],
+        *,
+        progress_information: bool,
+        memory_regions: Optional[Sequence[MemoryRegion]],
+    ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
+        """The scan behind :meth:`search_by_pattern`. ``compiled_pattern`` is
+        what :func:`~PyMemoryEditor.util.pattern.compile_pattern` returned for
+        ``pattern``."""
         raise NotImplementedError()
 
     @abstractmethod
@@ -990,7 +1142,7 @@ class AbstractProcess(ABC):
             # ctypes masks an address argument to 64 bits instead of rejecting
             # it, so `ptr + offset` below zero or past 2**64 would silently
             # read a *different*, wrapped address. Refuse it by name instead.
-            if not 0 <= addr < _ADDRESS_SPACE_END:
+            if not 0 <= addr < ADDRESS_SPACE_END:
                 raise _PointerOutOfRangeError(
                     "pointer chain step produced address %s, outside the "
                     "64-bit address space; the chain is stale (a hop read "

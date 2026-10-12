@@ -10,7 +10,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 import time
-from typing import Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
 
 from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
@@ -467,7 +467,8 @@ def _get_mapped_filename(process_handle: int, address: int) -> str:
         # truncated length, and on older Windows without a terminating NUL):
         # retry with a larger buffer instead of reporting a clipped path.
         if length < size - 1 or size >= _MAPPED_FILENAME_MAX_SIZE:
-            return buf[:min(length, size)].split("\x00", 1)[0]
+            # Slicing a c_wchar array gives a str at run time.
+            return cast(str, buf[:min(length, size)]).split("\x00", 1)[0]
         size *= 2
 
 
@@ -639,9 +640,9 @@ def ReadProcessMemory(
     if pytype is str:
         # Match convert_from_byte_array: tolerate non-UTF-8 bytes in raw memory
         # (callers needing the raw bytes should pass pytype=bytes).
-        return bytes(data).decode("utf-8", errors="replace")
+        return cast(T, bytes(data).decode("utf-8", errors="replace"))
     elif pytype is bytes:
-        return bytes(data)
+        return cast(T, bytes(data))
     else:
         # Narrow widths pad with zeroes, which reads a signed value as
         # unsigned -- and a scan for the same bytes is signed.
@@ -766,6 +767,7 @@ def SearchAddressesByValue(
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     pid: int = 0,
     aligned: bool = True,
+    target_value_bytes: Optional[Union[bytes, Tuple[bytes, ...]]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -774,10 +776,13 @@ def SearchAddressesByValue(
     Passing a `memory_regions` snapshot (see `snapshot_memory_regions()`) skips
     the per-call region enumeration — useful in refine-scan workflows. ``pid``
     only feeds the error reported when that enumeration finds the target gone.
+    ``target_value_bytes`` is ``value`` already encoded (see
+    :func:`~PyMemoryEditor.util.prepare_search_target`).
     """
     _validate_pytype(pytype)
 
-    target_value_bytes = values_to_bytes(pytype, bufflength, value)
+    if target_value_bytes is None:
+        target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
         memory_regions
@@ -817,13 +822,18 @@ def SearchAddressesByPattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    compiled_pattern: Optional[Tuple[Pattern[bytes], int]] = None,
     pid: int = 0,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target process.
     See :meth:`AbstractProcess.search_by_pattern`.
     """
-    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+    compiled, length = (
+        compiled_pattern
+        if compiled_pattern is not None
+        else compile_pattern(pattern, byte_length=byte_length)
+    )
 
     source_regions = (
         memory_regions

@@ -67,3 +67,59 @@ def test_an_empty_text_search_is_rejected(pytype, value):
             next(process.search_by_value(pytype, value=value, memory_regions=regions))
     finally:
         process.close()
+
+
+def test_a_search_encodes_its_value_and_compiles_its_pattern_once(monkeypatch):
+    """The public method validates and encodes at the call, then hands the
+    result to the backend: the backend must not redo either."""
+    import importlib
+
+    process = OpenProcess(pid=os.getpid())
+    backend = importlib.import_module(
+        type(process).__module__.rsplit(".", 1)[0] + ".functions"
+    )
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("the backend repeated work the call already did")
+
+    monkeypatch.setattr(backend, "values_to_bytes", must_not_run)
+    monkeypatch.setattr(backend, "compile_pattern", must_not_run)
+    try:
+        assert list(process.search_by_value(int, value=7, memory_regions=[])) == []
+        assert list(process.search_by_value_between(
+            int, start=1, end=9, memory_regions=[]
+        )) == []
+        assert list(process.search_by_pattern("90 ? 90", memory_regions=[])) == []
+    finally:
+        process.close()
+
+
+# --------------------------------------------------------------------------- #
+# Eager validation helper for the generator-returning search methods
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    "pytype, width, value",
+    [
+        (int, 4, 2 ** 40),        # does not fit
+        (float, 5, 1.0),          # no 5-byte float
+        (str, 0, ""),             # zero-width target
+        (str, 2, "abc"),          # longer than the width
+        (bool, 2, True),          # wider than c_bool
+        (list, 4, 1),             # unsupported type
+        (int, 4, (1, 2 ** 40)),   # one end of a range does not fit
+    ],
+)
+def test_prepare_search_target_raises_what_the_scan_would(pytype, width, value):
+    from PyMemoryEditor.util import prepare_search_target
+
+    with pytest.raises(ValueError):
+        prepare_search_target(pytype, width, value)
+
+
+def test_prepare_search_target_returns_the_scan_encoding():
+    from PyMemoryEditor.util import prepare_search_target, values_to_bytes
+
+    assert prepare_search_target(int, 4, -1) == b"\xff" * 4
+    assert prepare_search_target(int, 2, (1, 2)) == values_to_bytes(int, 2, (1, 2))
+    assert prepare_search_target(str, 3, "hi") == b"hi\x00"

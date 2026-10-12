@@ -36,6 +36,14 @@ from ..win32.enums.memory_protections import MemoryProtectionsEnum
 from ..win32.enums.memory_types import MemoryTypesEnum
 
 
+#: One past the highest address of a 64-bit address space: every address the
+#: library reads, writes, walks or dereferences lies in ``[0, ADDRESS_SPACE_END)``.
+#: ctypes masks a larger (or negative) address to 64 bits instead of rejecting
+#: it, so the checks against this bound are what keep a wrapped address from
+#: silently reaching a different place.
+ADDRESS_SPACE_END = 1 << 64
+
+
 # Composite bitmask of every PAGE_* protection that allows execution. The
 # Win32 module already ships PAGE_READABLE / PAGE_READWRITEABLE composites
 # for the read and write cases; the execute mask is local because it isn't

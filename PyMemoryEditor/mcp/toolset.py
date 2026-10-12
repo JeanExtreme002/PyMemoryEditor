@@ -38,7 +38,7 @@ from .. import __version__
 from ..enums import ScanTypesEnum
 from ..process.abstract import AbstractProcess
 from ..process.errors import PyMemoryEditorError
-from ..process.region import MemoryRegion
+from ..process.region import ADDRESS_SPACE_END, MemoryRegion
 from ..process.util import get_process_ids_by_name, iter_processes
 from ..util import (
     compile_pattern,
@@ -123,7 +123,7 @@ MAX_SAMPLE_VALUE_CHARS = 8 * 1024
 #: ``0x56787FFD12345678``: not the address it meant, not the prefix it typed,
 #: and possibly mapped. This is the module whose docstring says a write to a
 #: rounded address is exactly the failure it must not have.
-MAX_ADDRESS = (1 << 64) - 1
+MAX_ADDRESS = ADDRESS_SPACE_END - 1
 
 #: Ceiling on the magnitude of a pointer-chain offset. Offsets are struct
 #: displacements: published Cheat Engine recipes use tens or hundreds of bytes,

@@ -12,7 +12,7 @@ import logging
 import os
 import signal
 from ctypes import addressof, sizeof
-from typing import Dict, Generator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Callable, Dict, Generator, Optional, Pattern, Sequence, Tuple, Type, TypeVar, Union, cast
 
 from ..enums import ScanTypesEnum
 from ..process.errors import ProcessIDNotExistsError
@@ -249,7 +249,7 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
             region_information = line.split(maxsplit=5)
 
             try:
-                addressing_range, privileges, offset, device, inode = (
+                addressing_range, privileges, raw_offset, device, raw_inode = (
                     region_information[0:5]
                 )
                 path = region_information[5].strip() if len(region_information) >= 6 else b""
@@ -259,8 +259,8 @@ def get_memory_regions(pid: int) -> Generator["MemoryRegion", None, None]:
                 ]
                 major_id, minor_id = [int(_id, 16) for _id in device.split(b":")]
 
-                offset = int(offset, 16)
-                inode = int(inode)  # /proc/<pid>/maps formats the inode as decimal.
+                offset = int(raw_offset, 16)
+                inode = int(raw_inode)  # /proc/<pid>/maps formats the inode as decimal.
             except (ValueError, IndexError) as exc:
                 # A single malformed line (kernel quirk, racing teardown) must
                 # not abort the whole region walk — skip it and keep going, the
@@ -437,9 +437,9 @@ def read_process_memory(pid: int, address: int, pytype: Type[T], bufflength: int
     _process_vm_readv(pid, addressof(data), address, bufflength)
 
     if pytype is str:
-        return bytes(data).decode("utf-8", errors="replace")
+        return cast(T, bytes(data).decode("utf-8", errors="replace"))
     elif pytype is bytes:
-        return bytes(data)
+        return cast(T, bytes(data))
     else:
         # Narrow widths pad with zeroes, which reads a signed value as
         # unsigned -- and a scan for the same bytes is signed.
@@ -470,16 +470,23 @@ def search_addresses_by_value(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     aligned: bool = True,
+    target_value_bytes: Optional[Union[bytes, Tuple[bytes, ...]]] = None,
+    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     Search the whole memory space, accessible to the process,
     for the provided value, returning the found addresses.
 
     Passing a `memory_regions` snapshot skips region enumeration.
+    ``target_value_bytes`` is ``value`` already encoded (see
+    :func:`~PyMemoryEditor.util.prepare_search_target`), and ``before_read``
+    runs before every chunk read (see
+    :func:`~PyMemoryEditor.process.scanning.iter_search_results`).
     """
     _validate_pytype(pytype)
 
-    target_value_bytes = values_to_bytes(pytype, bufflength, value)
+    if target_value_bytes is None:
+        target_value_bytes = values_to_bytes(pytype, bufflength, value)
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(pid)
@@ -502,6 +509,7 @@ def search_addresses_by_value(
         progress_information=progress_information,
         aligned=aligned,
         transient_error_check=_is_transient,
+        before_read=before_read,
     )
 
 
@@ -512,12 +520,20 @@ def search_addresses_by_pattern(
     byte_length: int = 0,
     progress_information: bool = False,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
+    compiled_pattern: Optional[Tuple[Pattern[bytes], int]] = None,
+    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Union[int, Tuple[int, dict]], None, None]:
     """
     AOB scan against every readable, non-shared region of the target. See
-    :meth:`AbstractProcess.search_by_pattern`.
+    :meth:`AbstractProcess.search_by_pattern`. ``compiled_pattern`` is what
+    :func:`~PyMemoryEditor.util.pattern.compile_pattern` returned for
+    ``pattern``, when the caller already compiled it.
     """
-    compiled, length = compile_pattern(pattern, byte_length=byte_length)
+    compiled, length = (
+        compiled_pattern
+        if compiled_pattern is not None
+        else compile_pattern(pattern, byte_length=byte_length)
+    )
 
     source_regions = (
         memory_regions if memory_regions is not None else get_memory_regions(pid)
@@ -535,6 +551,7 @@ def search_addresses_by_pattern(
         _make_read_chunk(pid),
         progress_information=progress_information,
         transient_error_check=_is_transient,
+        before_read=before_read,
     )
 
 
@@ -546,6 +563,7 @@ def search_values_by_addresses(
     *,
     memory_regions: Optional[Sequence[MemoryRegion]] = None,
     raise_error: bool = False,
+    before_read: Optional[Callable[[], None]] = None,
 ) -> Generator[Tuple[int, Optional[T]], None, None]:
     """
     Search the whole memory space, accessible to the process,
@@ -581,6 +599,7 @@ def search_values_by_addresses(
         _make_read_chunk(pid),
         raise_error=raise_error,
         transient_error_check=_is_transient,
+        before_read=before_read,
     )
 
 

@@ -15,9 +15,17 @@ on any of the three supported platforms.
 
 import ctypes
 import os
+import random
+import re
 import sys
 
 import pytest
+
+from PyMemoryEditor.enums import ScanTypesEnum
+from PyMemoryEditor.util.pattern import compile_pattern, is_fixed_width
+from PyMemoryEditor.util.scan import scan_memory_for_exact_value
+
+from ._fakes import FakeMemory, small_chunks, pattern_hits
 
 if sys.platform not in ("win32", "darwin") and not sys.platform.startswith("linux"):
     pytest.skip("Platform not supported by PyMemoryEditor", allow_module_level=True)
@@ -121,3 +129,96 @@ def test_pattern_scan_accepts_memory_regions_snapshot(planted_marker):
             )
         )
     assert address in hits_with_snapshot
+
+
+# --------------------------------------------------------------------------- #
+# Pattern scans: overlapping matches
+# --------------------------------------------------------------------------- #
+
+
+def test_ida_pattern_reports_overlapping_matches():
+    memory = FakeMemory({0x1000: b"\x90\x90\x90"})
+    assert pattern_hits(memory, "90 90") == [0x1000, 0x1001]
+
+
+def test_ida_pattern_agrees_with_exact_byte_scan():
+    data = bytes(random.Random(7).choice((0x90, 0x90, 0xCC)) for _ in range(512))
+    memory = FakeMemory({0x4000: data})
+    exact = [
+        0x4000 + offset
+        for offset in scan_memory_for_exact_value(
+            data, len(data), b"\x90\x90\x90", 3, ScanTypesEnum.EXACT_VALUE, bytes
+        )
+    ]
+    assert pattern_hits(memory, "90 90 90") == exact
+    assert len(exact) > 10  # the data really has overlapping runs
+
+
+def test_overlapping_matches_across_chunk_boundaries_are_reported_once(monkeypatch):
+    small_chunks(monkeypatch, 4)
+    memory = FakeMemory({0x1000: b"\x90" * 10})
+    assert pattern_hits(memory, "90 90") == [0x1000 + i for i in range(9)]
+
+
+def test_fixed_width_regex_reports_overlapping_matches():
+    memory = FakeMemory({0x1000: b"ABABAB"})
+    assert pattern_hits(memory, rb"AB.B", byte_length=4) == [0x1000, 0x1002]
+
+
+def test_variable_width_regex_keeps_non_overlapping_semantics():
+    """A suffix of a variable-length match is not a new match."""
+    memory = FakeMemory({0x1000: b"..john@example.com.."})
+    email = rb"[a-z]+@[a-z]+\.[a-z]+"
+    assert pattern_hits(memory, email, byte_length=32) == [0x1002]
+
+
+def test_lookahead_regex_reports_every_start():
+    memory = FakeMemory({0x1000: b"AAAA"})
+    assert pattern_hits(memory, rb"(?=AA)", byte_length=2) == [0x1000, 0x1001, 0x1002]
+
+
+def test_zero_width_pattern_terminates():
+    memory = FakeMemory({0x1000: b"AB"})
+    assert pattern_hits(memory, rb"(?=)", byte_length=1) == [0x1000, 0x1001]
+
+
+@pytest.mark.parametrize(
+    "pattern, expected",
+    [
+        (rb"\x48\x8B..", True),
+        (rb"ab|cd", True),
+        (rb"ab|c", False),
+        (rb"PLAYER_\d+", False),
+        (rb"x{2,4}", False),
+    ],
+)
+def test_is_fixed_width(pattern, expected):
+    assert is_fixed_width(re.compile(pattern, re.DOTALL)) is expected
+
+
+def test_ida_patterns_are_fixed_width():
+    assert is_fixed_width(compile_pattern("48 8B ? ? 00")[0])
+
+
+# --------------------------------------------------------------------------- #
+# Variable-width regex across a chunk boundary; overlap past the region end
+# --------------------------------------------------------------------------- #
+
+def test_variable_width_match_straddling_a_chunk_is_reported_once(monkeypatch):
+    """The overlap bytes of chunk 1 are chunk 2's first bytes: chunk 2 used to
+    report the suffix ``BB`` of the ``BBBB`` match chunk 1 already reported."""
+    small_chunks(monkeypatch, 8)
+    memory = FakeMemory({0x1000: b"......BBBB" + b"." * 10})
+    assert pattern_hits(memory, rb"B+", byte_length=4) == [0x1006]
+
+
+def test_variable_width_matches_agree_with_one_finditer(monkeypatch):
+    """Chunked non-overlapping results equal a single ``finditer`` over the
+    region whenever no match is longer than ``byte_length``."""
+    rng = random.Random(11)
+    data = bytes(rng.choice(b"AB..") for _ in range(400))
+    pattern = rb"A[AB]{0,3}"
+    expected = [0x1000 + m.start() for m in re.finditer(pattern, data, re.DOTALL)]
+    for chunk in (4, 5, 8, 13):
+        small_chunks(monkeypatch, chunk)
+        assert pattern_hits(FakeMemory({0x1000: data}), pattern, byte_length=4) == expected

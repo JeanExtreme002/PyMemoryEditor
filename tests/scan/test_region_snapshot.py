@@ -9,9 +9,21 @@ the enumeration cost each time.
 
 import ctypes
 import os
+import struct
 import sys
 
 import pytest
+
+from PyMemoryEditor.enums import ScanTypesEnum
+from PyMemoryEditor.process.scanning import (
+    _ensure_sorted_by_address,
+    iter_pattern_results,
+    iter_search_results,
+    iter_values_for_addresses,
+)
+from PyMemoryEditor.util.pattern import compile_pattern
+
+from ._fakes import FakeMemory
 
 if sys.platform not in ("win32", "darwin") and not sys.platform.startswith("linux"):
     pytest.skip("Platform not supported by PyMemoryEditor", allow_module_level=True)
@@ -73,3 +85,49 @@ def test_search_by_addresses_accepts_snapshot():
             assert results_with_snapshot[addr] == target.value
     finally:
         process.close()
+
+
+# --------------------------------------------------------------------------- #
+# Region inputs: any iterable; the snapshot tag survives
+# --------------------------------------------------------------------------- #
+
+def test_snapshot_passes_through_unsorted_check():
+    snapshot = MemoryRegionSnapshot([MemoryRegion(0x1000, 4), MemoryRegion(0x2000, 4)])
+    assert _ensure_sorted_by_address(snapshot) is snapshot
+
+
+def test_any_iterable_is_sorted_into_a_list():
+    regions = [MemoryRegion(0x2000, 4), MemoryRegion(0x1000, 4)]
+    result = _ensure_sorted_by_address(region for region in regions)
+    assert [r.address for r in result] == [0x1000, 0x2000]
+    assert _ensure_sorted_by_address(iter(())) == []
+
+
+def test_address_reads_accept_a_generator_of_regions():
+    memory = FakeMemory({0x1000: struct.pack("<i", 3), 0x2000: struct.pack("<i", 4)})
+    results = list(
+        iter_values_for_addresses(
+            [0x1000, 0x2000], (r for r in reversed(memory.regions)), int, 4, memory.read_chunk
+        )
+    )
+    assert results == [(0x1000, 3), (0x2000, 4)]
+
+
+def test_scan_drivers_accept_a_generator_of_regions():
+    memory = FakeMemory({0x1000: struct.pack("<2i", 7, 7)})
+    found = list(
+        iter_search_results(
+            (r for r in memory.regions), int, 4, struct.pack("<i", 7),
+            ScanTypesEnum.EXACT_VALUE, memory.read_chunk,
+        )
+    )
+    assert found == [0x1000, 0x1004]
+
+    compiled, length = compile_pattern("07 00")
+    found = list(
+        iter_pattern_results(
+            (r for r in memory.regions), compiled, length, memory.read_chunk,
+            progress_information=True,
+        )
+    )
+    assert [address for address, _info in found] == [0x1000, 0x1004]
