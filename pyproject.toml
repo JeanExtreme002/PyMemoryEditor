@@ -87,8 +87,18 @@ tests = [
 # psutil 7 removed nothing the app uses (Process.name/create_time,
 # pid_exists, process_iter with pid/name/username, and the three exceptions);
 # the app suite passes on 7.2.2.
+#
+# PySide6 6.12.0 is excluded below Python 3.12: its Linux wheels drop a
+# reference to ``None`` on ordinary void Qt calls (upstream PYSIDE-3474), so
+# a long enough session -- a CI worker that has run the app suite -- aborts
+# with ``Fatal Python error: none_dealloc: deallocating None``. On 3.12+ the
+# singletons are immortal (PEP 683) and the leak is harmless, which is why
+# only the 3.10/3.11 cells of the matrix were exposed. The crash took the
+# xdist worker down, and the session then hung until the job's 20-minute
+# timeout. Lift the cap once a 6.12.x release passes the app suite on 3.11.
 app = [
-  "PySide6>=6.5,<7",
+  "PySide6>=6.5,<6.12; python_version < '3.12'",
+  "PySide6>=6.5,<7; python_version >= '3.12'",
   "psutil>=5.9,<8",
 ]
 # The Model Context Protocol server (PyMemoryEditor.mcp), which lets an AI
