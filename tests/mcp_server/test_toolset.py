@@ -2656,6 +2656,76 @@ class TestHugeRegionsAreScannedInPieces:
         sizes = [region.size for region in seen["regions"]]
         assert max(sizes) == 0x400 and len(sizes) == 8  # two 4 KiB regions
 
+    @staticmethod
+    def _with_unreadable_space(fake_process, size):
+        """Put a large unreadable region below the fake's two, the way the
+        Windows backend reports MEM_FREE and MEM_RESERVE ranges."""
+        from PyMemoryEditor.process.region import MemoryRegion
+
+        readable = fake_process.get_memory_regions
+
+        def regions():
+            yield MemoryRegion(address=0x1_0000, size=size)  # not readable
+            yield from readable()
+
+        fake_process.get_memory_regions = regions
+
+    def test_unreadable_regions_never_become_batches(
+        self, make_toolset, fake_process, monkeypatch
+    ):
+        """On Windows the snapshot spans the whole address space, MEM_FREE and
+        MEM_RESERVE included. Cut into pieces, that was ~2 million batches on a
+        64-bit target, and scan_value spent its whole budget on them before it
+        reached the heap (#127)."""
+        from PyMemoryEditor.mcp import session as session_module
+
+        monkeypatch.setattr(session_module, "SPLIT_ALIGNMENT", 0x100)
+        monkeypatch.setattr(session_module, "MIN_SPLIT_BYTES", 0x100)
+        self._with_unreadable_space(fake_process, 0x10_0000)
+        address = fake_process.poke(WRITABLE_BASE + 0x40, int, 31337)
+        batches = []
+        original = fake_process.search_by_value
+
+        def counting(*args, **kwargs):
+            batches.append(kwargs["memory_regions"])
+            return original(*args, **kwargs)
+
+        fake_process.search_by_value = counting
+        toolset = make_toolset(config(scan_batch_bytes=0x1000))
+        session_id = toolset.open_process(pid=4242)["session_id"]
+        scan = toolset.scan_value(session_id, "int", "31337", bufflength=4)
+
+        assert scan["count"] == 1 and not scan.get("partial")
+        assert scan["sample"][0]["address"] == "0x%X" % address
+        # One batch per 4 KiB readable region, none for the unreadable 1 MiB
+        # (256 pieces of 4 KiB before the fix).
+        assert len(batches) == 2
+        assert all(region.is_readable for batch in batches for region in batch)
+
+    def test_unreadable_regions_are_not_cut_for_the_pointer_map(
+        self, make_toolset, fake_process, monkeypatch
+    ):
+        """The map skips unreadable regions itself, so cutting them first only
+        cost time and memory -- millions of pieces on Windows (#127)."""
+        from PyMemoryEditor.mcp import session as session_module
+
+        monkeypatch.setattr(session_module, "SPLIT_ALIGNMENT", 0x100)
+        monkeypatch.setattr(session_module, "MIN_SPLIT_BYTES", 0x100)
+        self._with_unreadable_space(fake_process, 0x10_0000)
+        seen = {}
+
+        def capture(target_address, **kwargs):
+            seen["regions"] = kwargs["memory_regions"]
+            return iter(())
+
+        fake_process.scan_pointer_paths = capture
+        toolset = make_toolset(config(scan_batch_bytes=0x400))
+        opened = toolset.open_process(pid=4242)
+        toolset.find_pointer_paths(opened["session_id"], hex(WRITABLE_BASE))
+
+        assert len(seen["regions"]) == 8  # the two 4 KiB regions, as before
+        assert all(region.is_readable for region in seen["regions"])
+
     def test_the_library_does_not_swallow_a_progress_abort(self):
         """find_pointer_paths stops the map by raising from progress_callback;
         that only works if the library lets the exception through."""

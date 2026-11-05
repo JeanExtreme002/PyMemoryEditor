@@ -1946,9 +1946,13 @@ class MemoryToolset:
                     # per region, so one whole multi-gigabyte heap would be
                     # mapped however far past the budget that ran. Aligned
                     # seams cut no pointer slot, and the map merges adjacent
-                    # ranges back, so the result is unchanged.
+                    # ranges back, so the result is unchanged. Unreadable
+                    # regions are left out before cutting: the map skips them
+                    # anyway, and on Windows they are most of the address
+                    # space -- millions of pieces for nothing (#127).
                     memory_regions=split_regions(
-                        regions, self.config.scan_batch_bytes
+                        [region for region in regions if region.is_readable],
+                        self.config.scan_batch_bytes,
                     ),
                     progress_callback=progress,
                     should_stop=should_stop,
@@ -2246,6 +2250,15 @@ class MemoryToolset:
         addresses: List[int] = []
         truncated = False
         timed_out = False
+
+        # Only readable memory can hold a match, and the library drops the
+        # rest itself -- but only once a batch reaches it, after the cutting
+        # and batching here have been paid for. On Windows the snapshot spans
+        # the whole address space, MEM_FREE and MEM_RESERVE included (~128 TiB
+        # on a 64-bit target): cut into 64 MiB pieces, that was ~2 million
+        # batches, and the scan spent its whole budget on them before it
+        # reached the heap (#127).
+        regions = [region for region in regions if region.is_readable]
 
         if split_overlap is not None:
             regions = split_regions(
